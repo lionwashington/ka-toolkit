@@ -1,0 +1,105 @@
+// e2e characterization for lark-channel: full black-box flow against a spawned
+// channel-core daemon wired to LarkPlatform, with a fake lark-cli (canned inbound)
+// + a mock Lark webhook (captures outbound). Asserts OBSERVABLE behavior only.
+//
+// Run: node --experimental-strip-types --test tests/e2e.test.ts
+import { test, before, after, describe } from 'node:test'
+import assert from 'node:assert/strict'
+import {
+  startMockWebhook, startDaemon, connectClient, ownerMsg, waitFor,
+  type MockWebhook, type Daemon, type ChannelClient,
+} from './harness.ts'
+
+let webhook: MockWebhook
+let daemon: Daemon
+let main: ChannelClient
+let ka: ChannelClient
+const CHAT = 'oc_test'
+const SELF = 'ou_test_self'
+
+// Lark create_time is minute precision; the daemon anchors its watermark at NOW on
+// first poll, so test messages must carry a create_time AFTER that. Use fixed future
+// minutes (and bump per message) so each new message clears the watermark.
+let futureMin = 0
+function nextTime(): string {
+  futureMin += 1
+  const d = new Date(Date.UTC(2030, 0, 1, 0, futureMin, 0))
+  // "YYYY-MM-DD HH:MM" (space, minute precision — matches lark)
+  return d.toISOString().slice(0, 16).replace('T', ' ')
+}
+
+before(async () => {
+  webhook = await startMockWebhook()
+  daemon = await startDaemon({ webhookUrl: webhook.url, selfOpenId: SELF, chatId: CHAT, pollIntervalSeconds: 1 })
+  main = await connectClient(daemon.baseUrl, 'main')
+  ka = await connectClient(daemon.baseUrl, 'ka')
+  await waitFor(() => false, 400).catch(() => {})  // let both sessions register
+})
+
+after(async () => {
+  await main?.close()
+  await ka?.close()
+  await daemon?.stop()
+  await webhook?.close()
+})
+
+describe('inbound (lark-cli poll → dispatch)', () => {
+  test('owner message with no prefix → delivered to main with meta', async () => {
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'm1', text: 'hello lark', createTime: nextTime(), selfOpenId: SELF })])
+    const ok = await waitFor(() => main.received.some(r => r.content === 'hello lark'), 5000)
+    assert.ok(ok, 'main should receive the owner message')
+    const got = main.received.find(r => r.content === 'hello lark')!
+    assert.equal(got.meta.chat_id, CHAT, 'meta.chat_id is the lark group (reply routes back here)')
+    assert.equal(got.meta.message_id, 'm1')
+    // 🔴 meta all-string invariant
+    for (const v of Object.values(got.meta)) assert.equal(typeof v, 'string')
+  })
+
+  test('non-owner message → dropped (self-filter)', async () => {
+    const before = main.received.length
+    daemon.pushMessages(CHAT, [{
+      message_id: 'm-other', create_time: nextTime(),
+      sender: { id: 'ou_someone_else', sender_type: 'user', name: 'Bob' }, content: 'not from owner',
+    }])
+    await waitFor(() => false, 2500).catch(() => {})  // give it a few polls
+    assert.ok(!main.received.some(r => r.content === 'not from owner'), 'non-owner message must not be delivered')
+    assert.equal(main.received.length, before, 'no new delivery')
+  })
+
+  test('same message_id is not re-delivered (dedup ring) across repeated polls', async () => {
+    const t = nextTime()
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'm-dup', text: 'only once', createTime: t, selfOpenId: SELF })])
+    await waitFor(() => main.received.some(r => r.content === 'only once'), 5000)
+    // the fake CLI keeps returning the same message every poll for ~3s more
+    await waitFor(() => false, 3000).catch(() => {})
+    const count = main.received.filter(r => r.content === 'only once').length
+    assert.equal(count, 1, 'must be delivered exactly once despite repeated polls')
+  })
+})
+
+describe('routing', () => {
+  test('"to ka:" prefix → delivered to ka, not main', async () => {
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'm-route', text: 'to ka: routed body', createTime: nextTime(), selfOpenId: SELF })])
+    const ok = await waitFor(() => ka.received.some(r => r.content === 'routed body'), 5000)
+    assert.ok(ok, 'ka should receive the routed message body')
+    assert.ok(!main.received.some(r => r.content === 'routed body'), 'main should NOT receive it')
+  })
+})
+
+describe('outbound (reply → webhook)', () => {
+  test('reply tool → POST to the group webhook, prefixed with channel tag', async () => {
+    const before = webhook.sent().length
+    const res: any = await main.client.callTool({ name: 'reply', arguments: { chat_id: CHAT, text: 'a reply' } })
+    assert.ok(!res.isError, `reply should succeed: ${JSON.stringify(res)}`)
+    const ok = await waitFor(() => webhook.sent().length > before, 4000)
+    assert.ok(ok, 'webhook should receive the reply POST')
+    const last = webhook.sent()[webhook.sent().length - 1]
+    assert.match(last.text, /a reply/, 'webhook body contains the reply text')
+    assert.match(last.text, /\[#\d+-main\]/, 'reply is auto-prefixed with the channel number-name tag')
+  })
+
+  test('reply to an unconfigured chat_id → rejected (resolveReplyTarget null)', async () => {
+    const res: any = await main.client.callTool({ name: 'reply', arguments: { chat_id: 'oc_unknown', text: 'nope' } })
+    assert.ok(res.isError, 'reply to a non-configured group must be rejected')
+  })
+})

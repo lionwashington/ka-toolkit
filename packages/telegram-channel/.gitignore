@@ -1,0 +1,9 @@
+# Runtime artifacts and secrets — never committed. These live only in the
+# deployed copy at ~/.telegram-channel/.
+node_modules/
+.env
+config.json
+state.json
+*.log
+.daemon.lock
+daemon.pid

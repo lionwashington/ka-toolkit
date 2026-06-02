@@ -1,0 +1,30 @@
+# Knowledge Assistant Configuration
+
+# Knowledge base location (absolute path)
+knowledge_base_path: ~/knowledge-base/
+
+# Runtime state directory (watermarks, etc.)
+state_dir: ~/.knowledge-assistant/state
+
+# Distillation settings
+distiller:
+  # Auto-distill interval (e.g., "2h", "30m", "1d")
+  interval: "2h"
+  # Skip conversations with fewer than N messages
+  skip_short_conversations: 3
+
+# Topic management
+topics:
+  # Pre-defined topic list
+  initial: []
+  # LLM can suggest new topics
+  auto_suggest: true
+  # New topics need user approval
+  require_approval: true
+
+# RAG retrieval
+retrieval:
+  # Max search results
+  max_results: 5
+  # Minimum similarity score (0-1)
+  min_score: 0.7

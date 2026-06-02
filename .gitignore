@@ -1,0 +1,23 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+
+# Python build/run artifacts (hkprop-mcp / ibkr-mcp)
+.venv/
+.pytest_cache/
+__pycache__/
+build/
+
+# Editor / local tooling / per-machine CC config
+.vscode/
+.playwright-mcp/
+.claude/
+
+# Local agent/collaboration scaffolding — not part of the public project
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+
+# Test run artifacts
+ops/tests/results/

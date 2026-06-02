@@ -1,0 +1,55 @@
+{
+  "status": "OK",
+  "geocoded_waypoints": [
+    {"geocoder_status": "OK", "place_id": "ChIJ_origin", "types": ["street_address"]},
+    {"geocoder_status": "OK", "place_id": "ChIJ_chuhai", "types": ["university"]}
+  ],
+  "routes": [
+    {
+      "summary": "屯門公路",
+      "fare": {"currency": "HKD", "value": 12.5, "text": "HK$12.50"},
+      "legs": [
+        {
+          "distance": {"value": 5200, "text": "5.2 公里"},
+          "duration": {"value": 2700, "text": "45 分鐘"},
+          "departure_time": {"text": "上午8:00", "value": 1748131200, "time_zone": "Asia/Hong_Kong"},
+          "arrival_time":   {"text": "上午8:45", "value": 1748133900, "time_zone": "Asia/Hong_Kong"},
+          "start_address": "Hong Kong, 屯門麗虹花園1座",
+          "end_address":   "Hong Kong, 尖沙咀梳士巴利道 維多利亞港",
+          "start_location": {"lat": 22.3850, "lng": 113.9600},
+          "end_location":   {"lat": 22.2940, "lng": 114.1722},
+          "steps": [
+            {
+              "travel_mode": "WALKING",
+              "duration": {"value": 300, "text": "5 分鐘"},
+              "distance": {"value": 400, "text": "0.4 公里"},
+              "html_instructions": "步行至 麗虹花園 巴士站"
+            },
+            {
+              "travel_mode": "TRANSIT",
+              "duration": {"value": 1200, "text": "20 分鐘"},
+              "distance": {"value": 4000, "text": "4.0 公里"},
+              "html_instructions": "搭乘 961 巴士",
+              "transit_details": {
+                "departure_stop": {"name": "麗虹花園", "location": {"lat": 22.3850, "lng": 113.9600}},
+                "arrival_stop":   {"name": "尖沙咀碼頭 (維多利亞港)", "location": {"lat": 22.2940, "lng": 114.1690}},
+                "num_stops": 8,
+                "line": {
+                  "name": "Tuen Mun - Tsim Sha Tsui",
+                  "short_name": "961",
+                  "vehicle": {"type": "BUS", "name": "Bus"}
+                }
+              }
+            },
+            {
+              "travel_mode": "WALKING",
+              "duration": {"value": 420, "text": "7 分鐘"},
+              "distance": {"value": 500, "text": "0.5 公里"},
+              "html_instructions": "步行至 維多利亞港"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

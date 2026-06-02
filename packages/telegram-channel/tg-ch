@@ -1,0 +1,68 @@
+#!/bin/bash
+# tg-ch <channel-name> [extra claude args...]
+#
+# Launch a Claude Code session bound to a telegram-channel daemon channel, so
+# the owner can route Telegram DMs to it with `to <name>:`. Thin wrapper around
+# the wiring verified in the grey test.
+#
+# Mechanism (the ONLY combo proven to bind the dev-channel CONSUMER correctly):
+#   - The `--dangerously-load-development-channels server:telegram-channel`
+#     CONSUMER resolves the channel from a PERSISTENTLY REGISTERED MCP server.
+#     A temp `--mcp-config` is NOT enough — it feeds the tool client but the
+#     consumer ignores it (and adding it alongside the registration makes Claude
+#     open a stray second connection). So we drive a single registered server.
+#   - We keep exactly ONE `telegram-channel` http server registered (project-
+#     local scope — never global ~/.claude.json mcpServers, never settings.json)
+#     and re-point its URL to `…/mcp?name=<NAME>` for the requested channel.
+#   - Claude then connects (tool client + consumer) under that one channel,
+#     exactly as in the working grey-test run. No temp files, no accumulation.
+#
+# Concurrency (verified 2026-05-29):
+#   - NO cross-talk: a CC caches its startup MCP config, so on a 404 re-init it
+#     reconnects to ITS OWN channel — it does NOT re-read the (possibly changed)
+#     registration. Verified: with the shared registration set to ?name=test2,
+#     a restarted test1 CC came back as test1. So running multiple channels
+#     concurrently is safe.
+#   - The shared registration value only matters at LAUNCH time, so launch
+#     channels SEQUENTIALLY (let one connect before starting the next); don't
+#     fire several `tg-ch` at the exact same moment (they'd race on it).
+#   - Restarting the daemon silently drops all consumers (they don't auto-
+#     reconnect) — restart/poke the affected CC after a daemon restart.
+#   - Remove the registration when done:  claude mcp remove telegram-channel
+#
+# Launches claude with --dangerously-skip-permissions by default, so a channel
+# CC can auto-reply (call the `reply` tool) without a permission prompt on every
+# message. If you'd rather be prompted, run `claude` yourself with the flags
+# this script prints, minus --dangerously-skip-permissions.
+#
+# Usage:
+#   tg-ch ka                         # interactive session on channel "ka"
+#   tg-ch audit --model opus         # extra args forwarded to claude
+#   TG_CHANNEL_PORT=9999 tg-ch main  # override daemon port (default 9877)
+set -u
+
+PORT="${TG_CHANNEL_PORT:-9877}"
+DAEMON_URL="http://127.0.0.1:${PORT}/mcp"
+SERVER="telegram-channel"
+
+RAW="${1:-main}"
+[ $# -gt 0 ] && shift
+
+# Sanitize identically to the daemon's sanitizeChannelName().
+NAME="$(printf '%s' "$RAW" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]//g')"
+[ -z "$NAME" ] && NAME="main"
+
+URL="${DAEMON_URL}?name=${NAME}"
+
+# Point the single registered server at this channel's URL (project-local).
+# remove+add is idempotent and avoids "already exists" errors.
+claude mcp remove "$SERVER" >/dev/null 2>&1 || true
+if ! claude mcp add --transport http --scope local "$SERVER" "$URL" >/dev/null 2>&1; then
+  echo "tg-ch: failed to register MCP server '$SERVER' → $URL" >&2
+  exit 1
+fi
+
+echo "tg-ch: launching channel '${NAME}' (server:${SERVER} → ${URL})" >&2
+
+exec claude --dangerously-skip-permissions \
+  --dangerously-load-development-channels "server:${SERVER}" "$@"

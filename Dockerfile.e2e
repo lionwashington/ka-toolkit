@@ -1,0 +1,21 @@
+FROM docker.m.daocloud.io/library/node:22-slim
+
+RUN npm install -g pnpm@10 && \
+    apt-get update && apt-get install -y python3 python3-venv git build-essential curl && \
+    apt-get clean
+
+# Install Claude Code (use npmmirror if official registry is blocked)
+RUN npm install -g @anthropic-ai/claude-code || \
+    npm install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com
+
+WORKDIR /app
+COPY . .
+
+ENV CI=true
+RUN pnpm install && pnpm -r --filter '!mcp-opennutrition' --filter '!knowledge-assistant' run build
+RUN cd packages/mcp-opennutrition && npm install && npm run build 2>/dev/null || echo "opennutrition skipped"
+
+# Run installer in non-interactive mode
+RUN node packages/adapters/claude-code/dist/install.js install --non-interactive
+
+CMD ["/app/scripts/e2e-test.sh"]

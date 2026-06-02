@@ -1,0 +1,23 @@
+# ops/workshop.example.yaml — copy to ~/.knowledge-assistant/workshop.yaml and edit.
+#
+# Declares the tmux session layout that bootstrap.sh creates.
+# Each pane spawns `claude` via start-pane.sh with a guaranteed cwd.
+#
+# `telegram: true` marks the main pane and attaches the Telegram channel plugin.
+# Use `main: true` + explicit `args:` for custom setups.
+#
+# D+ design: bootstrap creates ONLY the main (telegram) pane. Teammates are
+# spawned by the main session via the Agent tool — see ops/post-bootstrap.md.
+
+session: workshop
+
+# Agent runtime for every pane / mate unless overridden.
+# Currently only `cc` (Claude Code) is implemented — `codex` and `gemini`
+# are reserved names for future adapters, see docs/KA_CLI_RUNTIME_DESIGN.md.
+# Omit this key to accept the default (cc).
+# runtime: cc
+
+panes:
+  - name: main
+    cwd: ~/workspace/your-workspace
+    telegram: true

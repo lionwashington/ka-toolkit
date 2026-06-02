@@ -1,0 +1,2 @@
+[console_scripts]
+hkprop-mcp = hkprop_mcp.__main__:main

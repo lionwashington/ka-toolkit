@@ -1,0 +1,671 @@
+#!/usr/bin/env bash
+# install.sh — KA unified install/deploy entry point (ka-gen2 P1: unified deploy model).
+#
+# Builds + copies the repo (design-time source) to the runtime location, drawing a
+# clear design↔runtime boundary. Single-copy model (decision D4): what runs is the
+# deployed copy, not the repo; re-run `ka deploy` to pick up dev changes.
+#
+# 🔴 Top red line (must not affect existing usage):
+#   - Operates on ~/.knowledge-assistant by default, but offers a KA_RUNTIME_ROOT
+#     override for isolated tests (point it at a temp dir).
+#   - The steps that actually "switch what's running" (register_mcp editing
+#     ~/.claude.json, moving the daemon) default to **SKIP**; they require an
+#     explicit --switch and must be run by the owner — a plain install NEVER
+#     touches your running ~/.claude.json / daemon.
+#   - seed_config never overwrites existing config/credentials.
+#
+# Usage:
+#   ./install.sh [--dry-run] [--only ka|node-mcp|python-mcp|daemon|hooks|core-cli|skills|config] [--switch]
+#   KA_RUNTIME_ROOT=/tmp/ka-itest ./install.sh --dry-run    # isolated test, doesn't touch the real runtime
+#
+# Status: P1.1 skeleton — each component's deploy function is filled in over P1.2–P1.5.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KA_RUNTIME_ROOT="${KA_RUNTIME_ROOT:-$HOME/.knowledge-assistant}"
+RUNTIME="$KA_RUNTIME_ROOT/runtime"          # root of KA deploy artifacts (ka / ops / mcp / daemon / hooks)
+
+# ── Switch-target overrides (point at a temp fake-home in isolated tests; never touch real files) ──
+# The --switch steps edit these "pointer" files; in tests, override them all to a temp dir for zero-risk verification.
+CLAUDE_JSON="${KA_CLAUDE_JSON:-$HOME/.claude.json}"                   # node MCP registration
+KA_BIN_LINK="${KA_BIN_LINK:-$HOME/.local/bin/ka}"                     # ka command symlink
+LAUNCHAGENTS_DIR="${KA_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"     # cron plist
+CLAUDE_SETTINGS="${KA_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"  # hooks registration
+CLAUDE_SKILLS_DIR="${KA_CLAUDE_SKILLS:-$HOME/.claude/skills}"         # skills symlink landing spot
+TELEGRAM_DIR="${KA_TELEGRAM_DIR:-$HOME/.telegram-channel}"            # old daemon location
+LARK_DIR="${KA_LARK_DIR:-$HOME/.lark-channel}"                        # old lark daemon location
+# Which channel daemon: telegram | lark | both (default telegram, back-compat).
+# For Ubuntu + Lark deploys, use KA_CHANNEL=lark ./install.sh --switch.
+KA_CHANNEL="${KA_CHANNEL:-telegram}"
+
+DRY_RUN=0; ONLY=""; DO_SWITCH=0; DO_CLEANUP=0
+for a in "$@"; do
+  case "$a" in
+    --dry-run)  DRY_RUN=1 ;;
+    --switch)   DO_SWITCH=1 ;;
+    --cleanup-old) DO_CLEANUP=1 ;;
+    --only=*)   ONLY="${a#--only=}" ;;
+    --only)     : ;;  # tolerate space form below
+    *) [ "${prev:-}" = "--only" ] && ONLY="$a" ;;
+  esac
+  prev="$a"
+done
+
+log()  { echo "[install] $*"; }
+run()  { if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] $*"; else eval "$@"; fi; }
+want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
+# want_channel <telegram|lark>: true if KA_CHANNEL selects it (or "both").
+want_channel() { [ "$KA_CHANNEL" = "$1" ] || [ "$KA_CHANNEL" = "both" ]; }
+
+# Guard: KA_CHANNEL is ALSO used by the workshop / start-pane layer as a *channel
+# NAME* (e.g. "ka-dev2", "main"). When install.sh is run from inside a workshop
+# pane it inherits that value, which is not a valid daemon selector — left as-is it
+# would make every daemon deploy SKIP silently. Validate: anything outside
+# telegram|lark|both falls back to telegram with a loud warning (the documented
+# KA_CHANNEL=lark|both interface is unaffected).
+case "$KA_CHANNEL" in
+  telegram|lark|both) ;;
+  *) log "⚠️ KA_CHANNEL='${KA_CHANNEL}' is not a valid daemon selector (expected telegram|lark|both) — defaulting to telegram."
+     log "   (This var is also a channel NAME in 'ka workshop'; unset it or pass KA_CHANNEL=telegram|lark|both explicitly to choose the daemon.)"
+     KA_CHANNEL="telegram" ;;
+esac
+
+# ── Target runtime/ layout ───────────────────────────────────────────────
+#   $RUNTIME/
+#     bin/ka            ka CLI (copy, not symlink; D1)
+#     ops/              ops scripts (copy)
+#     mcp/<name>/       node MCP deploy (dist copy; D2)
+#     daemon/           telegram-channel daemon (moved from ~/.telegram-channel; D2/P1.4)
+#     core-cli/*-cli.js  core CLI (called by the kb skill; tsup dist self-contained, plain copy)
+#     skills/<name>/SKILL.md  skills (design→runtime copy; switch_skills then symlinks)
+#   Pointers into runtime/ (cc's turf, but the symlink points at runtime, §1.1):
+#     ~/.claude/skills/<name>/SKILL.md  → runtime/skills/<name>/SKILL.md (created by switch_skills)
+#     ~/.claude.json           MCP registration (cc's turf; register_mcp points it at runtime/mcp)
+#     ~/Library/LaunchAgents/  launchd plist (platform-mandated)
+#   Runtime data (already lives in KA_RUNTIME_ROOT; install leaves it alone):
+#     config.yaml / secrets.yaml / cron.yaml / workshop.yaml / state/ / raw/ / *-venv/
+
+# ── Component deploy functions (P1.1 skeleton; TODOs filled in over later steps) ──
+
+deploy_ka() {            # ka CLI + ops copied to runtime (D1, not a symlink)
+  want ka || return 0
+  log "ka CLI + ops → ${RUNTIME} (copy, not symlink, D1)"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  [dry-run] cp repo/bin/ka -> ${RUNTIME}/bin/ka; cp -R repo/ops -> ${RUNTIME}/ops (drop tests/)"
+    return 0
+  fi
+  mkdir -p "$RUNTIME/bin"
+  cp "$REPO_ROOT/bin/ka" "$RUNTIME/bin/ka"; chmod +x "$RUNTIME/bin/ka"
+  rm -rf "$RUNTIME/ops"; cp -R "$REPO_ROOT/ops" "$RUNTIME/ops"
+  rm -rf "$RUNTIME/ops/tests"   # the runtime doesn't run the test suite
+  # bin/ka uses BASH_SOURCE's ../ to locate the repo root → runtime/bin/ka's ../ = runtime/,
+  # CLI_DIR=runtime/ops/cli, common.sh's OPS_DIR=runtime/ops. Fully self-consistent, never points at repo.
+  log "  OK ${RUNTIME}/bin/ka + ${RUNTIME}/ops (self-consistent: runtime/bin/ka's ../ops is runtime/ops)"
+}
+
+deploy_node_mcp() {      # P1.2
+  want node-mcp || return 0
+  # esbuild binary (repo-root .pnpm, a transitive dependency of tsup). The bundle
+  # packs all dependencies (including the workspace package @ka/core) into a single
+  # file → self-contained, bypasses the pnpm symlink farm, never points at repo.
+  local ESB; ESB="$(find "$REPO_ROOT/node_modules/.pnpm" -path '*esbuild@*/node_modules/esbuild/bin/esbuild' -type f 2>/dev/null | head -1 || true)"
+  for spec in "kb=mcp-server" "market=market-mcp"; do
+    local name="${spec%%=*}" pkg="${spec#*=}" dest="$RUNTIME/mcp/${spec%%=*}"
+    log "node MCP [$name]: esbuild bundle -> $dest/index.mjs"
+    if [ "$DRY_RUN" = 1 ]; then
+      echo "  [dry-run] mkdir -p $dest; esbuild packages/$pkg/src/index.ts --bundle -> $dest/index.mjs"
+    else
+      [ -n "$ESB" ] || { log "  WARN esbuild not found, skipping"; return 0; }
+      mkdir -p "$dest"
+      # --banner injects createRequire: when the bundle contains CJS dependencies (e.g.
+      # yaml), the ESM output's dynamic require needs a real require, otherwise it fails
+      # at runtime with "Dynamic require of X not supported".
+      if "$ESB" "$REPO_ROOT/packages/$pkg/src/index.ts" --bundle --platform=node --format=esm --banner:js="import{createRequire}from'module';const require=createRequire(import.meta.url);" --outfile="$dest/index.mjs" >/dev/null 2>&1; then
+        log "  OK $dest/index.mjs ($(wc -c < "$dest/index.mjs" | tr -d ' ')B, self-contained)"
+      else
+        log "  FAIL bundle"
+      fi
+    fi
+  done
+}
+
+deploy_opennutrition() { # P1.4: node MCP special case (native better-sqlite3 + compressed dataset)
+  want node-mcp || return 0
+  # Cannot esbuild-bundle: better-sqlite3 is native (.node), and at runtime it reads the
+  # sqlite db generated by convert-data (build/../data_local/opennutrition_foods.db).
+  # Single-machine copy model (D4): build once in the repo to produce build/ +
+  # data_local/db + compiled node_modules, then copy the whole thing to runtime —
+  # same machine, same platform, zero recompile, zero network.
+  local src="$REPO_ROOT/packages/mcp-opennutrition" dest="$RUNTIME/mcp/opennutrition"
+  log "node MCP [opennutrition]: special case (native sqlite + dataset) -> $dest"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  [dry-run] ensure $src is built (build/index.js + data_local/*.db)"
+    echo "  [dry-run] cp -R build/ data_local/ node_modules/ package.json -> $dest"
+    return 0
+  fi
+  command -v npm >/dev/null 2>&1 || { log "  WARN npm not found, skipping"; return 0; }
+  # 1. Ensure the repo is built (only rebuild if artifacts are missing, to avoid a 62MB
+  #    unpack on every install)
+  if [ ! -f "$src/build/index.js" ] || ! ls "$src"/data_local/*.db >/dev/null 2>&1; then
+    log "  build artifacts missing, running npm ci && npm run build (unpack dataset + build sqlite, slow)"
+    # npm ci: install exactly per lock, don't rewrite package-lock (avoids polluting
+    # reproducibility with this machine's mirror URLs)
+    ( cd "$src" && npm ci >/dev/null 2>&1 && npm run build >/dev/null 2>&1 ) \
+      || { log "  FAIL build"; return 0; }
+  fi
+  [ -f "$src/build/index.js" ] && ls "$src"/data_local/*.db >/dev/null 2>&1 \
+    || { log "  FAIL build artifacts still missing"; return 0; }
+  # 2. Copy the whole deploy artifact (build/ + generated db + compiled native node_modules)
+  rm -rf "$dest"; mkdir -p "$dest"
+  cp -R "$src/build" "$dest/build"
+  cp -R "$src/data_local" "$dest/data_local"
+  cp -R "$src/node_modules" "$dest/node_modules"
+  cp "$src/package.json" "$dest/package.json"
+  # node_modules/.bin holds build-tool wrappers generated at npm install time
+  # (esbuild/semver/tsc…) whose contents hardcode the repo's NODE_PATH. The run entry
+  # is node build/index.js, which never invokes .bin, so deleting them →
+  # runtime/mcp/opennutrition is truly self-contained with no repo paths inside.
+  rm -rf "$dest/node_modules/.bin"
+  local dbsz; dbsz="$(du -sh "$dest/data_local" 2>/dev/null | cut -f1)"
+  log "  OK ${dest} (build + data_local[${dbsz}] + node_modules sans .bin; self-contained, runnable via node build/index.js)"
+}
+
+deploy_python_mcp() {    # P1.3
+  want python-mcp || return 0
+  # uv build wheel (setuptools backend) + uv pip install into a venv (--force-reinstall).
+  # What's installed is a real copy of the code from the wheel (not an editable .pth),
+  # so the venv no longer points at the repo.
+  local UV; UV="$(command -v uv 2>/dev/null || echo "$HOME/.local/bin/uv")"
+  for spec in "ibkr=ibkr-mcp" "hkprop=hkprop-mcp"; do
+    local name="${spec%%=*}" pkg="${spec#*=}"
+    local venv="$KA_RUNTIME_ROOT/${name}-venv"
+    log "python MCP [$name]: uv build wheel + install into ${venv} (non-editable)"
+    if [ "$DRY_RUN" = 1 ]; then
+      echo "  [dry-run] uv build --wheel packages/$pkg; uv venv $venv; uv pip install --force-reinstall <wheel>"
+    else
+      [ -x "$UV" ] || { log "  WARN uv not found, skipping"; return 0; }
+      local wd; wd="$(mktemp -d)"
+      if "$UV" build --wheel --out-dir "$wd" "$REPO_ROOT/packages/$pkg" >/dev/null 2>&1; then
+        local whl; whl="$(ls "$wd"/*.whl 2>/dev/null | head -1)"
+        [ -d "$venv" ] || "$UV" venv "$venv" >/dev/null 2>&1
+        if "$UV" pip install --python "$venv/bin/python" --force-reinstall "$whl" >/dev/null 2>&1; then
+          log "  OK $name → $(basename "$whl") installed into venv (copy, non-editable)"
+        else
+          log "  FAIL pip install"
+        fi
+      else
+        log "  FAIL uv build wheel"
+      fi
+      rm -rf "$wd"
+    fi
+  done
+}
+
+deploy_daemon() {        # P1.5: telegram channel daemon → runtime/daemon (esbuild single-file bundle)
+  want daemon || return 0
+  want_channel telegram || { log "telegram daemon → SKIPPED (KA_CHANNEL=${KA_CHANNEL})"; return 0; }
+  # channel-core kernel + telegram-platform plugin + deps (grammy/express/sdk) esbuild'd
+  # into a single self-contained daemon.mjs → runtime holds no .ts source and no node_modules.
+  # 🔴 Bundle via a "generated temp static entry" (import platform/init + runChannelDaemon) —
+  #    a single module graph guarantees a single channel-core instance (shared
+  #    byName/sessionsById/counters); bundling core and platform separately would
+  #    duplicate the kernel → session state not shared → broken.
+  # 🔴 Do NOT copy secrets (.env/config.json/state.json), do not restart, do not change
+  #    registration; the actual switch is --switch.
+  local src="$REPO_ROOT/packages/telegram-channel" dest="$RUNTIME/daemon"
+  log "channel daemon → ${dest} (esbuild single-file bundle: core+telegram-platform+deps self-contained, runtime has no source)"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  [dry-run] generate temp static entry → esbuild --bundle → ${dest}/daemon.mjs (single core instance, self-contained)"
+    echo "  [dry-run] cp daemon.sh start.sh stop.sh status.sh config.example.json -> ${dest} (no .ts / no node_modules)"
+    return 0
+  fi
+  local ESB; ESB="$(find "$REPO_ROOT/node_modules/.pnpm" -path '*esbuild@*/node_modules/esbuild/bin/esbuild' -type f 2>/dev/null | head -1 || true)"
+  [ -n "$ESB" ] || { log "  WARN esbuild not found (need pnpm install), skipping"; return 0; }
+  # 🔒 Auto-backup: before overwriting, back up the whole currently-working deploy dir
+  # (rollback safety net). Only back up when dest already has a daemon.sh (i.e. it was
+  # deployed before). Rollback: stop → rm -rf <dest> && mv <bak> <dest> → start.
+  if [ -d "$dest" ] && [ -e "$dest/daemon.sh" ]; then
+    local bak="${dest}.bak.$(date +%Y%m%d-%H%M%S)"
+    cp -a "$dest" "$bak"
+    log "  🔒 backed up current daemon → ${bak}"
+    log "     rollback: ${dest}/stop.sh; rm -rf ${dest}; mv ${bak} ${dest}; ${dest}/start.sh"
+  fi
+  mkdir -p "$dest"
+  # Temp static entry (placed inside the platform package so relative + node_modules resolution is natural).
+  local entry="$src/.bundle-entry.tmp.ts"
+  cat > "$entry" <<'EOF'
+// Generated by install.sh deploy_daemon — esbuild entry. A single static graph so
+// channel-core is instantiated ONCE (shared byName/sessionsById/counters).
+import { platform, init } from './telegram-platform.ts'
+import { runChannelDaemon } from '../channel-core/src/daemon.ts'
+runChannelDaemon({ platform, ...init() })
+EOF
+  # --format=esm + .mjs: node runs it explicitly as ESM (no package.json type needed). The
+  # banner injects createRequire to back any bare require inside the bundle (used indirectly
+  # by CJS deps, same as deploy_hooks).
+  if "$ESB" "$entry" --bundle --platform=node --format=esm \
+      --banner:js="import{createRequire}from'module';const require=createRequire(import.meta.url);" \
+      --outfile="$dest/daemon.mjs" >/dev/null 2>&1; then
+    rm -f "$entry"
+    log "  OK bundle → ${dest}/daemon.mjs (self-contained, single core instance)"
+  else
+    rm -f "$entry"
+    log "  FAIL esbuild daemon bundle (see above)"; return 0
+  fi
+  local f
+  for f in daemon.sh start.sh stop.sh status.sh config.example.json; do
+    [ -f "$src/$f" ] && cp "$src/$f" "$dest/$f"
+  done
+  chmod +x "$dest"/*.sh 2>/dev/null || true
+  # seed a placeholder config (don't overwrite existing); real secrets are migrated by the
+  # owner at switch time, install doesn't touch them
+  [ -f "$dest/config.json" ] || cp "$src/config.example.json" "$dest/config.json"
+  # Prune previous-generation (pre-bundle) artifacts: raw server.ts + node_modules +
+  # package*.json + tg-ch are superseded by the self-contained bundle and are dead code if
+  # left behind. Keep secrets/state/config/logs/attachments.
+  local stale
+  for stale in server.ts node_modules package.json package-lock.json tg-ch; do
+    [ -e "$dest/$stale" ] && { rm -rf "$dest/$stale"; log "  pruned previous-gen: $stale"; }
+  done
+  log "  OK ${dest} (bundle + scripts in place; secrets/.env not included, owner migrates them at switch time)"
+}
+
+deploy_lark_daemon() {   # lark channel daemon → runtime/lark-daemon (esbuild single-file bundle)
+  want daemon || return 0
+  want_channel lark || { log "lark daemon → SKIPPED (KA_CHANNEL=${KA_CHANNEL})"; return 0; }
+  # Same as deploy_daemon: channel-core kernel + lark-platform plugin + deps esbuild'd into a
+  # single self-contained daemon.mjs (generated temp static entry guarantees a single core
+  # instance). runtime/lark-daemon has no .ts/node_modules.
+  # 🔴 Do NOT copy secrets (config.json contains the webhook token), do not restart, do not
+  #    change registration; the actual switch is --switch.
+  local src="$REPO_ROOT/packages/lark-channel" dest="$RUNTIME/lark-daemon"
+  log "lark daemon → ${dest} (esbuild: core+lark-platform+deps self-contained, runtime has no source)"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  [dry-run] generate temp static entry → esbuild --bundle → ${dest}/daemon.mjs (single core instance)"
+    echo "  [dry-run] cp daemon.sh start.sh stop.sh status.sh config.example.json -> ${dest}"
+    return 0
+  fi
+  local ESB; ESB="$(find "$REPO_ROOT/node_modules/.pnpm" -path '*esbuild@*/node_modules/esbuild/bin/esbuild' -type f 2>/dev/null | head -1 || true)"
+  [ -n "$ESB" ] || { log "  WARN esbuild not found (need pnpm install), skipping"; return 0; }
+  if [ -d "$dest" ] && [ -e "$dest/daemon.sh" ]; then
+    local bak="${dest}.bak.$(date +%Y%m%d-%H%M%S)"
+    cp -a "$dest" "$bak"
+    log "  🔒 backed up current lark daemon → ${bak}"
+    log "     rollback: ${dest}/stop.sh; rm -rf ${dest}; mv ${bak} ${dest}; ${dest}/start.sh"
+  fi
+  mkdir -p "$dest"
+  local entry="$src/.bundle-entry.tmp.ts"
+  cat > "$entry" <<'EOF'
+// Generated by install.sh deploy_lark_daemon — esbuild entry. Single static graph
+// so channel-core is instantiated ONCE (shared byName/sessionsById/counters).
+import { platform, init } from './lark-platform.ts'
+import { runChannelDaemon } from '../channel-core/src/daemon.ts'
+runChannelDaemon({ platform, ...init() })
+EOF
+  if "$ESB" "$entry" --bundle --platform=node --format=esm \
+      --banner:js="import{createRequire}from'module';const require=createRequire(import.meta.url);" \
+      --outfile="$dest/daemon.mjs" >/dev/null 2>&1; then
+    rm -f "$entry"
+    log "  OK bundle → ${dest}/daemon.mjs (self-contained, single core instance)"
+  else
+    rm -f "$entry"
+    log "  FAIL esbuild lark daemon bundle"; return 0
+  fi
+  local f
+  for f in daemon.sh start.sh stop.sh status.sh config.example.json; do
+    [ -f "$src/$f" ] && cp "$src/$f" "$dest/$f"
+  done
+  chmod +x "$dest"/*.sh 2>/dev/null || true
+  # seed a placeholder config (don't overwrite existing); real lark credentials are filled in
+  # by the owner, install doesn't touch them
+  [ -f "$dest/config.json" ] || cp "$src/config.example.json" "$dest/config.json"
+  log "  OK ${dest} (bundle + scripts in place; config.json needs self_open_id/groups/webhook_url filled in)"
+}
+
+deploy_hooks() {         # CC hooks (capture-hook) → runtime (esbuild bundle + prune stale; @ka/core bundled in, self-contained)
+  want hooks || return 0
+  local src="$REPO_ROOT/packages/adapters/claude-code/dist/hooks" dest="$RUNTIME/hooks"
+  log "CC hooks → ${dest} (esbuild bundle; workspace deps like @ka/core bundled in, self-contained)"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  [dry-run] esbuild --bundle ${src}/*.js -> ${dest} (self-contained, no dependence on @ka/core in repo node_modules)"
+    return 0
+  fi
+  if [ ! -d "$src" ]; then
+    log "  WARN hooks dist missing (build adapters in the repo first): ${src} — skipping"
+    return 0
+  fi
+  # dist/hooks/*.js import @ka/core (a workspace package). A plain copy to runtime leaves node
+  # unable to find @ka/core (runtime/hooks has no node_modules) → ERR_MODULE_NOT_FOUND. Like
+  # node MCP, esbuild --bundle packs @ka/core into the single file → self-contained, no repo dependence.
+  local ESB; ESB="$(find "$REPO_ROOT/node_modules/.pnpm" -path '*esbuild@*/node_modules/esbuild/bin/esbuild' -type f 2>/dev/null | head -1 || true)"
+  [ -n "$ESB" ] || { log "  WARN esbuild not found (need pnpm install), skipping"; return 0; }
+  mkdir -p "$dest"
+  local h name cnt=0
+  for h in "$src"/*.js; do
+    [ -f "$h" ] || continue
+    name="$(basename "$h")"
+    # --banner same as deploy_node_mcp: when the bundle contains CJS deps (@ka/core uses yaml
+    # indirectly), a bare require in the ESM output hits esbuild's "Dynamic require not
+    # supported" stub (observed with compact-hook). Inject createRequire as a fallback.
+    if "$ESB" "$h" --bundle --platform=node --format=esm --banner:js="import{createRequire}from'module';const require=createRequire(import.meta.url);" --outfile="$dest/$name" >/dev/null 2>&1; then
+      cnt=$((cnt + 1))
+    else
+      log "  FAIL bundle $name"
+    fi
+  done
+  # Prune stale hooks: drop any runtime hook whose source was removed (e.g.
+  # compact-hook). Done AFTER bundling so a bundle failure never empties dest.
+  local d bn
+  for d in "$dest"/*.js; do
+    [ -f "$d" ] || continue
+    bn="$(basename "$d")"
+    if [ ! -f "$src/$bn" ]; then
+      rm -f "$d" "${d}.map"
+      log "  pruned stale hook: $bn (source removed)"
+    fi
+  done
+  log "  OK ${dest} (${cnt} hook(s), esbuild bundle self-contained, no external @ka/core resolution needed)"
+}
+
+deploy_core_cli() {      # core CLI (called by kb skill) → runtime/core-cli (tsup dist already self-contained, plain copy)
+  want core-cli || return 0
+  local src="$REPO_ROOT/packages/core/dist" dest="$RUNTIME/core-cli"
+  log "core CLI → ${dest} (packages/core/dist/*-cli.js, already tsup-bundled self-contained, plain copy)"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  [dry-run] cp ${src}/*-cli.js -> ${dest}/"
+    return 0
+  fi
+  if [ ! -d "$src" ]; then
+    log "  WARN core dist missing (run pnpm build core in the repo first): ${src} — skipping"
+    return 0
+  fi
+  mkdir -p "$dest"
+  local f cnt=0
+  for f in "$src"/*-cli.js; do
+    [ -f "$f" ] || continue
+    cp "$f" "$dest/"; cnt=$((cnt + 1))
+  done
+  log "  OK ${dest} (${cnt} core CLI(s) copied into runtime; kb skill no longer points at repo)"
+}
+
+deploy_skills() {        # skills → runtime/skills/<name>/SKILL.md (design→runtime copy; symlink created by switch_skills)
+  want skills || return 0
+  local dest="$RUNTIME/skills"
+  log "skills → ${dest} (copy packages/skills/*.md + kb; symlink pointed at runtime by switch_skills)"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  [dry-run] cp packages/skills/*.md + packages/skill/src/kb.md -> ${dest}/<name>/SKILL.md"
+    return 0
+  fi
+  mkdir -p "$dest"
+  local f name cnt=0
+  for f in "$REPO_ROOT"/packages/skills/*.md; do
+    [ -f "$f" ] || continue
+    name="$(basename "$f" .md)"
+    mkdir -p "$dest/$name"; cp "$f" "$dest/$name/SKILL.md"; cnt=$((cnt + 1))
+  done
+  # The kb entry source path is special (packages/skill/src/kb.md, not under packages/skills/)
+  if [ -f "$REPO_ROOT/packages/skill/src/kb.md" ]; then
+    mkdir -p "$dest/kb"; cp "$REPO_ROOT/packages/skill/src/kb.md" "$dest/kb/SKILL.md"; cnt=$((cnt + 1))
+  fi
+  log "  OK ${dest} (${cnt} skill(s) copied into runtime; pure docs, self-contained)"
+}
+
+seed_config() {          # seed config/data directories (never overwrites existing user data)
+  want config || return 0
+  log "seed config/data directories → ${KA_RUNTIME_ROOT} (does not overwrite existing)"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  [dry-run] mkdir -p ${KA_RUNTIME_ROOT}/{state,raw,pending-topics}; seed workshop.yaml from example (if missing)"
+    return 0
+  fi
+  mkdir -p "$KA_RUNTIME_ROOT"/state "$KA_RUNTIME_ROOT"/raw "$KA_RUNTIME_ROOT"/pending-topics
+  local seeded=0
+  if [ -f "$REPO_ROOT/ops/workshop.example.yaml" ] && [ ! -f "$KA_RUNTIME_ROOT/workshop.yaml" ]; then
+    cp "$REPO_ROOT/ops/workshop.example.yaml" "$KA_RUNTIME_ROOT/workshop.yaml"; seeded=$((seeded + 1))
+  fi
+  log "  OK data directories ready; seeded ${seeded} new config(s) (all existing files kept, never overwritten)"
+}
+
+# ── Switch steps (--switch; each step backs up to .pre-switch first) ──────────
+register_mcp() {         # switch ①: point CLAUDE_JSON's node MCP at runtime/mcp
+  want node-mcp || return 0
+  [ "$DO_SWITCH" = 1 ] || { log "register MCP → SKIPPED (needs --switch; won't change a running registration on its own)"; return 0; }
+  log "switch ① node MCP registration → ${CLAUDE_JSON} pointed at ${RUNTIME}/mcp (backed up)"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  [dry-run] cp ${CLAUDE_JSON} ${CLAUDE_JSON}.pre-switch; point kb/market-data/opennutrition at runtime/mcp"
+    return 0
+  fi
+  [ -f "$CLAUDE_JSON" ] || { log "  WARN ${CLAUDE_JSON} does not exist, skipping"; return 0; }
+  cp "$CLAUDE_JSON" "${CLAUDE_JSON}.pre-switch-$(date +%Y%m%d%H%M%S)"
+  RT="$RUNTIME" python3 - "$CLAUDE_JSON" <<'PY'
+import json, os, sys
+rt = os.environ["RT"]; p = sys.argv[1]
+d = json.load(open(p))
+ms = d.get("mcpServers", {})
+mapping = {
+    "knowledge-assistant": f"{rt}/mcp/kb/index.mjs",
+    "market-data":         f"{rt}/mcp/market/index.mjs",
+    "opennutrition":       f"{rt}/mcp/opennutrition/build/index.js",
+}
+changed = []
+for name, entry in mapping.items():
+    if name in ms:
+        ms[name]["command"] = "node"; ms[name]["args"] = [entry]; changed.append(name)
+json.dump(d, open(p, "w"), indent=2, ensure_ascii=False)
+print("  rewired:", ",".join(changed) if changed else "(none matched)")
+PY
+  log "  OK node MCP pointed at runtime/mcp (the python MCP venv already lives runtime-side, left alone)"
+}
+
+switch_ka_link() {       # switch ②: ka command symlink → runtime/bin/ka
+  want ka || return 0
+  [ "$DO_SWITCH" = 1 ] || return 0
+  log "switch ② ka symlink → ${KA_BIN_LINK} pointed at ${RUNTIME}/bin/ka (back up old target)"
+  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] readlink backup; ln -sf ${RUNTIME}/bin/ka ${KA_BIN_LINK}"; return 0; fi
+  [ -L "$KA_BIN_LINK" ] && { readlink "$KA_BIN_LINK" > "${KA_BIN_LINK}.pre-switch-target" 2>/dev/null || true; }
+  mkdir -p "$(dirname "$KA_BIN_LINK")"
+  ln -sf "$RUNTIME/bin/ka" "$KA_BIN_LINK"
+  log "  OK ${KA_BIN_LINK} -> ${RUNTIME}/bin/ka"
+}
+
+switch_cron() {          # switch ③: re-point cron plist at runtime/ops/scripts/cron-run.sh
+  want cron || return 0
+  [ "$DO_SWITCH" = 1 ] || return 0
+  # macOS/launchd only: rewrite the legacy launchd plist's cron-run.sh path to runtime.
+  # Linux has no launchd plist — cron uses the crontab backend: after setting up cron.yaml,
+  # run `ka cron install` (detect_backend Linux→crontab). Skip here.
+  if [ "$(uname -s)" != "Darwin" ]; then
+    log "switch ③ cron → Linux: skip launchd plist rewrite; use \`ka cron install\` (crontab backend) to install scheduled jobs"
+    return 0
+  fi
+  log "switch ③ cron plist → re-point at ${RUNTIME}/ops/scripts/cron-run.sh (backup + sed)"
+  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] backup *.plist; rewrite cron-run.sh path -> runtime; launchctl bootout/bootstrap reload"; return 0; fi
+  local changed=0 p
+  for p in "$LAUNCHAGENTS_DIR"/com.knowledge-assistant.ka.cron.*.plist; do
+    [ -f "$p" ] || continue
+    cp "$p" "${p}.pre-switch"
+    # Match any prefix of .../ops/scripts/cron-run.sh (a switch may run from a worktree or the
+    # main workspace, so the plist's old path prefix is unpredictable) → uniformly re-point at runtime.
+    RT="$RUNTIME" python3 - "$p" <<'PY'
+import os, re, sys
+rt = os.environ["RT"]; p = sys.argv[1]
+raw = open(p).read()
+# Use /[^<>\s]* for the path prefix, not \S*: in the plist, the <string>/Users/... tag abuts
+# the path with no space, so \S* would greedily swallow the whole "<string>/Users/.../runtime"
+# segment → after substitution the leading <string> is lost and the plist XML is corrupted.
+# Excluding < > makes the match start at the first / after the tag, keeping the tag intact.
+open(p, "w").write(re.sub(r'/[^<>\s]*/ops/scripts/cron-run\.sh', rt + '/ops/scripts/cron-run.sh', raw))
+PY
+    changed=$((changed + 1))
+  done
+  # Auto-reload (only the real ~/Library/LaunchAgents; skip under an isolated override, don't touch real launchctl)
+  if [ "$LAUNCHAGENTS_DIR" = "$HOME/Library/LaunchAgents" ]; then
+    local q
+    for q in "$LAUNCHAGENTS_DIR"/com.knowledge-assistant.ka.cron.*.plist; do
+      [ -f "$q" ] || continue
+      launchctl bootout "gui/$(id -u)" "$q" >/dev/null 2>&1 || true
+      launchctl bootstrap "gui/$(id -u)" "$q" >/dev/null 2>&1 || true
+    done
+    log "  OK ${changed} cron plist(s) re-pointed at runtime + launchctl reloaded"
+  else
+    log "  OK ${changed} cron plist(s) re-pointed at runtime (override mode, skipped launchctl reload)"
+  fi
+}
+
+switch_hooks() {         # switch ④: CLAUDE_SETTINGS hook paths → runtime/hooks
+  want hooks || return 0
+  [ "$DO_SWITCH" = 1 ] || return 0
+  log "switch ④ hooks → ${CLAUDE_SETTINGS} re-pointed at ${RUNTIME}/hooks (backed up)"
+  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] cp settings.json .pre-switch; change hook paths repo→runtime/hooks"; return 0; fi
+  [ -f "$CLAUDE_SETTINGS" ] || { log "  WARN ${CLAUDE_SETTINGS} does not exist, skipping"; return 0; }
+  cp "$CLAUDE_SETTINGS" "${CLAUDE_SETTINGS}.pre-switch-$(date +%Y%m%d%H%M%S)"
+  # Match any prefix of .../packages/adapters/claude-code/dist/hooks (prefix unpredictable) → runtime/hooks.
+  RT="$RUNTIME" python3 - "$CLAUDE_SETTINGS" <<'PY'
+import os, re, sys
+rt = os.environ["RT"]; p = sys.argv[1]
+raw = open(p).read()
+# Same as switch_cron: use /[^<>"\s]* instead of \S* to avoid greedily swallowing the leading
+# quote/tag (settings.json is JSON, and the hook command has a space between node and the path
+# so it wasn't broken, but tightening is safer).
+raw2 = re.sub(r'/[^<>"\s]*/packages/adapters/claude-code/dist/hooks', rt + '/hooks', raw)
+open(p, "w").write(raw2)
+print("  hook paths rewired" if raw2 != raw else "  no hook path matched")
+PY
+  log "  OK hooks re-pointed at runtime/hooks"
+}
+
+switch_daemon() {        # switch ⑤: migrate telegram daemon secrets from the old location to runtime/daemon
+  want daemon || return 0
+  want_channel telegram || return 0
+  [ "$DO_SWITCH" = 1 ] || return 0
+  local dest="$RUNTIME/daemon"
+  log "switch ⑤ daemon secrets → migrate from ${TELEGRAM_DIR} to ${dest} (config.json/.env/state.json, no overwrite)"
+  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] cp ${TELEGRAM_DIR}/{config.json,.env,state.json} -> ${dest}; stop old daemon + start runtime/daemon (telegram drops for a few seconds)"; return 0; fi
+  [ -d "$dest" ] || { log "  WARN runtime/daemon not deployed (run deploy_daemon first), skipping"; return 0; }
+  [ -d "$TELEGRAM_DIR" ] || { log "  WARN old daemon ${TELEGRAM_DIR} does not exist, skipping migration"; return 0; }
+  local f migrated=0
+  for f in config.json .env state.json; do
+    [ -f "$TELEGRAM_DIR/$f" ] && [ ! -f "$dest/$f" ] && { cp "$TELEGRAM_DIR/$f" "$dest/$f"; migrated=$((migrated + 1)); }
+  done
+  log "  OK migrated ${migrated} secrets/state file(s) (existing not overwritten)"
+  # Auto stop old daemon + start new (⚠️ telegram drops for a few seconds). stop/start use port
+  # 9877 — in isolated tests the fake TELEGRAM_DIR has no stop.sh and the temp RT has no
+  # start.sh → both auto-skip, never touching the real daemon.
+  log "  stop old daemon + start runtime/daemon (⚠️ telegram drops for a few seconds)..."
+  [ -x "$TELEGRAM_DIR/stop.sh" ] && "$TELEGRAM_DIR/stop.sh" >/dev/null 2>&1 || true
+  sleep 1
+  if [ -x "$dest/start.sh" ]; then
+    if "$dest/start.sh" >/dev/null 2>&1; then log "  OK runtime/daemon is up (on 9877)"; else log "  WARN runtime/daemon start failed, see ${dest}/daemon.stdout.log"; fi
+  else
+    log "  WARN ${dest}/start.sh does not exist (re-run ./install.sh to update runtime/daemon first); daemon not switched"
+  fi
+}
+
+switch_lark_daemon() {   # switch ⑤b: lark daemon — start runtime/lark-daemon (@9876)
+  want daemon || return 0
+  want_channel lark || return 0
+  [ "$DO_SWITCH" = 1 ] || return 0
+  local dest="$RUNTIME/lark-daemon"
+  log "switch ⑤b lark daemon → start ${dest} (@9876)"
+  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] migrate config.json/.env/state.json from ${LARK_DIR} (no overwrite); stop old + start runtime/lark-daemon"; return 0; fi
+  [ -d "$dest" ] || { log "  WARN runtime/lark-daemon not deployed (run deploy_lark_daemon first), skipping"; return 0; }
+  # Migrate secrets/state from old ~/.lark-channel (if any; a fresh Ubuntu install usually has
+  # none → use the placeholder config, owner then fills in self_open_id/groups/webhook_url).
+  if [ -d "$LARK_DIR" ]; then
+    local f migrated=0
+    for f in config.json .env state.json; do
+      [ -f "$LARK_DIR/$f" ] && [ ! -f "$dest/$f" ] && { cp "$LARK_DIR/$f" "$dest/$f"; migrated=$((migrated + 1)); }
+    done
+    [ "$migrated" -gt 0 ] && log "  OK migrated ${migrated} secrets/state file(s) from ${LARK_DIR}"
+  fi
+  log "  stop old + start runtime/lark-daemon..."
+  [ -x "$LARK_DIR/stop.sh" ] && "$LARK_DIR/stop.sh" >/dev/null 2>&1 || true
+  [ -x "$dest/stop.sh" ] && "$dest/stop.sh" >/dev/null 2>&1 || true
+  sleep 1
+  if [ -x "$dest/start.sh" ]; then
+    if "$dest/start.sh" >/dev/null 2>&1; then log "  OK runtime/lark-daemon is up (on 9876)"; else log "  WARN start failed, see ${dest}/daemon.stdout.log (most likely config.json hasn't been filled with real credentials yet)"; fi
+  else
+    log "  WARN ${dest}/start.sh does not exist"
+  fi
+}
+
+switch_skills() {        # switch ⑥: ~/.claude/skills/<name>/SKILL.md symlink → runtime/skills (back up old target)
+  want skills || return 0
+  [ "$DO_SWITCH" = 1 ] || { log "switch skills → SKIPPED (needs --switch; won't change cc's turf symlink on its own)"; return 0; }
+  local src="$RUNTIME/skills"
+  log "switch ⑥ skills symlink → ${CLAUDE_SKILLS_DIR}/<name>/SKILL.md pointed at ${src} (back up old target)"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  [dry-run] for each runtime/skills/<name>: record old symlink target → .pre-switch-target; ln -sf to runtime"
+    return 0
+  fi
+  [ -d "$src" ] || { log "  WARN ${src} does not exist (run deploy_skills first), skipping"; return 0; }
+  local d name link tgt cnt=0
+  for d in "$src"/*/; do
+    [ -d "$d" ] || continue
+    name="$(basename "$d")"
+    link="$CLAUDE_SKILLS_DIR/$name/SKILL.md"
+    mkdir -p "$CLAUDE_SKILLS_DIR/$name"
+    # Back up the old symlink target (only when it's currently a symlink and not yet backed up; for the record, cleanup removes it)
+    if [ -L "$link" ] && [ ! -f "${link}.pre-switch-target" ]; then
+      tgt="$(readlink "$link")"; printf '%s' "$tgt" > "${link}.pre-switch-target"
+    fi
+    ln -sf "$src/$name/SKILL.md" "$link"; cnt=$((cnt + 1))
+  done
+  log "  OK ${cnt} skill symlink(s) pointed at runtime/skills (design/runtime separation)"
+}
+
+do_cleanup_old() {       # --cleanup-old: after switch is verified OK, remove old standalone deploy + backups (irreversible, use with care)
+  log "cleanup-old: remove old daemon + .pre-switch backups (only after switch is verified OK, irreversible)"
+  [ -d "$TELEGRAM_DIR" ] && { run "rm -rf '$TELEGRAM_DIR'"; log "  removed old daemon ${TELEGRAM_DIR}"; }
+  local b
+  for b in "${CLAUDE_JSON}".pre-switch-* "${KA_BIN_LINK}.pre-switch-target" "${CLAUDE_SETTINGS}".pre-switch-* "$LAUNCHAGENTS_DIR"/com.knowledge-assistant.ka.cron.*.plist.pre-switch "$CLAUDE_SKILLS_DIR"/*/SKILL.md.pre-switch-target; do
+    [ -e "$b" ] && run "rm -f '$b'"
+  done
+  log "  done removing .pre-switch backups."
+}
+
+precheck_deps() {        # dependency precheck (fail-closed style: clear warnings on missing, no silent fallback)
+  local miss=0
+  _need() { command -v "$1" >/dev/null 2>&1 || { log "  ⚠️ missing $1 — $2"; miss=$((miss + 1)); }; }
+  log "dependency precheck (missing items only warn; for how to install, see the Ubuntu section of docs/INSTALL):"
+  _need node "runtime (recommend nvm to install Node 22+)"
+  _need pnpm "monorepo install/build (corepack enable)"
+  _need python3 "ops / cron / yaml parsing"
+  _need git "source"
+  _need tmux "workshop multi-pane"
+  command -v uv >/dev/null 2>&1 || [ -x "$HOME/.local/bin/uv" ] || { log "  ⚠️ missing uv — venv for the python MCPs (hkprop/ibkr)"; miss=$((miss + 1)); }
+  want_channel lark && _need lark-cli "lark daemon inbound polling (must be authenticated)"
+  if [ "$miss" -eq 0 ]; then log "  OK all dependencies present"; else log "  ⚠️ ${miss} dependency(ies) missing (see above) — the related components will skip/fail; install them and re-run"; fi
+}
+
+main() {
+  log "REPO        = $REPO_ROOT"
+  log "RUNTIME_ROOT= $KA_RUNTIME_ROOT"
+  log "RUNTIME     = $RUNTIME"
+  [ "$DRY_RUN" = 1 ] && log "mode: DRY-RUN (print only, no changes)"
+  [ -n "$ONLY" ] && log "deploy only: $ONLY"
+  log "channel       = ${KA_CHANNEL} (daemon selection; lark uses runtime/lark-daemon@9876)"
+  echo "----"
+  precheck_deps
+  echo "----"
+  if [ "$DO_CLEANUP" = 1 ]; then do_cleanup_old; echo "----"; log "cleanup-old done."; return 0; fi
+  deploy_ka
+  deploy_node_mcp
+  deploy_opennutrition
+  deploy_python_mcp
+  deploy_daemon
+  deploy_lark_daemon
+  deploy_hooks
+  deploy_core_cli
+  deploy_skills
+  seed_config
+  register_mcp
+  switch_ka_link
+  switch_cron
+  switch_hooks
+  switch_daemon
+  switch_lark_daemon
+  switch_skills
+  echo "----"
+  log "done. (P1.1 skeleton; component deploy logic filled in over P1.2–P1.6)"
+}
+main

@@ -1,0 +1,7 @@
+{
+  "bot_token_env": "TELEGRAM_BOT_TOKEN",
+  "http_host": "127.0.0.1",
+  "http_port": 9877,
+  "poll_timeout": 25,
+  "owner_chat_id": "YOUR_TELEGRAM_CHAT_ID"
+}

@@ -1,0 +1,25 @@
+#!/bin/bash
+# Fake claude binary for tests.
+# Writes every received line to /tmp/claude-<pane>.log and blocks on read.
+set -u
+
+PANE="${START_PANE_NAME:-unknown}"
+# detect pane name from args: start-pane.sh invokes `claude <any args>`
+# but our start-pane passes only the extra args; we infer pane via PWD tail.
+if [ -z "${START_PANE_NAME:-}" ]; then
+    PANE="$(basename "$PWD")"
+fi
+
+LOG="/tmp/claude-${PANE}.log"
+echo "[fake-claude:$PANE] started in $PWD args=$*" | tee -a "$LOG"
+
+# Also mark this process so detect-main-pane regex matches.
+# Rename argv is not portable; instead, the process tree contains our shebang
+# path + any --channels arg, which is what detect-main-pane greps for.
+
+while IFS= read -r line; do
+    echo "[fake-claude:$PANE] <<< $line" | tee -a "$LOG"
+done
+
+# stdin closed — sleep so the pane stays alive
+exec sleep infinity

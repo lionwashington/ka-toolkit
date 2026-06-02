@@ -1,0 +1,36 @@
+{
+  "name": "mcp-opennutrition",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "bin": {
+    "mcp-opennutrition": "./build/index.js"
+  },
+  "scripts": {
+    "build": "rm -rf build && tsc && npm run convert-data && chmod 755 build/index.js",
+    "inspector": "tsc && npm run convert-data && npx @modelcontextprotocol/inspector npx tsx src/index.ts",
+    "convert-data": "tsx scripts/decompress-dataset.ts && tsx scripts/tsv-to-sqlite.ts && rm -rf data_local_temp"
+  },
+  "files": [
+    "build"
+  ],
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "description": "MCP implementation for OpenNutrition dataset access. Provides  listing, querying, and filtering foods.",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@types/yauzl": "^2.10.3",
+    "better-sqlite3": "^12.6.2",
+    "papaparse": "^5.4.1",
+    "yauzl": "^3.2.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.5.2",
+    "@types/papaparse": "^5.3.16",
+    "tsx": "^4.21.0",
+    "typescript": "^5.8.3"
+  }
+}

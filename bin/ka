@@ -1,0 +1,72 @@
+#!/bin/bash
+# ka — Knowledge Assistant CLI (P0: start / stop / restart / status / spawn-mates)
+#
+# Symlink into PATH:
+#   ln -sf "$PWD/bin/ka" ~/.local/bin/ka
+
+set -euo pipefail
+
+# Resolve repo root even when invoked via symlink.
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+    _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+    _src="$(readlink "$_src")"
+    [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+BIN_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
+REPO_ROOT="$(cd "$BIN_DIR/.." && pwd)"
+CLI_DIR="$REPO_ROOT/ops/cli"
+export KA_REPO_ROOT="$REPO_ROOT"
+
+CMD="${1:-help}"
+[ $# -gt 0 ] && shift || true
+
+case "$CMD" in
+    restart|status|doctor|wait-ready|cron|workshop)
+        exec "$CLI_DIR/${CMD}.sh" "$@"
+        ;;
+    start)
+        # P2: `ka start` retired → forwards to `ka workshop` (start all
+        # default=true). Canonical: `ka workshop [--pane|--window]`.
+        exec "$CLI_DIR/workshop.sh" "$@"
+        ;;
+    stop)
+        # P2: `ka stop` retired → `ka workshop stop`.
+        exec "$CLI_DIR/workshop.sh" stop "$@"
+        ;;
+    spawn-mates)
+        # P2: the old top-level team-spawn command is retired. `ka spawn-mates`
+        # now forwards to the workshop verb (independent CC process into a pane,
+        # no CC team mechanism). Canonical form: `ka workshop spawn-mates`.
+        exec "$CLI_DIR/workshop.sh" spawn-mates "$@"
+        ;;
+    distill)
+        # `ka distill --background ...` is the only supported mode for now;
+        # synchronous foreground distill stays inside the /kb skill itself.
+        BG=0
+        for arg in "$@"; do
+            [ "$arg" = "--background" ] && BG=1
+        done
+        if [ "$BG" -eq 1 ]; then
+            FILTERED=()
+            for arg in "$@"; do
+                [ "$arg" = "--background" ] && continue
+                FILTERED+=("$arg")
+            done
+            exec "$CLI_DIR/distill-bg.sh" "${FILTERED[@]}"
+        else
+            echo "ka distill currently only supports --background (sync mode lives inside /kb distill --foreground)" >&2
+            exit 1
+        fi
+        ;;
+    distill-status)
+        exec "$CLI_DIR/distill-status.sh" "$@"
+        ;;
+    -h|--help|help|'')
+        exec "$CLI_DIR/help.sh" "$@"
+        ;;
+    *)
+        echo "ka: unknown command '$CMD' (try 'ka help')" >&2
+        exit 2
+        ;;
+esac

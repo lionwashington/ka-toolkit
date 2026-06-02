@@ -1,0 +1,17 @@
+# Docker build context excludes — keep it light + platform-clean (no host-native
+# node_modules / venvs leaking into a Linux image; they get rebuilt in-container).
+.git
+**/node_modules
+*-venv
+**/dist
+**/build
+packages/mcp-opennutrition/data_local
+runtime
+raw
+state
+pending-topics
+**/*.log
+**/.daemon.lock
+**/daemon.pid
+ops/tests/results
+.bundle-entry.tmp.ts
