@@ -66,38 +66,40 @@ ok "runtime_load refuses phase-3 runtimes"
 tmp_cfg="$(mktemp)"
 cat > "$tmp_cfg" <<'YAML'
 session: demo
-panes:
+mates:
   - name: team-lead
     cwd: /tmp
+    main: true
 YAML
 rt="$(runtime_default_from_config "$tmp_cfg")"
 [ "$rt" = "cc" ] || fail "default runtime should be 'cc' when omitted, got '$rt'"
 rm -f "$tmp_cfg"
 ok "runtime_default_from_config defaults to cc"
 
-# -- 8. per-pane / mate runtime override round-trip via yaml-parse -----------
+# -- 8. main-pane / mate runtime override round-trip via yaml-parse ----------
+# Under the merged schema, only `main: true` entries are panes; every other
+# entry (gem, mater) is a mate, so both carry a mate_runtime override.
 tmp_cfg="$(mktemp)"
 cat > "$tmp_cfg" <<'YAML'
 session: demo
 runtime: cc
-panes:
+mates:
   - name: team-lead
     cwd: /tmp
-    telegram: true
+    main: true
   - name: gem
     cwd: /tmp
     runtime: gemini
-mates:
   - name: mater
     cwd: /tmp
     runtime: codex
 YAML
 out="$("$OPS/lib/yaml-parse.sh" "$tmp_cfg")"
 printf '%s\n' "$out" | grep -qx $'runtime_default\tcc'         || fail "missing runtime_default record"
-printf '%s\n' "$out" | grep -qx $'pane_runtime\tgem\tgemini'   || fail "missing pane_runtime gem record"
+printf '%s\n' "$out" | grep -qx $'mate_runtime\tgem\tgemini'   || fail "missing mate_runtime gem record"
 printf '%s\n' "$out" | grep -qx $'mate_runtime\tmater\tcodex'  || fail "missing mate_runtime mater record"
 rm -f "$tmp_cfg"
-ok "yaml-parse emits runtime_default / pane_runtime / mate_runtime"
+ok "yaml-parse emits runtime_default / mate_runtime for non-main entries"
 
 echo "PASS: 16-runtime-cc-contract"
 exit 0

@@ -44,8 +44,13 @@ chmod +x "$FAKE_BIN/claude"
 PATH_BAK="$PATH"
 export PATH="$FAKE_BIN:$PATH"
 
+# The worker chdir's to WORKSPACE_CWD; give it a real dir (else it falls back to
+# the placeholder default and chdir fails). Same setup 22/23 use.
+WORKSPACE="$TMP/workspace"
+mkdir -p "$WORKSPACE/memory/raw" "$WORKSPACE/memory/conversations" "$WORKSPACE/memory/topics"
+
 # Spawn (background); capture pid and wait for completion.
-spawn_out="$(KA_REPO_ROOT="$REPO" bash "$REPO/ops/cli/distill-bg.sh" \
+spawn_out="$(KA_REPO_ROOT="$REPO" WORKSPACE_CWD="$WORKSPACE" bash "$REPO/ops/cli/distill-bg.sh" \
     --jsonl "$JSONL" \
     --session-id "fake-session")"
 echo "$spawn_out" | grep -q "distill-bg: pid="

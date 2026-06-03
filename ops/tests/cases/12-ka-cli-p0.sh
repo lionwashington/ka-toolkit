@@ -54,10 +54,10 @@ echo "[5/5] ka workshop --dry-run works (verb dispatcher)"
 mkdir -p /tmp/ka-cli-p0-proj-a
 cat > /tmp/ka-cli-p0-cfg.yaml <<'EOF'
 session: ka-cli-p0-ws
-panes:
+mates:
   - name: team-lead
     cwd: /tmp/ka-cli-p0-proj-a
-    telegram: true
+    main: true
 EOF
 set +e
 out="$(DRY_RUN=1 OPS_CONFIG=/tmp/ka-cli-p0-cfg.yaml "$KA" workshop --dry-run 2>&1)"

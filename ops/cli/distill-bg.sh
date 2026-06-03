@@ -89,7 +89,9 @@ mkdir -p "$STATE_DIR" || { log_err "cannot create $STATE_DIR"; exit 2; }
 # Log rotation: each background distill leaves a distill-<ts>.log; they pile up
 # forever otherwise. Keep the newest 30 (enough to debug recent runs), prune the
 # rest. `ls -t` newest-first + `tail -n +31` (BSD/macOS ok) = everything past #30.
-ls -1t "$STATE_DIR"/distill-*.log 2>/dev/null | tail -n +31 | while IFS= read -r old_log; do
+# `|| true` so an empty state dir (no logs yet — first-ever distill on a fresh
+# machine) doesn't trip `set -o pipefail` and abort the whole run.
+{ ls -1t "$STATE_DIR"/distill-*.log 2>/dev/null || true; } | tail -n +31 | while IFS= read -r old_log; do
     rm -f "$old_log"
 done
 

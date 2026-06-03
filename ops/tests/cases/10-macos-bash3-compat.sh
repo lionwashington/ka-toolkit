@@ -5,7 +5,7 @@
 # This case:
 #   1. Installs a bash-3.2-lookalike shim that rejects bash 4+ builtins at runtime.
 #   2. Statically greps ops/**/*.sh for forbidden constructs.
-#   3. Runs bootstrap.sh DRY_RUN=1 under that shim and asserts clean output.
+#   3. Dry-runs the real entry (ka workshop) under that shim, clean output.
 set -euo pipefail
 
 REPO="${REPO:-/repo}"
@@ -28,21 +28,22 @@ if [ -n "$hits" ]; then
 fi
 echo "    clean"
 
-echo "[2/3] dry-run bootstrap under forced bash 3.2 mode"
+echo "[2/3] dry-run the real entry (ka workshop) under forced bash 3.2 mode"
 mkdir -p /tmp/proj-a
 cat > /tmp/cfg.yaml <<'EOF'
 session: compat-ws
-panes:
+mates:
   - name: team-lead
     cwd: /tmp/proj-a
-    telegram: true
+    main: true
 EOF
 
-# BASH_COMPAT=3.2 makes bash 4+ refuse modern syntax where possible
+# BASH_COMPAT=3.2 makes bash 4+ refuse modern syntax where possible.
+# bootstrap.sh is retired — `ka workshop` is the canonical entry point.
 out="$(BASH_COMPAT=3.2 DRY_RUN=1 OPS_CONFIG=/tmp/cfg.yaml \
-    bash "$REPO/ops/bootstrap.sh" 2>&1)"
-echo "$out" | grep -q 'Bootstrap complete' \
-    || { echo "FAIL: bootstrap did not complete"; echo "$out"; exit 1; }
+    bash "$REPO/bin/ka" workshop --dry-run 2>&1)"
+echo "$out" | grep -q 'dry-run summary' \
+    || { echo "FAIL: ka workshop --dry-run did not complete"; echo "$out"; exit 1; }
 echo "$out" | grep -qiE 'syntax error|unexpected|bad substitution' \
     && { echo "FAIL: bash-syntax errors in output"; echo "$out"; exit 1; }
 echo "    ok"

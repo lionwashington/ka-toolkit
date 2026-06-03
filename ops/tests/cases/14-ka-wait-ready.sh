@@ -27,10 +27,10 @@ trap cleanup EXIT
 
 cat > "$TMP/workshop.yaml" <<'EOF'
 session: wr-ready
-panes:
+mates:
   - name: team-lead
     cwd: /tmp
-    telegram: true
+    main: true
 EOF
 export OPS_CONFIG="$TMP/workshop.yaml"
 
@@ -73,10 +73,10 @@ echo "[3/3] rc=1 when pane never idles (timeout)"
 # Rewrite config to point at a new busy session so step 2 is independent.
 cat > "$TMP/workshop.yaml" <<'EOF'
 session: wr-busy
-panes:
+mates:
   - name: team-lead
     cwd: /tmp
-    telegram: true
+    main: true
 EOF
 
 # Busy pane: prints a rotating timestamp forever — no CC-prompt marker present.

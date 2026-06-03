@@ -11,11 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         patch \
         util-linux \
         cron \
+        nodejs \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Build context is the REPO ROOT. We layout /repo to mirror the monorepo so
-# SCRIPT_DIR/../.. inside scheduled-tasks scripts resolves ops/ correctly.
+# SCRIPT_DIR/../.. resolves ops/ correctly inside the ka scripts.
 WORKDIR /repo
 
 # Fake `claude` binary on PATH — logs stdin and blocks.
@@ -23,8 +24,16 @@ COPY ops/tests/fakes/claude /usr/local/bin/claude
 RUN chmod +x /usr/local/bin/claude
 
 COPY ops /repo/ops
-COPY scheduled-tasks /repo/scheduled-tasks
 COPY bin /repo/bin
+
+# @ka/core CLI bundles the distill-bg tests need, placed at the runtime layout
+# path (core-cli/) that distill-bg.sh + distill-bg-worker.sh probe first.
+# Built on the host by run.sh (tsup → standalone node bundles).
+COPY packages/core/dist/jsonl-reader-cli.js /repo/core-cli/jsonl-reader-cli.js
+COPY packages/core/dist/distill-result-parser-cli.js /repo/core-cli/distill-result-parser-cli.js
+# The bundles are ES modules (@ka/core is "type":"module"); mark this dir so
+# node treats the .js as ESM instead of CommonJS.
+RUN printf '{"type":"module"}\n' > /repo/core-cli/package.json
 
 ENV OPS_DIR=/repo/ops \
     REPO_ROOT=/repo \

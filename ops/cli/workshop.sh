@@ -190,7 +190,7 @@ SESSION=""
 # =()) still makes `${#foo[@]}` report "unbound variable" when never assigned
 # (e.g. workshop.yaml has no mate → MATE_NAMES is never appended to).
 declare -a PANE_NAMES=() PANE_CWDS=() PANE_MAINS=() PANE_ARGS=()
-declare -a MATE_NAMES=() MATE_CWDS=() MATE_DEFAULTS=()
+declare -a MATE_NAMES=() MATE_CWDS=() MATE_DEFAULTS=() MATE_ARGS=()
 while IFS= read -r rec; do
     [ -z "$rec" ] && continue
     # tab is an IFS-whitespace char, so `read` folds consecutive tabs and drops
@@ -203,7 +203,11 @@ while IFS= read -r rec; do
         pane)
             PANE_NAMES+=("$a"); PANE_CWDS+=("$b"); PANE_MAINS+=("$c"); PANE_ARGS+=("$d") ;;
         mate)
-            MATE_NAMES+=("$a"); MATE_CWDS+=("$b"); MATE_DEFAULTS+=("$d") ;;
+            # Keep MATE_ARGS parallel; a following mate_args record fills it in.
+            MATE_NAMES+=("$a"); MATE_CWDS+=("$b"); MATE_DEFAULTS+=("$d"); MATE_ARGS+=("") ;;
+        mate_args)
+            # Emitted immediately after its own `mate` record → set the last slot.
+            MATE_ARGS[$(( ${#MATE_NAMES[@]} - 1 ))]="$b" ;;
     esac
 done < <("$YAML_PARSE" "$CONFIG")
 
@@ -253,7 +257,11 @@ build_entries() {
             elif [ "${MATE_DEFAULTS[$i]}" = "0" ] && [ "$INCLUDE_OPTIONAL" -eq 0 ]; then
                 skipped_optional=$((skipped_optional + 1)); continue
             fi
-            ensure_resume
+            # yaml args verbatim (same rule as panes), then apply the resume rule.
+            raw="${MATE_ARGS[$i]}"
+            local mparsed=()
+            if [ -n "$raw" ]; then IFS='|' read -r -a mparsed <<<"$raw"; fi
+            if [ "${#mparsed[@]}" -gt 0 ]; then ensure_resume "${mparsed[@]}"; else ensure_resume; fi
             if [ "${#RESUMED_ARGS[@]}" -gt 0 ]; then join_args "${RESUMED_ARGS[@]}"; else join_args; fi
             ENTRY_NAMES+=("$name"); ENTRY_CWDS+=("$cwd"); ENTRY_CHANNELS+=("$(sanitize_channel "$name")"); ENTRY_ARGS+=("$JOINED")
         done
@@ -520,9 +528,9 @@ cmd_stop() {
 
     if [ -n "$TARGET" ]; then
         # Stop a single mate's pane. The channel comes from the yaml's
-        # name→channel mapping (build_entries: the main pane's channel is forced
+        # name→channel mapping (build_entries: the main entry's channel is forced
         # to 'main'). A plain sanitize(name) would be wrong when mate name≠channel
-        # — the main pane's channel is forced to 'main' by telegram:true.
+        # — the main entry's channel is forced to 'main' by main:true.
         build_entries
         local channel
         if [ "${#ENTRY_NAMES[@]}" -gt 0 ]; then channel="${ENTRY_CHANNELS[0]}"; else channel="$(sanitize_channel "$TARGET")"; fi

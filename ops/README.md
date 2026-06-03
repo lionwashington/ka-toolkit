@@ -61,18 +61,20 @@ window with `--window`). The owner routes from Telegram with `to <name>:`
 Config search order: `$OPS_CONFIG` → `~/.knowledge-assistant/workshop.yaml` →
 `ops/workshop.example.yaml` (prints a warning; template only).
 
-### Pane / mate schema
+### Agent schema
+
+Every agent — the lead and the mates — is one entry under a single `mates:`
+list. The lead is the entry marked `main: true`.
 
 ```yaml
 session: workshop
 runtime: cc                # top-level default agent runtime; omit to accept cc.
                            # codex / gemini are reserved names — only cc is built.
-panes:
+mates:
   - name: main
     cwd: ~/workspace/<lead-project>
-    telegram: true         # marks the MAIN pane — reachable via the daemon as
-                           # channel "main" (no-prefix Telegram routing target)
-mates:
+    main: true             # the lead — bound to the daemon's "main" channel
+                           # (the no-prefix Telegram routing target)
   - name: ka-dev2
     cwd: ~/workspace/<mate-project>
     description: project dev/maintenance
@@ -81,11 +83,15 @@ mates:
     default: false         # skipped by `ka workshop`; needs --all / --only / start <name>
 ```
 
-`telegram: true` is shorthand for "this is the **main** Claude pane". It implies
-`main: true` and binds the pane to the daemon's `main` channel. It does **not**
-attach any Telegram plugin — all Telegram I/O goes through the daemon (see below).
-Use `main: true` + explicit `args:` for custom setups. Mates default to
-`default: true`; each mate's `name` is sanitized into its own daemon channel.
+Per-entry keys: `name` / `cwd` / `args` / `description` / `main` (default
+**false**) / `default` (default **true**). Exactly one entry sets `main: true`
+— it binds to the daemon's `main` channel (no Telegram plugin; all Telegram I/O
+goes through the daemon, see below). Every other entry is a mate; each mate's
+`name` is sanitized into its own daemon channel.
+
+> Migrating from the legacy two-section schema (`panes:` + `telegram: true`)?
+> Run `ops/lib/migrate-workshop-yaml.py <workshop.yaml>` — it folds `panes:` into
+> `mates:` and rewrites `telegram: true` → `main: true` (data-preserving).
 
 ## telegram-channel daemon (not a plugin)
 

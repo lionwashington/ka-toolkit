@@ -28,10 +28,10 @@ run_case() {
     local label="$1" session="$2" fixture="$3"
     cat > "$TMP/workshop.yaml" <<EOF
 session: $session
-panes:
+mates:
   - name: team-lead
     cwd: /tmp
-    telegram: true
+    main: true
 EOF
     export OPS_CONFIG="$TMP/workshop.yaml"
 

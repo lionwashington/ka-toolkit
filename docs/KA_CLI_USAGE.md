@@ -353,16 +353,17 @@ If a worker is already running, it refuses to start another.
 
 ## workshop.yaml
 
-`workshop.yaml` declares the session name, panes (including main), and the list of mates:
+`workshop.yaml` declares the session name and a single `mates:` list holding
+every agent — the lead (marked `main: true`) and the mates:
 
 ```yaml
 session: workshop
 runtime: cc                # top-level default; can be omitted. Only the cc adapter is implemented
-panes:
+mates:
   - name: main
     cwd: ~/workspace/knowledge-assistant
-    # runtime: cc          # each pane / mate can override individually (parsed, but nothing beyond cc is implemented yet)
-mates:
+    main: true             # the lead — bound to the daemon's "main" channel
+    # runtime: cc          # each entry can override individually (parsed, but nothing beyond cc is implemented yet)
   - name: ka-dev2
     cwd: ~/workspace/knowledge-assistant
     description: Development and maintenance of the knowledge-assistant project
@@ -372,14 +373,20 @@ mates:
     default: false         # not started by default; needs --all or --only / start <name>
 ```
 
-**mate fields**:
+**entry fields**:
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| `name` | ✔ | — | mate name (unique; English / underscore / hyphen); also the channel after sanitization |
+| `name` | ✔ | — | agent name (unique; English / underscore / hyphen); also the channel after sanitization |
 | `cwd` | ✔ | — | startup directory (`~` is expanded) |
+| `args` | – | `[]` | extra CLI args passed verbatim to the agent |
 | `description` | – | `""` | one-line role description |
+| `main` | – | `false` | exactly one entry sets `true` — the lead, bound to channel `main` |
 | `default` | – | `true` | when `false`, `ka workshop` skips it unless `--all` / `--only` / `start <name>` |
+
+> Legacy `panes:` + `telegram: true` configs migrate with
+> `ops/lib/migrate-workshop-yaml.py` (folds `panes:` into `mates:`, rewrites
+> `telegram: true` → `main: true`).
 
 The repo only ships the template `ops/workshop.example.yaml`; your personal layout goes in `~/.knowledge-assistant/workshop.yaml`
 (naturally per-machine). `ka workshop spawn-mates <name> <workdir>` upserts a new mate into the

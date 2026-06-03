@@ -1,23 +1,40 @@
 # ops/workshop.example.yaml — copy to ~/.knowledge-assistant/workshop.yaml and edit.
 #
-# Declares the tmux session layout that bootstrap.sh creates.
-# Each pane spawns `claude` via start-pane.sh with a guaranteed cwd.
+# Declares the workshop agents. `ka start` (ops/cli/start.sh) reads this file:
+# it bootstraps the lead pane, then `ka spawn-mates` asks the lead to spawn the
+# rest (each in its own tmux pane via the Agent tool).
 #
-# `telegram: true` marks the main pane and attaches the Telegram channel plugin.
-# Use `main: true` + explicit `args:` for custom setups.
-#
-# D+ design: bootstrap creates ONLY the main (telegram) pane. Teammates are
-# spawned by the main session via the Agent tool — see ops/post-bootstrap.md.
+# Every agent — the lead and the mates — is ONE entry under `mates:`. The lead
+# is just the entry marked `main: true`.
 
 session: workshop
 
-# Agent runtime for every pane / mate unless overridden.
+# Agent runtime for every entry unless overridden per-entry.
 # Currently only `cc` (Claude Code) is implemented — `codex` and `gemini`
 # are reserved names for future adapters, see docs/KA_CLI_RUNTIME_DESIGN.md.
 # Omit this key to accept the default (cc).
 # runtime: cc
 
-panes:
+# Each entry supports these keys:
+#   name         (required) agent / channel name
+#   cwd          (required) working directory; must exist before `ka start`.
+#                ~ is expanded. The lead refuses to start on a missing cwd.
+#   args         (optional) extra CLI args passed verbatim to the agent.
+#   description  (optional) human note; shown by `ka status` for mates.
+#   main         (optional) default FALSE. Exactly one entry sets `main: true`
+#                — the lead, bound to the daemon's `main` channel. The channel
+#                goes through the channel daemon (telegram/lark), not a plugin.
+#   default      (optional) default TRUE. `false` = optional: not spawned by a
+#                bare `ka start --spawn-mates`; start it explicitly by name.
+mates:
   - name: main
     cwd: ~/workspace/your-workspace
-    telegram: true
+    main: true
+    # args:
+    #   - --model
+    #   - claude-opus-4-8
+
+  # - name: helper
+  #   cwd: ~/workspace/helper
+  #   description: example mate
+  #   default: false
