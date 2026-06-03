@@ -237,9 +237,14 @@ export function attachmentPlaceholder(kind: string): string {
 // '' on any failure/timeout → caller degrades to text-only (message never dropped). Hard
 // timeout so a stuck CLI can't wedge the per-group poller.
 const ATTACH_DOWNLOAD_TIMEOUT_MS = 20000
-function downloadLarkAttachment(messageId: string, resType: string, key: string, kind: string): Promise<string> {
+function downloadLarkAttachment(messageId: string, resType: string, key: string, kind: string, channel?: string): Promise<string> {
   return new Promise(resolve => {
-    try { mkdirSync(ATTACH_DIR, { recursive: true }) } catch { /* ignore */ }
+    // Per-channel subdir: the attachments root is SHARED across channels, so a CC
+    // that lists the root would see other channels' files. Saving each channel's
+    // attachments under attachments/<channel>/ confines a careless listing to its own.
+    const sub = (channel || 'main').replace(/[^A-Za-z0-9._-]/g, '_') || 'main'
+    const dir = join(ATTACH_DIR, sub)
+    try { mkdirSync(dir, { recursive: true }) } catch { /* ignore */ }
     const base = (messageId || key).replace(/[^A-Za-z0-9._-]/g, '_').slice(-80) || 'att'
     // NB: +messages-resources-download has NO --format flag (it emits JSON natively);
     // passing --format makes lark-cli print "Usage:" and the download fails.
@@ -248,7 +253,7 @@ function downloadLarkAttachment(messageId: string, resType: string, key: string,
     const quoted = args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')
     const child = spawn('bash', ['-lc',
       `export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; ${cfg.lark_cli_bin} ${quoted}`],
-      { cwd: ATTACH_DIR })
+      { cwd: dir })
     let stdout = '', stderr = ''
     child.stdout.on('data', d => (stdout += d.toString()))
     child.stderr.on('data', d => (stderr += d.toString()))
@@ -336,7 +341,7 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
       // Attachment → the chat's STICKY attachment target (set by the most recent
       // channel-naming text below); none yet → main. content = clean placeholder.
       targetName = attachTarget.get(chatId) ?? 'main'
-      attachment_path = await larkPlatform.fetchAttachment(q.att)
+      attachment_path = await larkPlatform.fetchAttachment({ ...q.att, channel: targetName })
       content = attachmentPlaceholder(q.att.kind)
       if (!attachment_path) content += '\n (attachment download failed; text only)'
     } else {
@@ -406,7 +411,7 @@ export const larkPlatform: Platform = {
       '• Owner messages from Lark: the owner sent this from a Lark group (they read Lark on phone/laptop, NOT this terminal; your transcript never reaches them). ' +
       'Reply with the `reply` tool, passing the `chat_id` from the tag — it routes back to that same group. Replies are auto-prefixed with ' +
       `**[#${channelNumber}-${channelName}]** so the owner knows which session answered and can route back by number, e.g. \`to ${channelNumber}:\`.\n` +
-      '• When the meta tag has `attachment_path` (a local absolute file path), the owner sent an image/file — use the Read tool on that path to view it.\n' +
+      '• When the meta tag has `attachment_path` (a local absolute file path), the owner sent an image/file — Read THAT EXACT path. Each image/file arrives as its OWN message with its own attachment_path, often right after a text. If a message says "look at these images/files" but carries no attachment_path yet, WAIT for the following image message(s) and use their attachment_path. NEVER `ls` the attachments directory or read other files there — it is shared across channels, so listing it would pick up OTHER channels\' attachments (cross-channel leak).\n' +
       '• source="cc": ANOTHER Claude Code session sent this; the tag also has `from_channel=<their channel>`. ' +
       'To answer them, call `send_to_channel` with target=<that from_channel>. Do NOT use `reply` for a cc message (that goes to the Lark group, not the sender).\n' +
       'Reply only when a response is actually warranted — do NOT reflexively bounce a message back (two CCs auto-replying to each other creates an infinite loop). ' +
@@ -422,7 +427,7 @@ export const larkPlatform: Platform = {
   // Download an image/file/audio/video resource to ATTACH_DIR; '' on any failure.
   fetchAttachment(ref: any): Promise<string> {
     if (!ref?.key || !ref?.messageId) return Promise.resolve('')
-    return downloadLarkAttachment(ref.messageId, ref.resType, ref.key, ref.kind)
+    return downloadLarkAttachment(ref.messageId, ref.resType, ref.key, ref.kind, ref.channel)
   },
   startInbound(dispatch: InboundDispatch): void {
     inboundDispatch = dispatch

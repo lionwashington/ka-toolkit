@@ -116,6 +116,8 @@ describe('attachment routing follows the last text (option B)', () => {
     daemon.pushMessages(CHAT, [img('b-img1', 'img_b_1')])
     assert.ok(await waitFor(() => ka.received.some(r => r.meta.message_id === 'b-img1' && r.meta.attachment_path), 6000), 'image1 → ka (follows the to-ka text)')
     assert.ok(!main.received.some(r => r.meta.message_id === 'b-img1'), 'image1 must NOT go to main')
+    // v4 cross-channel isolation: saved under attachments/<channel>/ (here ka)
+    assert.match(ka.received.find(r => r.meta.message_id === 'b-img1')!.meta.attachment_path, /attachments\/ka\//, 'image1 lands in the ka subdir')
 
     // a later PLAIN text (→ main) re-points attachments back to main (the v3 fix)
     daemon.pushMessages(CHAT, [ownerMsg({ mid: 'b-text2', text: 'back to main now', createTime: nextTime(), selfOpenId: SELF })])
@@ -123,6 +125,7 @@ describe('attachment routing follows the last text (option B)', () => {
     daemon.pushMessages(CHAT, [img('b-img2', 'img_b_2')])
     assert.ok(await waitFor(() => main.received.some(r => r.meta.message_id === 'b-img2' && r.meta.attachment_path), 6000), 'image2 → main (a plain text reset the target)')
     assert.ok(!ka.received.some(r => r.meta.message_id === 'b-img2'), 'image2 must NOT stick to ka')
+    assert.match(main.received.find(r => r.meta.message_id === 'b-img2')!.meta.attachment_path, /attachments\/main\//, 'image2 lands in the main subdir')
   })
 })
 
