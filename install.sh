@@ -533,30 +533,46 @@ PY
   log "  OK hooks re-pointed at runtime/hooks"
 }
 
-switch_daemon() {        # switch ⑤: migrate telegram daemon secrets from the old location to runtime/daemon
+switch_daemon() {        # switch ⑤: migrate legacy daemon secrets (if any) + restart runtime/daemon to load the new bundle
   want daemon || return 0
   want_channel telegram || return 0
   [ "$DO_SWITCH" = 1 ] || return 0
   local dest="$RUNTIME/daemon"
-  log "switch ⑤ daemon secrets → migrate from ${TELEGRAM_DIR} to ${dest} (config.json/.env/state.json, no overwrite)"
-  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] cp ${TELEGRAM_DIR}/{config.json,.env,state.json} -> ${dest}; stop old daemon + start runtime/daemon (telegram drops for a few seconds)"; return 0; fi
+  log "switch ⑤ daemon → migrate legacy secrets (if present) + restart runtime/daemon to load the new bundle"
+  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] migrate ${TELEGRAM_DIR}/{config.json,.env,state.json} -> ${dest} if present; then stop+start runtime/daemon (telegram drops for a few seconds)"; return 0; fi
   [ -d "$dest" ] || { log "  WARN runtime/daemon not deployed (run deploy_daemon first), skipping"; return 0; }
-  [ -d "$TELEGRAM_DIR" ] || { log "  WARN old daemon ${TELEGRAM_DIR} does not exist, skipping migration"; return 0; }
-  local f migrated=0
-  for f in config.json .env state.json; do
-    [ -f "$TELEGRAM_DIR/$f" ] && [ ! -f "$dest/$f" ] && { cp "$TELEGRAM_DIR/$f" "$dest/$f"; migrated=$((migrated + 1)); }
-  done
-  log "  OK migrated ${migrated} secrets/state file(s) (existing not overwritten)"
-  # Auto stop old daemon + start new (⚠️ telegram drops for a few seconds). stop/start use port
-  # 9877 — in isolated tests the fake TELEGRAM_DIR has no stop.sh and the temp RT has no
-  # start.sh → both auto-skip, never touching the real daemon.
-  log "  stop old daemon + start runtime/daemon (⚠️ telegram drops for a few seconds)..."
+
+  # 1) Migrate secrets from the legacy standalone dir IF it still exists (best-effort, never
+  #    overwrite). Once it's gone, runtime/daemon already holds its own config.json/.env.
+  if [ -d "$TELEGRAM_DIR" ]; then
+    local f migrated=0
+    for f in config.json .env state.json; do
+      [ -f "$TELEGRAM_DIR/$f" ] && [ ! -f "$dest/$f" ] && { cp "$TELEGRAM_DIR/$f" "$dest/$f"; migrated=$((migrated + 1)); }
+    done
+    log "  OK migrated ${migrated} secrets/state file(s) from ${TELEGRAM_DIR} (existing not overwritten)"
+  else
+    log "  no legacy ${TELEGRAM_DIR} to migrate — runtime/daemon already holds its secrets"
+  fi
+
+  # 2) Restart to load the freshly-deployed bundle — ALWAYS, DECOUPLED from (1). Previously
+  #    the restart was gated behind the legacy-dir migration, so deploying new daemon code
+  #    when ${TELEGRAM_DIR} was already gone left the OLD process running with stale code.
+  #    Test-safety guard (replaces the old TELEGRAM_DIR-absence early return): only touch
+  #    the real daemon when operating on the REAL runtime root — isolated tests override
+  #    KA_RUNTIME_ROOT, so dest != real → skip, never touching the live 9877 daemon.
+  if [ "$dest" != "$HOME/.knowledge-assistant/runtime/daemon" ]; then
+    log "  (override runtime root — skipping daemon restart; not touching the real daemon)"
+    return 0
+  fi
+  log "  restart runtime/daemon to load the new bundle (⚠️ telegram drops for a few seconds)..."
+  # Stop whichever instance is live on 9877 — the legacy standalone AND/OR the runtime one.
   [ -x "$TELEGRAM_DIR/stop.sh" ] && "$TELEGRAM_DIR/stop.sh" >/dev/null 2>&1 || true
+  [ -x "$dest/stop.sh" ] && "$dest/stop.sh" >/dev/null 2>&1 || true
   sleep 1
   if [ -x "$dest/start.sh" ]; then
-    if "$dest/start.sh" >/dev/null 2>&1; then log "  OK runtime/daemon is up (on 9877)"; else log "  WARN runtime/daemon start failed, see ${dest}/daemon.stdout.log"; fi
+    if "$dest/start.sh" >/dev/null 2>&1; then log "  OK runtime/daemon is up (on 9877, new bundle loaded)"; else log "  WARN runtime/daemon start failed, see ${dest}/daemon.stdout.log"; fi
   else
-    log "  WARN ${dest}/start.sh does not exist (re-run ./install.sh to update runtime/daemon first); daemon not switched"
+    log "  WARN ${dest}/start.sh does not exist (re-run ./install.sh to update runtime/daemon first); daemon not restarted"
   fi
 }
 
