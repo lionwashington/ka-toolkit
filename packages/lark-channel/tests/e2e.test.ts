@@ -103,6 +103,23 @@ describe('routing', () => {
   })
 })
 
+describe('sticky attachment routing', () => {
+  test('a text naming a channel makes THIS chat\'s subsequent attachments stick to it', async () => {
+    // a text "to ka:" points this chat's attachment target at ka
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 's-text', text: 'to ka: incoming pics', createTime: nextTime(), selfOpenId: SELF })])
+    await waitFor(() => ka.received.some(r => r.content === 'incoming pics'), 5000)
+    // a following image (no channel of its own) → sticks to ka, NOT main
+    daemon.pushMessages(CHAT, [{
+      message_id: 's-img', create_time: nextTime(),
+      sender: { id: SELF, sender_type: 'user', name: 'Owner' },
+      msg_type: 'image', content: '[Image: img_sticky_1]',
+    }])
+    const ok = await waitFor(() => ka.received.some(r => r.meta.message_id === 's-img' && r.meta.attachment_path), 6000)
+    assert.ok(ok, 'image should stick to ka (the last channel named by a text)')
+    assert.ok(!main.received.some(r => r.meta.message_id === 's-img'), 'image must NOT fall through to main')
+  })
+})
+
 describe('outbound (reply → webhook)', () => {
   test('reply tool → POST to the group webhook, prefixed with channel tag', async () => {
     const before = webhook.sent().length

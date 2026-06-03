@@ -108,6 +108,13 @@ let inboundDispatch: InboundDispatch
 // Per-group scheduler bookkeeping.
 const groupLastPolledMs: Record<string, number> = {}
 const groupInFlight: Record<string, boolean> = {}
+// Sticky attachment routing. Lark images carry no channel/caption of their own, so
+// a TEXT that names a channel ("to spot: …") sets where THIS chat's subsequent
+// attachments go — and it STAYS that channel for all following attachments until a
+// later text names a different channel. A no-channel text (→ main) leaves it
+// unchanged. Per-chat, in-memory → a daemon restart resets to main (re-issue
+// `to <chan>:` to re-point).
+const attachTarget = new Map<string, string>()
 
 // ─────────────────────────── lark-cli spawn (auth via lark-cli's own creds) ─────
 
@@ -288,7 +295,7 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
   const recentIds = recent[chatId] ?? []
 
   const msgs = await fetchChatMessages(chatId)
-  const queue: { ts: number; sender: string; text: string; mid: string; att: LarkAttachment | null }[] = []
+  const queue: { ts: number; pos: number; sender: string; text: string; mid: string; att: LarkAttachment | null }[] = []
   for (const m of msgs) {
     const sender = m?.sender ?? {}
     // B3 self-filter: only the owner, only real users (not bots).
@@ -301,9 +308,13 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
     const att = extractLarkAttachment(m)
     const text = extractText(m?.content)
     if (!text && !att) continue                 // deliver if there's text OR a downloadable attachment
-    queue.push({ ts: t, sender: sender.name ?? 'owner', text, mid, att })
+    // message_position is a per-chat monotonic sequence → use it to order messages
+    // that share a (minute-precision) create_time, so a "text then image" pair keeps
+    // its real order even within the same minute (needed for caption pairing).
+    const pos = parseInt(m?.message_position ?? '0', 10) || 0
+    queue.push({ ts: t, pos, sender: sender.name ?? 'owner', text, mid, att })
   }
-  queue.sort((a, b) => a.ts - b.ts)             // chronological
+  queue.sort((a, b) => a.ts - b.ts || a.pos - b.pos)   // chronological (ts, then position)
 
   for (const q of queue) {
     // B4 replay: no sessions at all → defer (keep watermark for replay on reconnect).
@@ -316,32 +327,34 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
     rememberMsgId(recent, chatId, q.mid)
     saveState(state)
 
-    // Routing (prefix in the message text): no prefix → main; `to X:` explicit;
-    // `to X` (no colon) only if X online, else main. Same as telegram. Attachment
-    // messages have no user caption (lark-cli renders content as "[Image: <key>]"),
-    // so they don't route on that string — they go to main.
-    const routingText = q.att ? '' : q.text
-    const p = parseRoutingPrefix(routingText)
     let targetName: string
     let content: string
-    const isOnline = (n: string | null): boolean => n === 'all' || (!!n && byName.has(n))
-    if (!routingText || !p.matched) {
-      targetName = 'main'; content = routingText
-    } else {
-      const resolved = resolveTargetToName(p.rawTarget)
-      if (p.hadColon) { targetName = resolved ?? `#${p.rawTarget}`; content = p.body }
-      else if (isOnline(resolved)) { targetName = resolved as string; content = p.body }
-      else { targetName = 'main'; content = routingText }
-    }
-
-    // Attachment → download to a local path so the consumer CC can Read it; replace
-    // the rendered "[Image: <key>]" content with a clean placeholder; on download
-    // failure deliver the placeholder + a note (message is never dropped).
     let attachment_path = ''
+    const isOnline = (n: string | null): boolean => n === 'all' || (!!n && byName.has(n))
+
     if (q.att) {
+      // Attachment → the chat's STICKY attachment target (set by the most recent
+      // channel-naming text below); none yet → main. content = clean placeholder.
+      targetName = attachTarget.get(chatId) ?? 'main'
       attachment_path = await larkPlatform.fetchAttachment(q.att)
-      if (!content) content = attachmentPlaceholder(q.att.kind)
+      content = attachmentPlaceholder(q.att.kind)
       if (!attachment_path) content += '\n (attachment download failed; text only)'
+    } else {
+      // Text. Routing prefix: no prefix → main; `to X:` explicit; `to X` (no colon)
+      // only if X online, else main. Same as telegram.
+      const p = parseRoutingPrefix(q.text)
+      if (!p.matched) {
+        targetName = 'main'; content = q.text
+      } else {
+        const resolved = resolveTargetToName(p.rawTarget)
+        if (p.hadColon) { targetName = resolved ?? `#${p.rawTarget}`; content = p.body }
+        else if (isOnline(resolved)) { targetName = resolved as string; content = p.body }
+        else { targetName = 'main'; content = q.text }
+      }
+      // Sticky: if this text named a real channel, point THIS chat's subsequent
+      // attachments there until a later text names a different one. A no-channel
+      // text (→ main) or an offline-miss (→ "#name") leaves the sticky target as-is.
+      if (targetName !== 'main' && !targetName.startsWith('#')) attachTarget.set(chatId, targetName)
     }
 
     await inboundDispatch(targetName, content, {
