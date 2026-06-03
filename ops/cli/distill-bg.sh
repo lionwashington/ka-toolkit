@@ -26,7 +26,25 @@ source "$THIS_DIR/common.sh"
 JSONL=""
 SESSION_ID=""
 DRY_RUN=0
-# Workspace the distiller runs in. Override via env to point at your own workspace.
+# Workspace the distiller runs in. Resolved (unless WORKSPACE_CWD is set in the env)
+# from the user's config.yaml — an explicit `workspace_path`, else the parent of
+# `knowledge_base_path` (the KB lives at <workspace>/memory/). Mirrors core's config.ts
+# resolution and keeps NO hardcoded path in the repo (the real value is the user's local
+# config). The literal placeholder is only a last resort when config can't be read.
+# NB: pure sed + shell (no python heredoc inside $() — that breaks macOS' /bin/bash 3.2).
+_ka_config="${KA_CONFIG:-$HOME/.knowledge-assistant/config.yaml}"
+if [ -z "${WORKSPACE_CWD:-}" ] && [ -f "$_ka_config" ]; then
+    _read_cfg() {  # $1=key → first value, trailing space stripped
+        sed -n "s/^[[:space:]]*$1[[:space:]]*:[[:space:]]*//p" "$_ka_config" | head -1 | sed 's/[[:space:]]*$//'
+    }
+    _ws="$(_read_cfg workspace_path)"; _ws="${_ws#\"}"; _ws="${_ws%\"}"
+    if [ -z "$_ws" ]; then
+        _kb="$(_read_cfg knowledge_base_path)"; _kb="${_kb#\"}"; _kb="${_kb%\"}"; _kb="${_kb%/}"
+        [ -n "$_kb" ] && _ws="$(dirname "$_kb")"
+    fi
+    case "$_ws" in "~") _ws="$HOME" ;; "~/"*) _ws="$HOME/${_ws#\~/}" ;; esac
+    [ -n "$_ws" ] && WORKSPACE_CWD="$_ws"
+fi
 WORKSPACE_CWD="${WORKSPACE_CWD:-$HOME/workspace/your-workspace}"
 
 usage() {
