@@ -73,9 +73,33 @@ export class KnowledgeStore {
     writeFileSync(filePath, serializeWithFrontmatter(data, topic.content), 'utf-8')
   }
 
+  // Resolve a frontmatter `title` to its filename stem. kb_list_topics shows the title
+  // (e.g. "Todo List") but files are named by stem (e.g. todo.md); a caller using the
+  // displayed title would otherwise miss. Scan-on-miss (fallback path, not hot); first exact-title
+  // match wins (stems are unique — callers should prefer the stem to be unambiguous).
+  private resolveTitleToStem(title: string): string | null {
+    if (!existsSync(this.topicsDir)) return null
+    for (const f of readdirSync(this.topicsDir)) {
+      if (!f.endsWith('.md')) continue
+      try {
+        const { data } = parseFrontmatter(readFileSync(join(this.topicsDir, f), 'utf-8'))
+        if ((data.title as string) === title) return f.replace(/\.md$/, '')
+      } catch {
+        // skip unreadable/malformed file
+      }
+    }
+    return null
+  }
+
   readTopic(name: string): Topic {
     const safeName = sanitizeTopicName(name)
-    const filePath = join(this.topicsDir, `${safeName}.md`)
+    let filePath = join(this.topicsDir, `${safeName}.md`)
+    // Accept BOTH the filename stem (fast path / current behavior) AND the display title:
+    // if no file matches the stem, try resolving `name` as a frontmatter title.
+    if (!existsSync(filePath)) {
+      const stem = this.resolveTitleToStem(name)
+      if (stem) filePath = join(this.topicsDir, `${stem}.md`)
+    }
     const raw = readFileSync(filePath, 'utf-8')
     const { data, content } = parseFrontmatter(raw)
 
