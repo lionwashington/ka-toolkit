@@ -25,7 +25,8 @@ session: workshop
 #                — the lead, bound to the daemon's `main` channel. The channel
 #                goes through the channel daemon (telegram/lark), not a plugin.
 #   default      (optional) default TRUE. `false` = optional: not spawned by a
-#                bare `ka start --spawn-mates`; start it explicitly by name.
+#                bare `ka workshop`; start it explicitly (`ka workshop --all`
+#                or `ka workshop start <name>`).
 mates:
   - name: main
     cwd: ~/workspace/your-workspace

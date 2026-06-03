@@ -9,7 +9,7 @@
   cwd, conversing with the user through the **telegram-channel daemon**;
 - run health diagnostics (`ka status` / `ka doctor`);
 - manage declarative **cron** scheduled jobs (`ka cron`);
-- trigger background knowledge-base distillation (`ka distill --background`).
+- trigger background knowledge-base distillation (`ka distill`).
 
 > **mate = an independent CC process**, not a subagent inside CC. Each mate has an independent cwd, an independent
 > `KA_CHANNEL`, and an independent process; they share no context. The pane / window layout is a purely visual choice.
@@ -63,17 +63,18 @@ ka workshop stop   # wrap up
 | Stop the whole workshop | `ka workshop stop` |
 | Stop a single mate | `ka workshop stop <name>` |
 | Restart a single stuck mate | `ka workshop restart <name>` |
-| Make daemon code changes take effect | `ka workshop --restart-daemon` (must be run outside the workshop) |
+| Restart the whole workshop | `ka workshop restart` (run outside the session) |
+| Restart the channel daemon (CCs re-adopt) | `ka daemon restart` |
+| Check / edit the channel daemon | `ka daemon status` / `ka daemon config` |
 | Something feels off (<1s) | `ka status` |
 | Deep consistency diagnostics | `ka doctor` |
-| Soft-restart the whole workshop | `ka restart` |
 
 ---
 
 ## `ka workshop` — workshop lifecycle
 
-`ka workshop` is the sole entry point for managing the workshop. It reads `workshop.yaml`, ensures the
-telegram-channel daemon is running, then pulls each CC into its own tmux pane (or window).
+`ka workshop` is the sole entry point for managing the workshop panes. It reads `workshop.yaml`, warns
+if the channel daemon is down (it does not start it — see `ka daemon`), then pulls each CC into its own tmux pane (or window).
 
 ```
 ka workshop [<verb>] [<name> [<workdir>]] [flags]
@@ -86,8 +87,10 @@ ka workshop [<verb>] [<name> [<workdir>]] [flags]
 | `ka workshop` (bare) | = `ka workshop start` (no name): start all `default=true` mates |
 | `ka workshop start [<name>]` | no name → start all default mates; `<name>` → start a single **declared** mate (if already running, just report, don't rebuild). Pure launcher, won't register a new mate |
 | `ka workshop stop [<name>]` | no name → stop the whole workshop (kill the session); `<name>` → stop only that pane |
-| `ka workshop restart <name>` | restart a single mate's pane (stop that pane + re-start). ⚠️ See the warning below |
+| `ka workshop restart [<name>]` | no name → restart the **whole** workshop (stop all → start all; run from a plain terminal); `<name>` → restart a single mate's pane. ⚠️ See the warning below |
 | `ka workshop spawn-mates <name> [<workdir>]` | with `<workdir>` → register and start; without → equivalent to `start <name>` |
+
+`ka workshop` does **not** manage the channel daemon — it only warns if the daemon is down (the panes don't depend on it to launch). Daemon lifecycle lives in [`ka daemon`](#ka-daemon--the-active-channel-daemon).
 
 **Flags** (shared by all verbs):
 
@@ -96,10 +99,9 @@ ka workshop [<verb>] [<name> [<workdir>]] [flags]
 | `--dry-run` | only print the tmux / daemon commands that would run, don't actually create anything |
 | `--all` | include optional mates with `default: false` |
 | `--only NAME[,NAME...]` | start only the specified CCs (comma-separated) |
-| `--skip-daemon` | don't ensure the daemon first (assume it's already running) |
+| `--skip-daemon` | don't even check the daemon (workshop never starts/stops it; this just suppresses the down-warning) |
 | `--pane` | **default**: arrange all CCs as split-panes in **one window** (all on one screen) |
 | `--window` | one independent window per CC (switch with `Ctrl-b 0/1/2/w`) |
-| `--restart-daemon` | before starting, redeploy + restart the daemon, then clean-relaunch all CCs (see below) |
 
 ### Examples
 
@@ -148,48 +150,39 @@ restart a single mate = stop that pane + re-start. **Restarting loses that CC's 
 > context (see `telegram-channel-design.md` A5). restart is only for when a CC is truly stuck / you need to change cwd /
 > you need to clear state.
 
-To restart the **whole** workshop use: `ka workshop stop && ka workshop`, or the top-level `ka restart`.
+To restart the **whole** workshop use `ka workshop restart` (no name) — run it from a plain terminal, since stopping the session would otherwise kill the invoking pane.
 
-### `--restart-daemon` — make daemon code changes take effect
+---
 
-Use this when applying source changes to the telegram-channel daemon (inbound images / cleaning up zombie connections / typing, etc.). It will:
-redeploy the server + restart the daemon → **kill the old session, freshly bring up all CCs** (clean
-relaunch — CCs don't auto-reconnect to a restarted daemon, so merely restarting the daemon would leave dangling CCs).
+## `ka daemon` — the active channel daemon
 
-🔴 **Must be run in a normal terminal after detaching**. Running it inside the workshop session is rejected (to prevent killing your own
-channel):
+All channel-daemon operations live here (they used to be `ka workshop --restart-daemon`).
+`ka daemon` always acts on the **active** daemon — the kind comes from `config.yaml`
+`channel_kind` (telegram | lark) and the port from that daemon's
+`runtime/<kind>-daemon/config.json` `http_port`. There is no per-command kind override;
+to switch kinds, run `./install.sh --channel-kind=telegram|lark` (or edit `config.yaml`)
+and restart.
+
+| Verb | Effect |
+|---|---|
+| `ka daemon start` | start the active daemon (idempotent) |
+| `ka daemon stop` | stop it |
+| `ka daemon restart` | restart it — every CC **re-adopts automatically** (~2s blip, no relaunch needed) |
+| `ka daemon status` | health check; prints kind + port |
+| `ka daemon config` | open the daemon's `config.json` in `$EDITOR` (bot token / webhook / port); apply with `ka daemon restart` |
 
 ```bash
-# first Ctrl-b d to detach, then in a normal terminal:
-ka workshop --restart-daemon --pane
+ka daemon status          # is the active daemon up?
+ka daemon config          # edit credentials/port, then:
+ka daemon restart         # reload (CCs re-adopt)
 ```
 
----
+> Use `ka daemon restart` after deploying new daemon code (`./install.sh --only daemon`).
+> The CCs are **not** relaunched — channel-core re-adopts each CC's reconnect (no 404),
+> so inbound+outbound recover within the SSE retry window.
 
-## Top-level forwarding aliases
-
-The three top-level commands below are forwarding aliases for historical muscle memory; they all forward to `ka workshop`:
-
-| Top-level command | Equivalent to |
-|---|---|
-| `ka start` | `ka workshop` (start all default mates) |
-| `ka stop` | `ka workshop stop` |
-| `ka spawn-mates` | `ka workshop spawn-mates` |
-
-Arguments are passed through verbatim. The canonical form is still `ka workshop <verb>`.
-
----
-
-## `ka restart`
-
-`stop` → `sleep 2` → `start`, all going through the `ka workshop` verb dispatcher.
-
-```
-ka restart [<workshop start flags>]
-```
-
-A non-zero return from `stop` only emits a warning; it doesn't block the subsequent start. When to use it: the workshop is stuck overall and you want a quick reset,
-or `ka status` reports broken (the session died).
+> **Top-level `ka start` / `ka stop` / `ka restart` / `ka spawn-mates` are gone** — use
+> the `ka workshop` verbs. `ka distill status` is now `ka distill status`.
 
 ---
 
@@ -315,13 +308,13 @@ For the full design see `KA_CRON_DESIGN.md`.
 
 ---
 
-## `ka distill --background` — background knowledge-base distillation
+## `ka distill` — background knowledge-base distillation
 
 Runs a background `/kb distill` inside a headless Opus claude process, returning immediately after spawning. Synchronous foreground distillation
 is still inside the `/kb distill --foreground` skill (`ka distill` currently **only** supports `--background`).
 
 ```
-ka distill --background --jsonl <abs path> [--session-id <uuid>] [--dry-run]
+ka distill --jsonl <abs path> [--session-id <uuid>] [--dry-run]
 ```
 
 | Flag | Effect |
@@ -334,7 +327,7 @@ ka distill --background --jsonl <abs path> [--session-id <uuid>] [--dry-run]
 `--upper-offset <snapshot>` — messages appended after the snapshot are left for the next distillation, avoiding a race.
 
 The worker state is written to `~/.knowledge-assistant/state/distill-current.json`, and each run also leaves a
-`distill-<timestamp>.log`. Use `ka distill-status [--json]` to view the status of the last / current background distillation.
+`distill-<timestamp>.log`. Use `ka distill status [--json]` to view the status of the last / current background distillation.
 If a worker is already running, it refuses to start another.
 
 ---

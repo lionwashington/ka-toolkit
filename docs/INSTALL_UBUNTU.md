@@ -62,12 +62,14 @@ pnpm build            # produces dist for hooks/core/opennutrition etc. (needed 
 ## 4. Install (channel = lark)
 
 ```bash
-# KA_CHANNEL=lark: deploy the lark daemon (runtime/lark-daemon@9876) instead of telegram.
-# --switch: point ka's symlink/cron/hooks/skills at runtime and start the lark daemon (for a first install).
-KA_CHANNEL=lark ./install.sh --switch
+# --channel-kind=lark: make lark the ACTIVE daemon (persisted to config.yaml).
+# Both daemons (telegram + lark) are always deployed; only the active one starts.
+# --switch: point ka's symlink/cron/hooks/skills at runtime and start the daemon.
+./install.sh --channel-kind=lark --switch
 ```
 
-install will: deploy ka+ops / the various MCPs / hooks / skills / **the lark daemon**; start the daemon.
+install will: deploy ka+ops / the various MCPs / hooks / skills / **both channel daemons**;
+write `channel_kind: lark` into `~/.knowledge-assistant/config.yaml`; start **only** the lark daemon.
 (On Linux the cron switch goes through the crontab backend and doesn't touch launchd.)
 
 Then **fill in the real Lark credentials** (install only seeds a placeholder config):
@@ -85,13 +87,15 @@ curl -s http://127.0.0.1:9876/api/status | python3 -m json.tool   # ok:true + la
 ## 5. Start workshop (mates on lark)
 
 ```bash
-KA_CHANNEL_KIND=lark ka workshop          # each mate pane connects to lark-channel@9876
+ka workshop          # each mate pane connects to the active daemon (lark, from config.yaml)
 ```
 
-`KA_CHANNEL_KIND=lark` makes workshop register each CC to the lark-channel daemon (the default is telegram).
-In the group, use `to <channel name>: …` to target, no prefix → `main`.
+The active daemon comes from `config.yaml channel_kind` (set above) — **no env var needed,
+on any command**. In the group, use `to <channel name>: …` to target, no prefix → `main`.
 
-> ⚠️ **`KA_CHANNEL_KIND=lark` is required on EVERY workshop/daemon command**, not just the first launch — `ka workshop`, `ka workshop start|stop|restart <name>`, and `ka workshop --restart-daemon` all default to **telegram (port 9877)** without it, so they'll target the wrong (or absent) daemon. Easiest: `export KA_CHANNEL_KIND=lark` once in your shell profile so the whole session is lark by default.
+> To switch the active daemon later: `./install.sh --channel-kind=telegram` (rewrites
+> `config.yaml`), then restart the workshop. Both daemons are already deployed, so no
+> redeploy is required.
 
 > To manually attach just one CC (without workshop):
 > ```bash
@@ -164,6 +168,6 @@ To run the tests without a real Lark: `cd packages/lark-channel && pnpm test` (1
 | Item | macOS | Ubuntu |
 |---|---|---|
 | cron backend | launchd plist | **crontab** (`ka cron install` selects automatically) |
-| channel daemon | telegram@9877 (default) | lark@9876 (install with `KA_CHANNEL=lark`, start workshop with `KA_CHANNEL_KIND=lark`) |
+| channel daemon | telegram@9877 (default) | lark@9876 (`./install.sh --channel-kind=lark`; the active kind is persisted to `config.yaml channel_kind`, no env needed afterwards) |
 | `macos-automator` MCP | present | skipped (not installed on Linux) |
 | install launchctl section | runs | auto-skipped (Darwin only) |

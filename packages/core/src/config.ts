@@ -4,23 +4,16 @@ import { join, dirname } from 'path'
 import { homedir } from 'os'
 import { z } from 'zod'
 
-const TopicInitialSchema = z.object({
-  name: z.string(),
-  description: z.string(),
-})
-
 const ConfigSchema = z.object({
+  // Active channel daemon (telegram | lark). Single source of truth — every ka
+  // command derives the daemon type from here (default telegram). The port
+  // lives in runtime/<kind>-daemon/config.json.
+  channel_kind: z.enum(['telegram', 'lark']).default('telegram'),
   knowledge_base_path: z.string().default('~/knowledge-base'),
   workspace_path: z.string().optional(),
   state_dir: z.string().default('~/.knowledge-assistant/state'),
   distiller: z.object({
     interval: z.string().default('2h'),
-    skip_short_conversations: z.number().default(3),
-  }).default({}),
-  topics: z.object({
-    initial: z.array(TopicInitialSchema).default([]),
-    auto_suggest: z.boolean().default(true),
-    require_approval: z.boolean().default(true),
   }).default({}),
   retrieval: z.object({
     max_results: z.number().default(5),

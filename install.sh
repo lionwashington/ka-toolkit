@@ -34,11 +34,11 @@ CLAUDE_SETTINGS="${KA_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"  # hooks re
 CLAUDE_SKILLS_DIR="${KA_CLAUDE_SKILLS:-$HOME/.claude/skills}"         # skills symlink landing spot
 TELEGRAM_DIR="${KA_TELEGRAM_DIR:-$HOME/.telegram-channel}"            # old daemon location
 LARK_DIR="${KA_LARK_DIR:-$HOME/.lark-channel}"                        # old lark daemon location
-# Which channel daemon: telegram | lark | both (default telegram, back-compat).
-# For Ubuntu + Lark deploys, use KA_CHANNEL=lark ./install.sh --switch.
-KA_CHANNEL="${KA_CHANNEL:-telegram}"
+# The active channel daemon (telegram|lark) is chosen via `--channel-kind` and
+# persisted to config.yaml `channel_kind` (see resolve_active_kind below). Both
+# daemons are always deployed; only the active one is started.
 
-DRY_RUN=0; ONLY=""; DO_SWITCH=0; DO_CLEANUP=0
+DRY_RUN=0; ONLY=""; DO_SWITCH=0; DO_CLEANUP=0; CHANNEL_KIND_ARG=""
 for a in "$@"; do
   case "$a" in
     --dry-run)  DRY_RUN=1 ;;
@@ -46,7 +46,10 @@ for a in "$@"; do
     --cleanup-old) DO_CLEANUP=1 ;;
     --only=*)   ONLY="${a#--only=}" ;;
     --only)     : ;;  # tolerate space form below
-    *) [ "${prev:-}" = "--only" ] && ONLY="$a" ;;
+    --channel-kind=*) CHANNEL_KIND_ARG="${a#--channel-kind=}" ;;
+    --channel-kind)   : ;;  # tolerate space form below
+    *) [ "${prev:-}" = "--only" ] && ONLY="$a"
+       [ "${prev:-}" = "--channel-kind" ] && CHANNEL_KIND_ARG="$a" ;;
   esac
   prev="$a"
 done
@@ -54,21 +57,41 @@ done
 log()  { echo "[install] $*"; }
 run()  { if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] $*"; else eval "$@"; fi; }
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
-# want_channel <telegram|lark>: true if KA_CHANNEL selects it (or "both").
-want_channel() { [ "$KA_CHANNEL" = "$1" ] || [ "$KA_CHANNEL" = "both" ]; }
 
-# Guard: KA_CHANNEL is ALSO used by the workshop / start-pane layer as a *channel
-# NAME* (e.g. "ka-dev2", "main"). When install.sh is run from inside a workshop
-# pane it inherits that value, which is not a valid daemon selector — left as-is it
-# would make every daemon deploy SKIP silently. Validate: anything outside
-# telegram|lark|both falls back to telegram with a loud warning (the documented
-# KA_CHANNEL=lark|both interface is unaffected).
-case "$KA_CHANNEL" in
-  telegram|lark|both) ;;
-  *) log "⚠️ KA_CHANNEL='${KA_CHANNEL}' is not a valid daemon selector (expected telegram|lark|both) — defaulting to telegram."
-     log "   (This var is also a channel NAME in 'ka workshop'; unset it or pass KA_CHANNEL=telegram|lark|both explicitly to choose the daemon.)"
-     KA_CHANNEL="telegram" ;;
-esac
+# ── Active channel daemon kind (single source of truth = config.yaml) ────────
+# BOTH daemons (telegram + lark) are ALWAYS deployed; only the ACTIVE kind is
+# started, and that kind is persisted to config.yaml `channel_kind` so every
+# runtime ka command reads it from there (no env knob). Resolution precedence:
+#   --channel-kind arg  >  existing config.yaml  >  interactive prompt  >  telegram
+# (The legacy KA_CHANNEL selector is retired — KA_CHANNEL now means only a
+# workshop channel NAME, never the daemon selector.)
+CONFIG_YAML="$KA_RUNTIME_ROOT/config.yaml"
+_cfg_channel_kind() {
+  [ -f "$CONFIG_YAML" ] || return 0
+  sed -n 's/^[[:space:]]*channel_kind[[:space:]]*:[[:space:]]*//p' "$CONFIG_YAML" \
+    | head -1 | sed 's/[[:space:]]*$//; s/^"//; s/"$//' | sed "s/^'//; s/'\$//"
+}
+ACTIVE_KIND=""
+resolve_active_kind() {
+  local k=""
+  if [ -n "$CHANNEL_KIND_ARG" ]; then
+    k="$CHANNEL_KIND_ARG"; log "channel-kind from --channel-kind: ${k}"
+  elif [ -n "$(_cfg_channel_kind)" ]; then
+    k="$(_cfg_channel_kind)"; log "channel-kind from existing config.yaml: ${k} (pass --channel-kind to change)"
+  elif [ -t 0 ] && [ "$DRY_RUN" != 1 ] && { want config || want daemon; }; then
+    printf '[install] channel daemon kind — telegram or lark? [telegram]: ' >&2
+    read -r k </dev/tty 2>/dev/null || k=""
+    [ -z "$k" ] && k="telegram"
+  else
+    k="telegram"
+  fi
+  case "$k" in
+    telegram|lark) ACTIVE_KIND="$k" ;;
+    *) log "✖ channel-kind='$k' is invalid (expected telegram|lark)"; exit 2 ;;
+  esac
+  log "active channel daemon = ${ACTIVE_KIND} (both daemons deploy; only ${ACTIVE_KIND} is started)"
+}
+resolve_active_kind
 
 # ── Target runtime/ layout ───────────────────────────────────────────────
 #   $RUNTIME/
@@ -201,9 +224,9 @@ deploy_python_mcp() {    # P1.3
   done
 }
 
-deploy_daemon() {        # P1.5: telegram channel daemon → runtime/daemon (esbuild single-file bundle)
+deploy_daemon() {        # telegram channel daemon → runtime/telegram-daemon (esbuild single-file bundle)
   want daemon || return 0
-  want_channel telegram || { log "telegram daemon → SKIPPED (KA_CHANNEL=${KA_CHANNEL})"; return 0; }
+  # Always deployed (both daemons ship); only the ACTIVE kind is started at switch.
   # channel-core kernel + telegram-platform plugin + deps (grammy/express/sdk) esbuild'd
   # into a single self-contained daemon.mjs → runtime holds no .ts source and no node_modules.
   # 🔴 Bundle via a "generated temp static entry" (import platform/init + runChannelDaemon) —
@@ -212,7 +235,7 @@ deploy_daemon() {        # P1.5: telegram channel daemon → runtime/daemon (esb
   #    duplicate the kernel → session state not shared → broken.
   # 🔴 Do NOT copy secrets (.env/config.json/state.json), do not restart, do not change
   #    registration; the actual switch is --switch.
-  local src="$REPO_ROOT/packages/telegram-channel" dest="$RUNTIME/daemon"
+  local src="$REPO_ROOT/packages/telegram-channel" dest="$RUNTIME/telegram-daemon"
   log "channel daemon → ${dest} (esbuild single-file bundle: core+telegram-platform+deps self-contained, runtime has no source)"
   if [ "$DRY_RUN" = 1 ]; then
     echo "  [dry-run] generate temp static entry → esbuild --bundle → ${dest}/daemon.mjs (single core instance, self-contained)"
@@ -272,7 +295,7 @@ EOF
 
 deploy_lark_daemon() {   # lark channel daemon → runtime/lark-daemon (esbuild single-file bundle)
   want daemon || return 0
-  want_channel lark || { log "lark daemon → SKIPPED (KA_CHANNEL=${KA_CHANNEL})"; return 0; }
+  # Always deployed (both daemons ship); only the ACTIVE kind is started at switch.
   # Same as deploy_daemon: channel-core kernel + lark-platform plugin + deps esbuild'd into a
   # single self-contained daemon.mjs (generated temp static entry guarantees a single core
   # instance). runtime/lark-daemon has no .ts/node_modules.
@@ -414,13 +437,34 @@ seed_config() {          # seed config/data directories (never overwrites existi
   want config || return 0
   log "seed config/data directories → ${KA_RUNTIME_ROOT} (does not overwrite existing)"
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  [dry-run] mkdir -p ${KA_RUNTIME_ROOT}/{state,raw,pending-topics}; seed workshop.yaml from example (if missing)"
+    echo "  [dry-run] mkdir -p ${KA_RUNTIME_ROOT}/{state,raw,pending-topics}; seed workshop.yaml + config.yaml from examples (if missing); upsert config.yaml channel_kind=${ACTIVE_KIND}"
     return 0
   fi
   mkdir -p "$KA_RUNTIME_ROOT"/state "$KA_RUNTIME_ROOT"/raw "$KA_RUNTIME_ROOT"/pending-topics
   local seeded=0
   if [ -f "$REPO_ROOT/ops/workshop.example.yaml" ] && [ ! -f "$KA_RUNTIME_ROOT/workshop.yaml" ]; then
     cp "$REPO_ROOT/ops/workshop.example.yaml" "$KA_RUNTIME_ROOT/workshop.yaml"; seeded=$((seeded + 1))
+  fi
+  if [ -f "$REPO_ROOT/config/default.yaml" ] && [ ! -f "$CONFIG_YAML" ]; then
+    cp "$REPO_ROOT/config/default.yaml" "$CONFIG_YAML"; seeded=$((seeded + 1))
+  fi
+  # Persist the active channel daemon kind (single source of truth). Upsert the
+  # top-level `channel_kind:` line in config.yaml, touching nothing else.
+  if [ -n "$ACTIVE_KIND" ] && [ -f "$CONFIG_YAML" ]; then
+    CONFIG_YAML="$CONFIG_YAML" ACTIVE_KIND="$ACTIVE_KIND" python3 - <<'PY'
+import os, re
+p = os.environ["CONFIG_YAML"]; kind = os.environ["ACTIVE_KIND"]
+with open(p) as f: lines = f.read().splitlines()
+out=[]; done=False
+for ln in lines:
+    if re.match(r'^[ \t]*channel_kind[ \t]*:', ln):
+        out.append(f"channel_kind: {kind}"); done=True
+    else:
+        out.append(ln)
+if not done: out.insert(0, f"channel_kind: {kind}")
+with open(p, "w") as f: f.write("\n".join(out) + "\n")
+PY
+    log "  OK config.yaml channel_kind = ${ACTIVE_KIND}"
   fi
   log "  OK data directories ready; seeded ${seeded} new config(s) (all existing files kept, never overwritten)"
 }
@@ -533,52 +577,58 @@ PY
   log "  OK hooks re-pointed at runtime/hooks"
 }
 
-switch_daemon() {        # switch ⑤: migrate legacy daemon secrets (if any) + restart runtime/daemon to load the new bundle
+switch_daemon() {        # switch ⑤: migrate secrets + (re)start the telegram daemon IFF it is the active kind
   want daemon || return 0
-  want_channel telegram || return 0
+  [ "$ACTIVE_KIND" = "telegram" ] || { log "switch ⑤ telegram daemon → not the active kind (channel_kind=${ACTIVE_KIND}); deployed but NOT started"; return 0; }
   [ "$DO_SWITCH" = 1 ] || return 0
-  local dest="$RUNTIME/daemon"
-  log "switch ⑤ daemon → migrate legacy secrets (if present) + restart runtime/daemon to load the new bundle"
-  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] migrate ${TELEGRAM_DIR}/{config.json,.env,state.json} -> ${dest} if present; then stop+start runtime/daemon (telegram drops for a few seconds)"; return 0; fi
-  [ -d "$dest" ] || { log "  WARN runtime/daemon not deployed (run deploy_daemon first), skipping"; return 0; }
+  local dest="$RUNTIME/telegram-daemon"
+  local legacy_rt="$RUNTIME/daemon"   # pre-rename runtime location (migrate secrets from, then retire)
+  log "switch ⑤ telegram daemon → migrate secrets + restart ${dest} (active kind)"
+  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] migrate {config.json,.env,state.json} from ${legacy_rt} else ${TELEGRAM_DIR} -> ${dest}; stop old (incl ${legacy_rt}) + start ${dest} (telegram drops a few seconds; CCs re-adopt)"; return 0; fi
+  [ -d "$dest" ] || { log "  WARN ${dest} not deployed (run deploy_daemon first), skipping"; return 0; }
 
-  # 1) Migrate secrets from the legacy standalone dir IF it still exists (best-effort, never
-  #    overwrite). Once it's gone, runtime/daemon already holds its own config.json/.env.
-  if [ -d "$TELEGRAM_DIR" ]; then
+  # 1) Migrate secrets — prefer the pre-rename runtime dir (runtime/daemon), else the
+  #    legacy standalone (~/.telegram-channel). Never overwrite existing.
+  local mig_src=""
+  if [ -d "$legacy_rt" ]; then mig_src="$legacy_rt"; elif [ -d "$TELEGRAM_DIR" ]; then mig_src="$TELEGRAM_DIR"; fi
+  if [ -n "$mig_src" ]; then
     local f migrated=0
     for f in config.json .env state.json; do
-      [ -f "$TELEGRAM_DIR/$f" ] && [ ! -f "$dest/$f" ] && { cp "$TELEGRAM_DIR/$f" "$dest/$f"; migrated=$((migrated + 1)); }
+      [ -f "$mig_src/$f" ] && [ ! -f "$dest/$f" ] && { cp "$mig_src/$f" "$dest/$f"; migrated=$((migrated + 1)); }
     done
-    log "  OK migrated ${migrated} secrets/state file(s) from ${TELEGRAM_DIR} (existing not overwritten)"
+    log "  OK migrated ${migrated} secrets/state file(s) from ${mig_src} (existing not overwritten)"
   else
-    log "  no legacy ${TELEGRAM_DIR} to migrate — runtime/daemon already holds its secrets"
+    log "  no legacy daemon dir to migrate — ${dest} holds its own secrets"
   fi
 
-  # 2) Restart to load the freshly-deployed bundle — ALWAYS, DECOUPLED from (1). Previously
-  #    the restart was gated behind the legacy-dir migration, so deploying new daemon code
-  #    when ${TELEGRAM_DIR} was already gone left the OLD process running with stale code.
-  #    Test-safety guard (replaces the old TELEGRAM_DIR-absence early return): only touch
-  #    the real daemon when operating on the REAL runtime root — isolated tests override
-  #    KA_RUNTIME_ROOT, so dest != real → skip, never touching the live 9877 daemon.
-  if [ "$dest" != "$HOME/.knowledge-assistant/runtime/daemon" ]; then
+  # 2) Restart to load the freshly-deployed bundle. Test-safety: only touch the real
+  #    daemon when operating on the REAL runtime root — isolated tests override
+  #    KA_RUNTIME_ROOT, so dest != real → skip, never touching the live daemon.
+  if [ "$dest" != "$HOME/.knowledge-assistant/runtime/telegram-daemon" ]; then
     log "  (override runtime root — skipping daemon restart; not touching the real daemon)"
     return 0
   fi
-  log "  restart runtime/daemon to load the new bundle (⚠️ telegram drops for a few seconds)..."
-  # Stop whichever instance is live on 9877 — the legacy standalone AND/OR the runtime one.
+  log "  restart ${dest} (⚠️ telegram drops for a few seconds; CCs re-adopt)..."
+  # Stop whatever is live: legacy standalone, the pre-rename runtime/daemon, AND dest.
   [ -x "$TELEGRAM_DIR/stop.sh" ] && "$TELEGRAM_DIR/stop.sh" >/dev/null 2>&1 || true
+  [ -x "$legacy_rt/stop.sh" ] && "$legacy_rt/stop.sh" >/dev/null 2>&1 || true
   [ -x "$dest/stop.sh" ] && "$dest/stop.sh" >/dev/null 2>&1 || true
   sleep 1
   if [ -x "$dest/start.sh" ]; then
-    if "$dest/start.sh" >/dev/null 2>&1; then log "  OK runtime/daemon is up (on 9877, new bundle loaded)"; else log "  WARN runtime/daemon start failed, see ${dest}/daemon.stdout.log"; fi
+    if "$dest/start.sh" >/dev/null 2>&1; then
+      log "  OK ${dest} is up (new bundle loaded)"
+      [ -d "$legacy_rt" ] && rm -rf "$legacy_rt" && log "  retired pre-rename ${legacy_rt}"
+    else
+      log "  WARN ${dest} start failed, see ${dest}/daemon.stdout.log"
+    fi
   else
-    log "  WARN ${dest}/start.sh does not exist (re-run ./install.sh to update runtime/daemon first); daemon not restarted"
+    log "  WARN ${dest}/start.sh missing (re-run ./install.sh to update first); not restarted"
   fi
 }
 
-switch_lark_daemon() {   # switch ⑤b: lark daemon — start runtime/lark-daemon (@9876)
+switch_lark_daemon() {   # switch ⑤b: start runtime/lark-daemon IFF lark is the active kind
   want daemon || return 0
-  want_channel lark || return 0
+  [ "$ACTIVE_KIND" = "lark" ] || { log "switch ⑤b lark daemon → not the active kind (channel_kind=${ACTIVE_KIND}); deployed but NOT started"; return 0; }
   [ "$DO_SWITCH" = 1 ] || return 0
   local dest="$RUNTIME/lark-daemon"
   log "switch ⑤b lark daemon → start ${dest} (@9876)"
@@ -649,7 +699,7 @@ precheck_deps() {        # dependency precheck (fail-closed style: clear warning
   _need git "source"
   _need tmux "workshop multi-pane"
   command -v uv >/dev/null 2>&1 || [ -x "$HOME/.local/bin/uv" ] || { log "  ⚠️ missing uv — venv for the python MCPs (hkprop/ibkr)"; miss=$((miss + 1)); }
-  want_channel lark && _need lark-cli "lark daemon inbound polling (must be authenticated)"
+  [ "$ACTIVE_KIND" = "lark" ] && _need lark-cli "lark daemon inbound polling (must be authenticated)"
   if [ "$miss" -eq 0 ]; then log "  OK all dependencies present"; else log "  ⚠️ ${miss} dependency(ies) missing (see above) — the related components will skip/fail; install them and re-run"; fi
 }
 
@@ -659,7 +709,7 @@ main() {
   log "RUNTIME     = $RUNTIME"
   [ "$DRY_RUN" = 1 ] && log "mode: DRY-RUN (print only, no changes)"
   [ -n "$ONLY" ] && log "deploy only: $ONLY"
-  log "channel       = ${KA_CHANNEL} (daemon selection; lark uses runtime/lark-daemon@9876)"
+  log "channel kind  = ${ACTIVE_KIND} (both daemons deployed; only this one started; persisted to config.yaml)"
   echo "----"
   precheck_deps
   echo "----"

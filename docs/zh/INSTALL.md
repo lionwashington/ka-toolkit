@@ -50,7 +50,7 @@ pnpm build
 | Node MCP：kb、market | `runtime/mcp/{kb,market}/index.mjs` | esbuild `--bundle` 单文件 |
 | Node MCP：opennutrition | `runtime/mcp/opennutrition/` | 构建 + 拷贝（原生 sqlite + 数据集） |
 | Python MCP：ibkr、hkprop | `~/.knowledge-assistant/{ibkr,hkprop}-venv/` | `uv build` 出 wheel → 安装进 venv |
-| Telegram 守护进程 | `runtime/daemon/` | 拷贝代码 + `npm ci`（不含密钥） |
+| Telegram 守护进程 | `runtime/telegram-daemon/` | 拷贝代码 + `npm ci`（不含密钥） |
 | CC hooks（capture/compact） | `runtime/hooks/` | esbuild `--bundle`（折叠进 `@ka/core`） |
 | core CLI（供 `/kb` 使用） | `runtime/core-cli/` | 直接拷贝（tsup 自包含） |
 | skills（kb、daily-brief 等） | `runtime/skills/<name>/SKILL.md` | 直接拷贝 |
@@ -95,7 +95,7 @@ ka help
 
 该守护进程是一个独立的后台进程，把你的 Telegram 私信与一个或多个 Claude Code 会话桥接起来。它在单一出口持有 bot token —— **CC 进程永不接触 token**。（它取代了已停用的 Claude Code Telegram *插件*；不要使用 `/plugin install telegram` 或 `/telegram:configure`。）
 
-runtime 守护进程位于 `~/.knowledge-assistant/runtime/daemon/`（由 `install.sh --only daemon` 部署）。它的配置 + 密钥（`.env`/`config.json`/`state.json`，不在 git 中）也都在这个目录里。旧位置 `~/.telegram-channel/` 已废弃。
+runtime 守护进程位于 `~/.knowledge-assistant/runtime/telegram-daemon/`（由 `install.sh --only daemon` 部署）。它的配置 + 密钥（`.env`/`config.json`/`state.json`，不在 git 中）也都在这个目录里。旧位置 `~/.telegram-channel/` 已废弃。
 
 1. 通过 [@BotFather](https://t.me/BotFather) 创建一个 bot，记下 token。
 
@@ -104,12 +104,12 @@ runtime 守护进程位于 `~/.knowledge-assistant/runtime/daemon/`（由 `insta
 3. 配置密钥。把 token 和 owner id 都放进 `.env`（单一密钥来源），并 `chmod 600`：
 
 ```bash
-# 先 ./install.sh --only daemon 部署 runtime/daemon，再写 .env
-cat > ~/.knowledge-assistant/runtime/daemon/.env <<'EOF'
+# 先 ./install.sh --only daemon 部署 runtime/telegram-daemon，再写 .env
+cat > ~/.knowledge-assistant/runtime/telegram-daemon/.env <<'EOF'
 TELEGRAM_BOT_TOKEN=<your bot token>
 OWNER_CHAT_ID=<your numeric telegram user id>
 EOF
-chmod 600 ~/.knowledge-assistant/runtime/daemon/.env
+chmod 600 ~/.knowledge-assistant/runtime/telegram-daemon/.env
 ```
 
    `config.json`（由 `config.example.json` 初始化播种）保存 `port`（默认 `9877`）以及一个仅在 `.env` 没有 `OWNER_CHAT_ID` 时才使用的 `owner_chat_id` 回退值。仅在需要改端口时才编辑它。
@@ -117,8 +117,8 @@ chmod 600 ~/.knowledge-assistant/runtime/daemon/.env
 4. 守护进程通常由 `ka workshop`（第五步）替你启动。如需独立运行：
 
 ```bash
-~/.knowledge-assistant/runtime/daemon/start.sh    # 幂等
-~/.knowledge-assistant/runtime/daemon/status.sh   # 健康检查
+~/.knowledge-assistant/runtime/telegram-daemon/start.sh    # 幂等
+~/.knowledge-assistant/runtime/telegram-daemon/status.sh   # 健康检查
 curl -s 127.0.0.1:9877/api/status | python3 -m json.tool
 ```
 
@@ -140,7 +140,7 @@ ka workshop --dry-run       # 预览布局，不实际启动
 ka workshop start <name>           # 启动一个已声明的 mate
 ka workshop stop  <name>           # 停止一个 pane（不带名字 = 整个 workshop）
 ka workshop spawn-mates <name> <workdir>   # 注册一个新 mate 并启动它
-ka restart                         # 干净地 停止 + 暂停 + 启动
+ka workshop restart                # 重启整个 workshop（不带名字 = 全部）
 ```
 
 ## 第六步（可选）：把线上注册项切换到 runtime
@@ -152,7 +152,7 @@ ka restart                         # 干净地 停止 + 暂停 + 启动
 ./install.sh --switch              # 重新接线 MCP / ka 链接 / cron / hooks / daemon / skills
 ```
 
-`--switch` 会把 `~/.claude.json` 的 MCP 条目重新指向 `runtime/mcp/*`，把 `ka` 符号链接指向 `runtime/bin/ka`，把 cron plists 和 CC hook 路径重新指向 runtime，把守护进程密钥迁移进 `runtime/daemon/` 并重启它，并把 `~/.claude/skills/<name>/SKILL.md` 符号链接到 runtime 副本。每一步都会留下一个 `.pre-switch` 备份。如果发现哪里不对：
+`--switch` 会把 `~/.claude.json` 的 MCP 条目重新指向 `runtime/mcp/*`，把 `ka` 符号链接指向 `runtime/bin/ka`，把 cron plists 和 CC hook 路径重新指向 runtime，把守护进程密钥迁移进 `runtime/telegram-daemon/` 并重启它，并把 `~/.claude/skills/<name>/SKILL.md` 符号链接到 runtime 副本。每一步都会留下一个 `.pre-switch` 备份。如果发现哪里不对：
 
 ```bash
 ./install.sh --rollback            # 恢复备份
@@ -302,7 +302,7 @@ cp config/default.yaml ~/.knowledge-assistant/config.yaml
 3. 把 `ka` 加入 PATH（第三步）
 4. 从旧机器带过来这些：
    - `~/.knowledge-assistant/secrets.yaml`（API key）
-   - `~/.knowledge-assistant/runtime/daemon/.env` + `config.json`（bot token + owner）
+   - `~/.knowledge-assistant/runtime/telegram-daemon/.env` + `config.json`（bot token + owner）
    - `~/.knowledge-assistant/cron.yaml` 和 `workshop.yaml`
    - 知识库仓库（`git clone`）
    - Google OAuth 凭据（`~/Library/Application Support/gogcli/`）

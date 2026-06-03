@@ -102,14 +102,15 @@ else
     [ "$declared_n" -gt 0 ] && degraded=1
 fi
 
-# telegram daemon health (P2: telegram goes through the DAEMON, not the CC
-# plugin; the flock guard is retired since there's no per-CC plugin contention).
-_dport="${KA_CHANNEL_PORT:-9877}"
+# channel daemon health. Kind + port come from config.yaml + the active
+# daemon's config.json (resolved in common.sh) — telegram→9877 / lark→9876.
+_dkind="$(ka_channel_kind)" || _dkind="telegram"
+_dport="$(ka_channel_port)"
 _daemon_json=""
 if _daemon_json="$(curl -sf --max-time 1 "http://127.0.0.1:$_dport/api/status" 2>/dev/null)"; then
-    printf '  %s telegram:  daemon up (port %s)\n' "$(glyph_ok)" "$_dport"
+    printf '  %s %s:  daemon up (port %s)\n' "$(glyph_ok)" "$_dkind" "$_dport"
 else
-    printf '  %s telegram:  daemon down (port %s — channels offline)\n' "$(glyph_warn)" "$_dport"
+    printf '  %s %s:  daemon down (port %s — channels offline)\n' "$(glyph_warn)" "$_dkind" "$_dport"
     _daemon_json=""
     degraded=1
 fi

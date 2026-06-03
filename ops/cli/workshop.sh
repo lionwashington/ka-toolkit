@@ -4,8 +4,9 @@
 # owner through the telegram-channel daemon).
 #
 # Verbs (P2 startup convergence, docs/P2_STARTUP_CONVERGENCE.md §6):
-#   ka workshop [--restart-daemon] [--pane|--window]
+#   ka workshop [--pane|--window]
 #       bare = `ka workshop start` (no name): launch every mate with default=true.
+#   (daemon lifecycle is NOT here — use `ka daemon start|stop|restart|status`.)
 #   ka workshop start [<name>]
 #       no name  → launch all default=true.
 #       <name>   → not in yaml: report missing; in yaml: launch into tmux if not
@@ -43,26 +44,21 @@ source "$OPS_DIR/lib/tmux-helpers.sh"
 
 YAML_PARSE="$OPS_DIR/lib/yaml-parse.sh"
 START_PANE="$OPS_DIR/lib/start-pane.sh"
-# Channel KIND: which daemon the workshop binds to. telegram → runtime/daemon@9877;
-# lark → runtime/lark-daemon@9876. KA_CHANNEL_KIND defaults to telegram (back-compat).
-CHANNEL_KIND="${KA_CHANNEL_KIND:-telegram}"
-if [ "$CHANNEL_KIND" = "lark" ]; then _DEF_PORT=9876; _DAEMON_SUB="lark-daemon"; else _DEF_PORT=9877; _DAEMON_SUB="daemon"; fi
-PORT="${KA_CHANNEL_PORT:-$_DEF_PORT}"
-# daemon location: runtime ka (KA_REPO_ROOT=runtime) → runtime/<sub> (self-contained);
-# repo ka (dev, repo has no daemon/) → fall back to the deployed ~/.knowledge-assistant/runtime/<sub>.
-if [ -d "$KA_REPO_ROOT/$_DAEMON_SUB" ]; then DAEMON_DIR="$KA_REPO_ROOT/$_DAEMON_SUB"; else DAEMON_DIR="$HOME/.knowledge-assistant/runtime/$_DAEMON_SUB"; fi
+# Channel kind + port = single source of truth: config.yaml channel_kind + the
+# active daemon's config.json http_port (resolved in common.sh). Daemon dir is
+# <kind>-daemon. The lead passes kind+port to each pane's CC child via env
+# (the start-pane launch below) — that internal hand-off is the only place a
+# channel env var is set, and its values originate from config.
+CHANNEL_KIND="$(ka_channel_kind)" || exit 2
+PORT="$(ka_channel_port)"
+DAEMON_DIR="$(ka_daemon_dir)"
 DAEMON_START="$DAEMON_DIR/start.sh"
 
 # ---- verb + flags -----------------------------------------------------------
 DRY_RUN="${DRY_RUN:-0}"
 INCLUDE_OPTIONAL=0
 ONLY=""
-SKIP_DAEMON=0
-RESTART_DAEMON=0  # --restart-daemon → restart ONLY the deployed daemon, then exit.
-                  # CCs are NOT relaunched: channel-core re-adopts each CC's consumer
-                  # SSE reconnect (no 404) so inbound+outbound auto-recover. No redeploy
-                  # (use ./install.sh --only daemon to update code). To restart the CCs
-                  # themselves: `ka workshop stop` then `ka workshop`.
+SKIP_DAEMON=0     # --skip-daemon → don't even check the daemon (workshop never manages it)
 LAYOUT="pane"     # default (P2): all CCs as split-panes in ONE window (one screen).
                   # --window → one tmux window per CC (Ctrl-b 0/1/2/w to switch).
 
@@ -80,7 +76,6 @@ for arg in "$@"; do
         --only=*)         ONLY="${arg#--only=}" ;;
         --only)           : ;;  # value picked up below
         --skip-daemon)    SKIP_DAEMON=1 ;;
-        --restart-daemon) RESTART_DAEMON=1 ;;
         --pane)           LAYOUT="pane" ;;
         --window)         LAYOUT="window" ;;
         --*)              log_warn "unknown flag: $arg" ;;
@@ -301,60 +296,17 @@ cmd_start() {
         exit 1
     fi
 
-    # ---- ensure daemon up ---------------------------------------------------
-    local DAEMON_STOP="$DAEMON_DIR/stop.sh"
-    # The runtime daemon is self-contained and updated by install's deploy_daemon →
-    # workshop is not responsible for redeploy. To update daemon code, use
-    # ./install.sh --only daemon (runtime artifacts can only be produced by install);
-    # --restart-daemon only restarts the deployed daemon, it does not redeploy.
-
-    # --restart-daemon guard: restarting the daemon briefly drops every CC's channel
-    # (~1.5-2s) before re-adopt reconnects them. The invoking pane's own channel
-    # blips too, so run it from a plain terminal to avoid disturbing your own session
-    # mid-command. Refuse from inside SESSION.
-    if [ "$RESTART_DAEMON" = "1" ] && [ "$DRY_RUN" != "1" ] && [ -n "${TMUX:-}" ]; then
-        local _cur; _cur="$("$TMUX_BIN" display-message -p '#S' 2>/dev/null || true)"
-        if [ "$_cur" = "$SESSION" ]; then
-            log_err "--restart-daemon refuses to run from inside session '$SESSION' — restarting the daemon would blip this CC's own channel mid-command."
-            log_dim "detach (Ctrl-b d) and run from a plain terminal, or omit --restart-daemon."
-            exit 3
+    # ---- channel daemon: detect + warn only (workshop does NOT manage it) ---
+    # Daemon lifecycle now lives entirely in `ka daemon`. The panes/CCs don't
+    # depend on the daemon being up to launch — each CC connects (and re-adopts)
+    # whenever the daemon is up — so workshop only WARNS if it's down, and never
+    # starts / stops / restarts it. (--skip-daemon suppresses even the check.)
+    if [ "$SKIP_DAEMON" -eq 0 ] && [ "$DRY_RUN" != "1" ]; then
+        if ! curl -sf --max-time 1 "http://127.0.0.1:$PORT/api/status" >/dev/null 2>&1; then
+            log_warn "${CHANNEL_KIND} daemon not running (port $PORT) — channels won't connect until it's up. Start it: ka daemon start"
         fi
-    fi
-
-    if [ "$SKIP_DAEMON" -eq 0 ]; then
-        if [ "$DRY_RUN" = "1" ]; then
-            if [ "$RESTART_DAEMON" = "1" ]; then
-                echo "[dry-run] $DAEMON_STOP; <wait port free>; $DAEMON_START   # --restart-daemon: restart daemon only (no redeploy; ./install.sh --only daemon to update code)"
-                echo "[dry-run] exit 0   # CCs auto-recover via re-adopt; NOT relaunched (use \`ka workshop stop\` then \`ka workshop\` to restart CCs)"
-                exit 0
-            else
-                echo "[dry-run] $DAEMON_START   # ensure ${CHANNEL_KIND}-channel daemon up (idempotent)"
-            fi
-        elif [ "$RESTART_DAEMON" = "1" ]; then
-            log_info "--restart-daemon: restarting ONLY the daemon (port $PORT; CCs stay up; no redeploy — runtime/daemon is updated by ./install.sh --only daemon)"
-            [ -x "$DAEMON_STOP" ] && "$DAEMON_STOP" >/dev/null 2>&1 || true
-            for _ in $(seq 1 10); do
-                curl -sf --max-time 1 "http://127.0.0.1:$PORT/api/status" >/dev/null 2>&1 || break
-                sleep 0.5
-            done
-            if [ -x "$DAEMON_START" ]; then
-                "$DAEMON_START" >/dev/null 2>&1 || log_warn "daemon start.sh returned non-zero — channels may not connect"
-            else
-                log_warn "daemon start script not found at $DAEMON_START"
-            fi
-            # CCs do NOT need a relaunch: the channel-core daemon RE-ADOPTS each CC's
-            # consumer-SSE reconnect (no 404), so inbound+outbound auto-recover with no
-            # restart and no touch — the restart is fast (~1.5-2s), well within the
-            # client's SSE retry window. See docs/telegram-channel-design.md §6c/§6d.
-            # (Replaces the old kill-session+relaunch, a workaround from before re-adopt.)
-            log_info "--restart-daemon: done — daemon restarted; CCs auto-recover via re-adopt (not relaunched). To restart the CCs themselves: \`ka workshop stop\` then \`ka workshop\`."
-            exit 0
-        elif [ -x "$DAEMON_START" ]; then
-            log_info "ensuring ${CHANNEL_KIND}-channel daemon is up (port $PORT)"
-            "$DAEMON_START" >/dev/null 2>&1 || log_warn "daemon start.sh returned non-zero — channels may not connect"
-        else
-            log_warn "daemon start script not found at $DAEMON_START — channels won't connect until daemon runs"
-        fi
+    elif [ "$SKIP_DAEMON" -eq 0 ] && [ "$DRY_RUN" = "1" ]; then
+        echo "[dry-run] check ${CHANNEL_KIND} daemon on port $PORT; warn (only) if down — workshop does not start it (use: ka daemon start)"
     fi
 
     # ---- cwd existence check ------------------------------------------------
@@ -640,19 +592,31 @@ cmd_spawn_mates() {
 }
 
 # ============================================================================
-# cmd_restart — restart a single mate's pane (stop that pane + start <name>).
-#   Use: restart one CC on its own (stuck / change cwd / reset state).
-#   ⚠️ A restart loses that CC's runtime in-memory context (--resume only restores
-#     the on-disk transcript). If the channel merely dropped (e.g. it went idle
-#     after a daemon restart) and you want to keep context, do NOT restart —
-#     trigger a tool call in that CC's window to re-init (see telegram-channel-design A5).
-#   Restart everything: ka workshop stop && ka workshop.
+# cmd_restart — restart the workshop.
+#   no <name> → restart the WHOLE workshop (stop all → start all default mates;
+#               absorbs the old top-level `ka restart`). Run from OUTSIDE the
+#               session (a plain terminal): stopping the session kills the
+#               invoking pane otherwise.
+#   <name>    → restart just that one mate's pane (stop it + start <name>).
+#   ⚠️ A restart loses that CC's in-memory context (--resume only restores the
+#     on-disk transcript). If a channel merely dropped (e.g. after a daemon
+#     restart) and you want to keep context, do NOT restart — trigger a tool
+#     call in that CC's window to re-init (see telegram-channel-design A5).
 # ============================================================================
 cmd_restart() {
     if [ -z "$TARGET" ]; then
-        log_err "restart requires <name>: ka workshop restart <name> (restart a single mate)"
-        log_dim "to restart everything: ka workshop stop && ka workshop"
-        exit 1
+        # Whole-workshop restart (was the top-level `ka restart`): stop all → start all.
+        if [ "$DRY_RUN" = "1" ]; then
+            echo "[dry-run] ka workshop stop (whole session) → sleep 2 → start all default mates"
+            exit 0
+        fi
+        log_info "restart: stopping the whole workshop…"
+        cmd_stop || log_warn "stop returned non-zero (continuing)"
+        sleep 2
+        log_info "restart: starting…"
+        local fwd=(start)
+        if [ "$LAYOUT" = "window" ]; then fwd+=(--window); else fwd+=(--pane); fi
+        exec bash "$0" "${fwd[@]}"
     fi
     build_entries          # resolve TARGET → actual channel (main pane→'main'; correct when name≠channel)
     if [ "${#ENTRY_NAMES[@]}" -eq 0 ]; then

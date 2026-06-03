@@ -10,8 +10,11 @@ export NVM_DIR="$HOME/.nvm"
 export PATH="$HOME/.local/bin:$PATH"
 
 HOST="127.0.0.1"
-PORT="9876"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # canonical: ~/.knowledge-assistant/runtime/lark-daemon
+# Port = this daemon's own config.json http_port (single source of truth);
+# fall back to 9876 only if config.json is unreadable.
+PORT="$(sed -n 's/.*"http_port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$ROOT/config.json" 2>/dev/null | head -1)"
+[ -n "$PORT" ] || PORT="9876"
 LOG="$ROOT/daemon.stdout.log"
 
 # 1. Probe — is it already up?

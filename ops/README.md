@@ -13,13 +13,13 @@ canonical entry point is `ka workshop`. The whole tree is deployed to
 | Path                          | Purpose                                                                          |
 | ----------------------------- | -------------------------------------------------------------------------------- |
 | `cli/workshop.sh`             | Single entry for `ka workshop` (`start` / `stop` / `restart` / `spawn-mates`).   |
-| `cli/restart.sh`              | `ka restart` — stop → pause → start the whole workshop.                          |
+| `cli/daemon.sh`               | `ka daemon` (`start`/`stop`/`restart`/`status`/`config`) — the active channel daemon. |
 | `cli/status.sh`               | `ka status` — <1s health summary (config / session / mates / daemon).            |
 | `cli/doctor.sh`               | `ka doctor` — deeper consistency diagnostics + fix hints.                        |
-| `cli/wait-ready.sh`           | `ka wait-ready` — poll a tmux pane until its CC runtime is idle-ready.           |
+| `cli/wait-ready.sh`           | Internal: poll a tmux pane until its CC runtime is idle-ready (not a `ka` verb). |
 | `cli/cron.sh` + `cli/cron/`   | `ka cron` — declarative cron (list/add/remove/enable/disable/run/install/…).     |
-| `cli/distill-bg.sh`           | `ka distill --background` — spawn a headless `/kb distill` worker.               |
-| `cli/distill-status.sh`       | `ka distill-status` — state of the last/current background distill.             |
+| `cli/distill-bg.sh`           | `ka distill` — spawn a headless `/kb distill` worker.               |
+| `cli/distill-status.sh`       | `ka distill status` — state of the last/current background distill.             |
 | `cli/help.sh`                 | `ka help`.                                                                       |
 | `cli/common.sh`               | Shared helpers (logging, glyphs, config resolution) sourced by every subcommand. |
 | `lib/start-pane.sh`           | A pane's first process — validates cwd, loads env, binds channel, execs claude.  |
@@ -53,9 +53,9 @@ tmux attach -t workshop
 ka status
 ```
 
-`ka workshop` reads `workshop.yaml`, ensures the telegram-channel daemon is up
-(unless `--skip-daemon`), then launches each CC into its own tmux pane (or
-window with `--window`). The owner routes from Telegram with `to <name>:`
+`ka workshop` reads `workshop.yaml`, warns if the channel daemon is down (it does
+NOT start it — that's `ka daemon start`), then launches each CC into its own tmux
+pane (or window with `--window`). The owner routes from Telegram with `to <name>:`
 (no prefix → `main`).
 
 Config search order: `$OPS_CONFIG` → `~/.knowledge-assistant/workshop.yaml` →
@@ -108,8 +108,8 @@ Telegram plugin.
 The bot token lives **only** in the daemon; no CC process ever touches it.
 `start-pane.sh` binds each pane to its channel by registering a project-local
 `telegram-channel` MCP server pointing at `…/mcp?name=$KA_CHANNEL`. `ka workshop`
-ensures the daemon is running; `--restart-daemon` redeploys + restarts it then
-cleanly relaunches every CC (refused from inside the session). Full design:
+does NOT manage the daemon (it only warns if it's down); daemon lifecycle is
+`ka daemon start|stop|restart|status|config`. Full design:
 `docs/telegram-channel-design.md`. Live state: the `/telegram-channel` skill.
 
 ## Three-layer cwd guarantee
@@ -129,8 +129,7 @@ registration, `.claude/settings.json`) applies. Three layers enforce this:
 
 `ka workshop` refuses to (re)build the `workshop` session while you're attached
 to it (detach with `Ctrl-b d`, or run from outside tmux, or use `--dry-run`).
-`--restart-daemon` is likewise refused from inside the session (it would kill the
-running CC's own channel). Destructive scenarios (existing session, restart
+Destructive scenarios (existing session, restart
 loops, corrupt config) are covered by `ops/tests/` — a Docker harness that
 simulates tmux + multi-pane Claude and **never touches your live workshop
 session**.

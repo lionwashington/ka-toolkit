@@ -62,3 +62,57 @@ workshop_session_name() {
          | awk -F'\t' '$1=="session"{print $2; exit}')"
     [ -n "$s" ] && printf '%s' "$s" || printf 'workshop'
 }
+
+# ── channel daemon resolution (single source of truth) ──────────────────────
+# Which channel daemon is active comes ONLY from config.yaml `channel_kind`
+# (telegram | lark; default telegram). The port comes ONLY from the active
+# daemon's own config.json `http_port`. No runtime env knobs — config.yaml +
+# the daemon's config.json are the two sources, each for its own concern.
+
+# ka_channel_kind → telegram | lark (default telegram). Invalid value =
+# fail-closed: error to stderr + return 2 (empty stdout), no silent default.
+ka_channel_kind() {
+    local cfg kind v
+    cfg="${KA_CONFIG:-$HOME/.knowledge-assistant/config.yaml}"
+    kind="telegram"
+    if [ -f "$cfg" ]; then
+        v="$(sed -n 's/^[[:space:]]*channel_kind[[:space:]]*:[[:space:]]*//p' "$cfg" | head -1 | sed 's/[[:space:]]*$//')"
+        v="${v#\"}"; v="${v%\"}"; v="${v#\'}"; v="${v%\'}"
+        [ -n "$v" ] && kind="$v"
+    fi
+    case "$kind" in
+        telegram|lark) printf '%s' "$kind" ;;
+        *) log_err "config channel_kind='$kind' is invalid (expected telegram|lark)"; return 2 ;;
+    esac
+}
+
+# ka_daemon_dir → runtime dir of the active daemon: <kind>-daemon. Prefers the
+# repo/runtime-layout sibling of ops/ (KA_REPO_ROOT), else ~/.knowledge-assistant/runtime.
+ka_daemon_dir() {
+    local kind sub
+    kind="$(ka_channel_kind)" || return 2
+    sub="${kind}-daemon"
+    if [ -d "$KA_REPO_ROOT/$sub" ]; then
+        printf '%s' "$KA_REPO_ROOT/$sub"
+    else
+        printf '%s' "$HOME/.knowledge-assistant/runtime/$sub"
+    fi
+}
+
+# ka_channel_port → the port the active daemon binds, read from its config.json
+# `http_port`. Falls back to the kind default (telegram 9877 / lark 9876) only
+# when config.json is absent (e.g. before first deploy).
+ka_channel_port() {
+    local kind dir cfgjson port
+    kind="$(ka_channel_kind)" || return 2
+    dir="$(ka_daemon_dir)"
+    cfgjson="$dir/config.json"
+    port=""
+    if [ -f "$cfgjson" ]; then
+        port="$(sed -n 's/.*"http_port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$cfgjson" | head -1)"
+    fi
+    if [ -z "$port" ]; then
+        if [ "$kind" = "lark" ]; then port=9876; else port=9877; fi
+    fi
+    printf '%s' "$port"
+}

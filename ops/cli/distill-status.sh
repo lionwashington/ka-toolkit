@@ -4,7 +4,7 @@
 # health verdict (running vs. dead).
 #
 # Usage:
-#   ka distill-status [--json]
+#   ka distill status [--json]
 
 set -euo pipefail
 THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,10 +19,10 @@ while [ $# -gt 0 ]; do
         --json) EMIT_JSON=1; shift ;;
         -h|--help)
             cat <<EOF
-ka distill-status — show last/current background distill run
+ka distill status — show last/current background distill run
 
 USAGE
-    ka distill-status [--json]
+    ka distill status [--json]
 
 FLAGS
     --json   Print raw JSON instead of human-readable summary.

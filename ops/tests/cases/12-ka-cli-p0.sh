@@ -16,7 +16,8 @@ KA="$REPO/bin/ka"
 
 echo "[1/5] ka help"
 out="$("$KA" help 2>&1)" || { echo "FAIL: ka help exit=$?"; exit 1; }
-echo "$out" | grep -q '^    start' || { echo "FAIL: help missing 'start'"; exit 1; }
+echo "$out" | grep -q '^    workshop' || { echo "FAIL: help missing 'workshop'"; exit 1; }
+echo "$out" | grep -q '^    daemon' || { echo "FAIL: help missing 'daemon'"; exit 1; }
 echo "$out" | grep -q 'spawn-mates' || { echo "FAIL: help missing 'spawn-mates'"; exit 1; }
 echo "    ok"
 

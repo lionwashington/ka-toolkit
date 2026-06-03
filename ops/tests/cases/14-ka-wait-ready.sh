@@ -36,7 +36,7 @@ export OPS_CONFIG="$TMP/workshop.yaml"
 
 echo "[1/3] rc=3 when session does not exist"
 set +e
-out="$(NO_COLOR=1 "$KA" wait-ready --timeout 1 2>&1)"
+out="$(NO_COLOR=1 bash "$REPO/ops/cli/wait-ready.sh" --timeout 1 2>&1)"
 rc=$?
 set -e
 [ "$rc" -eq 3 ] || { echo "FAIL: missing session should rc=3, got $rc"; echo "$out"; exit 1; }
@@ -59,7 +59,7 @@ EOFX
 sleep 1
 
 set +e
-out="$(NO_COLOR=1 "$KA" wait-ready --timeout 10 --stable 1 2>&1)"
+out="$(NO_COLOR=1 bash "$REPO/ops/cli/wait-ready.sh" --timeout 10 --stable 1 2>&1)"
 rc=$?
 set -e
 [ "$rc" -eq 0 ] || { echo "FAIL: ready pane should rc=0, got $rc"; echo "$out"; exit 1; }
@@ -85,7 +85,7 @@ EOF
 sleep 1
 
 set +e
-out="$(NO_COLOR=1 "$KA" wait-ready --timeout 2 --stable 1 2>&1)"
+out="$(NO_COLOR=1 bash "$REPO/ops/cli/wait-ready.sh" --timeout 2 --stable 1 2>&1)"
 rc=$?
 set -e
 [ "$rc" -eq 1 ] || { echo "FAIL: never-ready pane should rc=1, got $rc"; echo "$out"; exit 1; }

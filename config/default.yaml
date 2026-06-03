@@ -1,5 +1,11 @@
 # Knowledge Assistant Configuration
 
+# Which channel daemon is active: telegram | lark (default telegram).
+# Single source of truth — every ka command reads the daemon type from here.
+# Set at install time with `./install.sh --channel-kind=telegram|lark`; the
+# port itself lives in runtime/<kind>-daemon/config.json (http_port).
+channel_kind: telegram
+
 # Knowledge base location (absolute path)
 knowledge_base_path: ~/knowledge-base/
 
@@ -10,17 +16,6 @@ state_dir: ~/.knowledge-assistant/state
 distiller:
   # Auto-distill interval (e.g., "2h", "30m", "1d")
   interval: "2h"
-  # Skip conversations with fewer than N messages
-  skip_short_conversations: 3
-
-# Topic management
-topics:
-  # Pre-defined topic list
-  initial: []
-  # LLM can suggest new topics
-  auto_suggest: true
-  # New topics need user approval
-  require_approval: true
 
 # RAG retrieval
 retrieval:

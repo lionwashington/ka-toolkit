@@ -10,9 +10,10 @@ USAGE
 
 COMMANDS
     workshop        Manage the workshop — independent CC processes, each in its
-                    own tmux pane + cwd, talking to you via the telegram-channel
-                    daemon (route with 'to <name>:' in Telegram). Verbs:
-                      ka workshop [--pane|--window] [--restart-daemon]
+                    own tmux pane + cwd, talking to you via the channel daemon
+                    (route with 'to <name>:' in Telegram). Does NOT manage the
+                    daemon (that's `ka daemon`); only warns if it's down. Verbs:
+                      ka workshop [--pane|--window]
                           Start every mate with default=true (default layout:
                           pane / split-screen; --window = one window per CC).
                       ka workshop start [<name>]
@@ -20,46 +21,48 @@ COMMANDS
                           declared mate (already running → just report).
                       ka workshop stop [<name>]
                           No name: stop the whole workshop. <name>: stop one pane.
+                      ka workshop restart [<name>]
+                          No name: restart the WHOLE workshop (stop all → start
+                          all; run from a plain terminal). <name>: restart one pane.
                       ka workshop spawn-mates <name> [<workdir>]
                           With <workdir>: register the mate into workshop.yaml
                           (default=false) and launch it. Without: alias for
                           `start <name>`. Already running → left untouched.
-                    Flags: --dry-run, --all, --only NAME[,...], --skip-daemon,
-                           --restart-daemon (redeploy + restart the daemon, then
-                           clean-relaunch every CC; refused from inside the
-                           session — detach and run from a plain terminal).
-    start           Retired → forwards to `ka workshop`.
-    stop            Retired → forwards to `ka workshop stop`.
-    spawn-mates     Retired → forwards to `ka workshop spawn-mates`.
-    restart         stop + short pause + start (via the workshop verb).
-    status          Print a <1s health summary (tmux / telegram daemon / mates).
+                    Flags: --dry-run, --all, --only NAME[,...], --skip-daemon
+    daemon          Operate on the ACTIVE channel daemon (telegram|lark, from
+                    config.yaml channel_kind; port from its config.json). Verbs:
+                      ka daemon start | stop | restart | status | config
+                    `restart` re-adopts every CC automatically (~2s blip);
+                    `config` opens the daemon's config.json in $EDITOR.
+    status          Print a <1s health summary (tmux / channel daemon / mates).
     doctor          Deeper consistency diagnostics + fix hints (daemon / channel
                     uniqueness / pane cwd / mates / cron). Exit 1 if issues found.
-    wait-ready      Poll a tmux pane until its CC runtime is idle-ready.
-                    Flags: --session NAME, --target PANE, --timeout SEC, --stable SEC
     cron            Manage declarative cron jobs (~/.knowledge-assistant/cron.yaml).
                     Subcommands: list, add, remove, enable, disable, run,
                                  install, uninstall, import, status. See `ka cron help`.
     distill         Spawn a background Opus /kb distill worker (snapshot-bound).
-                    Required: --background --jsonl <abs path>
-                    Optional: --session-id <uuid>, --dry-run
-    distill-status  Show state of last/current background distill run.
-                    Flags: --json
+                      ka distill --jsonl <abs path> [--session-id <uuid>] [--dry-run]
+                      ka distill status [--json]    # state of the last/current run
     help, -h        Show this help.
 
 ENVIRONMENT
     OPS_CONFIG       Override workshop.yaml path (default: ~/.knowledge-assistant/workshop.yaml)
-    KA_CHANNEL_PORT  telegram-channel daemon port (default 9877)
     NO_COLOR=1       Disable ANSI colors in output.
 
+    The daemon kind + port are NOT env vars — they come from config.yaml
+    channel_kind and runtime/<kind>-daemon/config.json (set the kind with
+    ./install.sh --channel-kind=telegram|lark).
+
 DESIGN
-    docs/KA_CLI_USAGE.md   (full ka command manual: workshop verbs, cron, doctor)
+    docs/KA_CLI_USAGE.md   (full ka command manual: workshop verbs, daemon, cron, doctor)
     docs/ARCHITECTURE.md   (as-built architecture: daemon + workshop, design/runtime boundary)
 
 EXAMPLES
     ka workshop                            # bring the workshop up (split-pane)
     ka workshop spawn-mates dev2 ~/work/x  # register + launch a new mate
     ka workshop stop dev2                  # stop one mate
+    ka workshop restart                    # reset the whole workshop cleanly
+    ka daemon status                       # is the active channel daemon up?
+    ka daemon restart                      # reload the daemon (CCs re-adopt)
     ka status                              # quick health check
-    ka restart                             # something's off, reset cleanly
 EOF

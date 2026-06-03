@@ -90,16 +90,11 @@ async function setupConfig(): Promise<Record<string, any>> {
   })
 
   const config: Record<string, any> = {
+    channel_kind: 'telegram',
     knowledge_base_path: kbPath,
     state_dir: stateDir,
     distiller: {
       interval: distillInterval,
-      skip_short_conversations: 3,
-    },
-    topics: {
-      initial: [],
-      auto_suggest: true,
-      require_approval: true,
     },
     retrieval: {
       max_results: 5,

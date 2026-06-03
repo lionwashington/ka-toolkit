@@ -120,7 +120,7 @@ deposits → queries** them into an Obsidian-compatible Markdown knowledge base 
 | **kb MCP server** | `packages/mcp-server/` | Expose `kb_search / kb_read_topic / kb_list_topics / kb_status` to any MCP client |
 | **/kb skill** | `packages/skill/src/kb.md` | Skill entry point for browsing / searching / triggering distillation / reviewing topic suggestions |
 
-**Distillation triggers**: ① `/kb distill` (foreground, inside the skill) ② `ka distill --background` (background)
+**Distillation triggers**: ① `/kb distill` (foreground, inside the skill) ② `ka distill` (background)
 ③ `ka cron` scheduled (every 2h by default). All three share the same distiller pipeline.
 
 **Key property**: KB content is **owned by the user** (local Markdown, can be git-tracked, opens directly in Obsidian),
@@ -150,8 +150,8 @@ For implementation-level details see `docs/telegram-channel-design.md`. Key poin
   causes the daemon's `send()` to silently no-op) → `closeStandaloneSSEStream()` closes the stream to preserve the session, lets the CC
   seamlessly reconnect with the **same session-id** via SSE retry; only a truly dead one (>60s unreachable) gets evicted. This both cures the half-open deadlock
   and avoids leaking zombie sessions.
-- **Supervision**: the `* * * * * start.sh` installed by `ka cron` self-heals (brings it back up within ≤60s if it dies). To upgrade the daemon code use
-  `ka workshop --restart-daemon` (restarts the daemon, then reconnects all CCs as a whole).
+- **Supervision**: the `* * * * * start.sh` installed by `ka cron` self-heals (brings it back up within ≤60s if it dies). To upgrade the daemon code,
+  `./install.sh --only daemon` then `ka daemon restart` (every CC re-adopts automatically).
 
 ### §3.2 ka workshop (orchestrating independent CC processes)
 
@@ -198,14 +198,12 @@ whether it is `default`.
 
 | Command | Description |
 |---|---|
-| `ka workshop` | orchestration (see §3.2); `start` / `stop` / `spawn-mates` forward here |
-| `ka restart` | restart the workshop |
+| `ka workshop [start\|stop\|restart\|spawn-mates] [name]` | workshop lifecycle / tmux panes (see §3.2); restart with no name = whole workshop |
+| `ka daemon [start\|stop\|restart\|status\|config]` | the active channel daemon (kind from `config.yaml channel_kind`) |
 | `ka status` | <1s health summary (config / session / daemon / channels / cron) |
 | `ka doctor` | deeper read-only consistency diagnostics + fix hints |
 | `ka cron` | declarative scheduled jobs (see §5) |
-| `ka distill --background` | trigger distillation in the background (foreground mode is inside `/kb distill`) |
-| `ka distill-status` | distillation progress |
-| `ka wait-ready` | wait for readiness |
+| `ka distill [status]` | trigger background distillation / show its progress (foreground is inside `/kb distill`) |
 
 > The `ka logs` / `ka mate` / `ka patch-apply` / `ka install-crons` that were planned in old docs but **never shipped**
 > do not exist and have been removed from this document.
@@ -248,7 +246,7 @@ The runtime isn't one lump; it's **two big blocks belonging to different owners*
 | CC hooks (capture / compact) | `packages/adapters/claude-code/dist/hooks` | `runtime/hooks/` (esbuild bundle, @ka/core folded in self-contained) | esbuild |
 | core CLI (called by the kb skill) | `packages/core/dist/*-cli.js` | `runtime/core-cli/` (tsup already self-contained, pure copy) | copy |
 | skills (5 + kb) | `packages/skills/*.md` + `packages/skill/src/kb.md` | `runtime/skills/<name>/SKILL.md`; `~/.claude/skills/<name>` symlink pointing at runtime | copy + symlink |
-| telegram daemon | `packages/telegram-channel` | `runtime/daemon/` (code+scripts+deps; no secrets) | copy + npm ci |
+| telegram daemon | `packages/telegram-channel` | `runtime/telegram-daemon/` (code+scripts+deps; no secrets) | copy + npm ci |
 | config / state / credentials | repo ships `*.example` templates | `~/.knowledge-assistant/{config,secrets,cron,workshop}.yaml + state/ + raw/` | install seed (no overwrite) |
 | cron plist | `ops/lib/cron` generator | `~/Library/LaunchAgents/com.knowledge-assistant.ka.cron.*.plist` (platform-mandated) | ka cron install |
 
@@ -346,7 +344,7 @@ Three big categories: **the Agent itself** / **KA products (design)** / **per-ma
 | `~/.claude/settings.json` / `.claude.json` / `skills/<name>` | CC harness config / MCP registration / skills symlink | **CC backend; KA only places via the interface** |
 
 > Credentials go in `~/.knowledge-assistant/secrets.yaml` (KA's native capability); CC's / the daemon's own tokens
-> go through their own mechanisms (the daemon's bot token is in `runtime/daemon/.env`, which CC processes never touch).
+> go through their own mechanisms (the daemon's bot token is in `runtime/telegram-daemon/.env`, which CC processes never touch).
 
 ---
 

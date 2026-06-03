@@ -64,7 +64,7 @@ step (see Step 6).
 | Node MCP: kb, market | `runtime/mcp/{kb,market}/index.mjs` | esbuild `--bundle` single file |
 | Node MCP: opennutrition | `runtime/mcp/opennutrition/` | build + copy (native sqlite + dataset) |
 | Python MCP: ibkr, hkprop | `~/.knowledge-assistant/{ibkr,hkprop}-venv/` | `uv build` wheel → install into venv |
-| Telegram daemon | `runtime/daemon/` | copy code + `npm ci` (no secrets) |
+| Telegram daemon | `runtime/telegram-daemon/` | copy code + `npm ci` (no secrets) |
 | CC hooks (capture/compact) | `runtime/hooks/` | esbuild `--bundle` (folds in `@ka/core`) |
 | core CLIs (used by `/kb`) | `runtime/core-cli/` | plain copy (tsup self-contained) |
 | skills (kb, daily-brief, …) | `runtime/skills/<name>/SKILL.md` | plain copy |
@@ -116,9 +116,9 @@ point — **CC processes never touch the token**. (This replaces the retired
 Claude Code Telegram *plugin*; do not use `/plugin install telegram` or
 `/telegram:configure`.)
 
-The runtime daemon lives at `~/.knowledge-assistant/runtime/daemon/`. Its
-config + secrets (not in git) live alongside it: `~/.knowledge-assistant/runtime/daemon/.env`
-and `~/.knowledge-assistant/runtime/daemon/config.json`. `install.sh`'s
+The runtime daemon lives at `~/.knowledge-assistant/runtime/telegram-daemon/`. Its
+config + secrets (not in git) live alongside it: `~/.knowledge-assistant/runtime/telegram-daemon/.env`
+and `~/.knowledge-assistant/runtime/telegram-daemon/config.json`. `install.sh`'s
 `deploy_daemon` seeds a placeholder `config.json` but never overwrites these
 user files.
 
@@ -130,12 +130,12 @@ user files.
    source), `chmod 600`:
 
 ```bash
-mkdir -p ~/.knowledge-assistant/runtime/daemon
-cat > ~/.knowledge-assistant/runtime/daemon/.env <<'EOF'
+mkdir -p ~/.knowledge-assistant/runtime/telegram-daemon
+cat > ~/.knowledge-assistant/runtime/telegram-daemon/.env <<'EOF'
 TELEGRAM_BOT_TOKEN=<your bot token>
 OWNER_CHAT_ID=<your numeric telegram user id>
 EOF
-chmod 600 ~/.knowledge-assistant/runtime/daemon/.env
+chmod 600 ~/.knowledge-assistant/runtime/telegram-daemon/.env
 ```
 
    `config.json` (seeded from `config.example.json`) carries `port` (default
@@ -146,8 +146,8 @@ chmod 600 ~/.knowledge-assistant/runtime/daemon/.env
    standalone:
 
 ```bash
-~/.knowledge-assistant/runtime/daemon/start.sh    # idempotent
-~/.knowledge-assistant/runtime/daemon/status.sh   # health check
+~/.knowledge-assistant/runtime/telegram-daemon/start.sh    # idempotent
+~/.knowledge-assistant/runtime/telegram-daemon/status.sh   # health check
 curl -s 127.0.0.1:9877/api/status | python3 -m json.tool
 ```
 
@@ -175,7 +175,7 @@ Useful verbs:
 ka workshop start <name>           # start one declared mate
 ka workshop stop  <name>           # stop one pane (no name = whole workshop)
 ka workshop spawn-mates <name> <workdir>   # register a new mate + launch it
-ka restart                         # stop + pause + start cleanly
+ka workshop restart                # restart the whole workshop (no name = all)
 ```
 
 ## Step 6 (optional): Switch live registrations to the runtime
@@ -191,7 +191,7 @@ to the newly deployed runtime, backing up each target first:
 
 `--switch` rewires `~/.claude.json` MCP entries to `runtime/mcp/*`, points the
 `ka` symlink at `runtime/bin/ka`, repoints cron plists and CC hook paths at the
-runtime, migrates daemon secrets into `runtime/daemon/` and restarts it, and
+runtime, migrates daemon secrets into `runtime/telegram-daemon/` and restarts it, and
 symlinks `~/.claude/skills/<name>/SKILL.md` at the runtime copies. Each step
 leaves a `.pre-switch` backup. If anything looks wrong:
 
@@ -358,7 +358,7 @@ cp config/default.yaml ~/.knowledge-assistant/config.yaml
 3. Put `ka` on PATH (Step 3)
 4. Bring these from the old machine:
    - `~/.knowledge-assistant/secrets.yaml` (API keys)
-   - `~/.knowledge-assistant/runtime/daemon/.env` + `config.json` (bot token + owner)
+   - `~/.knowledge-assistant/runtime/telegram-daemon/.env` + `config.json` (bot token + owner)
    - `~/.knowledge-assistant/cron.yaml` and `workshop.yaml`
    - Knowledge base repo (`git clone`)
    - Google OAuth credentials (`~/Library/Application Support/gogcli/`)

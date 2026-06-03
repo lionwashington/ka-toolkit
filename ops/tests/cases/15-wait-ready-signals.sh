@@ -40,7 +40,7 @@ EOF
     sleep 1
 
     set +e
-    out="$(NO_COLOR=1 "$KA" wait-ready --timeout 8 --stable 1 -v 2>&1)"
+    out="$(NO_COLOR=1 bash "$REPO/ops/cli/wait-ready.sh" --timeout 8 --stable 1 -v 2>&1)"
     rc=$?
     set -e
     [ "$rc" -eq 0 ] || { echo "FAIL [$label]: rc=$rc"; echo "$out"; exit 1; }

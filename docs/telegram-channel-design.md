@@ -41,7 +41,7 @@ The terminal transcript never reaches the user; the user only sees what the CC p
 - **A single long-running daemon**: a node + express process listening on **MCP-over-HTTP @ `127.0.0.1:9877`** (loopback-only).
 - **Independent of any CC**: the daemon's `getUpdates` polling loop and its MCP client connections are independent of each other — even when no CC is connected, the daemon keeps polling Telegram (offset advancement rules in §4).
 - **Singleton = port binding**: `daemon.sh` uses `flock` on Linux; macOS has no `flock`, so it `exec node` directly and relies on the **port-binding singleton** in server.ts as a fallback — a second daemon hits `EADDRINUSE` and cleanly exits with `process.exit(0)`, no crash (see server.ts `httpServer.on('error')`).
-- **Deployment location**: runtime directory `~/.knowledge-assistant/runtime/daemon/` (per what install.sh actually lays down). Source lives in the repo at `packages/telegram-channel/`, copied to the runtime directory via the install/deploy flow; secrets/runtime files (`.env` / `state.json` / `daemon.pid` / logs / `node_modules/`) live only in the runtime directory and are not committed to git.
+- **Deployment location**: runtime directory `~/.knowledge-assistant/runtime/telegram-daemon/` (per what install.sh actually lays down). Source lives in the repo at `packages/telegram-channel/`, copied to the runtime directory via the install/deploy flow; secrets/runtime files (`.env` / `state.json` / `daemon.pid` / logs / `node_modules/`) live only in the runtime directory and are not committed to git.
 - **HTTP endpoints**:
   - `POST/GET/DELETE /mcp` — MCP Streamable HTTP transport (CC connects as an MCP client).
   - `GET /api/status` — JSON health status (uptime, sessions, counters, channel_alive, offset).

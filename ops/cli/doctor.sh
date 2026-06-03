@@ -16,10 +16,12 @@ source "$OPS_DIR/lib/runtimes/dispatch.sh"
 
 CONFIG="$(resolve_workshop_config)"
 SESSION="$(workshop_session_name "$CONFIG")"
-# Channel kind picks which daemon to health-check: lark→9876 / telegram→9877.
-DKIND="${KA_CHANNEL_KIND:-telegram}"
-if [ "$DKIND" = "lark" ]; then _def_port=9876; _daemon_sub="lark-daemon"; else _def_port=9877; _daemon_sub="daemon"; fi
-PORT="${KA_CHANNEL_PORT:-$_def_port}"
+# Channel kind + port = single source of truth: config.yaml channel_kind +
+# the active daemon's config.json http_port (resolved in common.sh). Daemon
+# dir is <kind>-daemon.
+DKIND="$(ka_channel_kind)" || exit 2
+_daemon_sub="${DKIND}-daemon"
+PORT="$(ka_channel_port)"
 issues=0
 
 note_ok()   { printf '  %s %s\n' "$(glyph_ok)" "$*"; }

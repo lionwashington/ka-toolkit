@@ -25,6 +25,10 @@ RUN chmod +x /usr/local/bin/claude
 
 COPY ops /repo/ops
 COPY bin /repo/bin
+# install.sh + config templates: the channel-kind tests run `install.sh --only
+# config` in an isolated fake runtime root (never touches a real machine).
+COPY install.sh /repo/install.sh
+COPY config /repo/config
 
 # @ka/core CLI bundles the distill-bg tests need, placed at the runtime layout
 # path (core-cli/) that distill-bg.sh + distill-bg-worker.sh probe first.

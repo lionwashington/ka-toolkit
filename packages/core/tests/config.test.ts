@@ -18,16 +18,10 @@ describe('loadConfig', () => {
   it('loads config from YAML file', () => {
     const configPath = join(tempDir, 'config.yaml')
     writeFileSync(configPath, `
+channel_kind: lark
 knowledge_base_path: /tmp/my-kb
 distiller:
   interval: "1h"
-  skip_short_conversations: 5
-topics:
-  initial:
-    - name: health
-      description: exercise and diet
-  auto_suggest: true
-  require_approval: true
 retrieval:
   max_results: 10
   min_score: 0.8
@@ -36,11 +30,9 @@ retrieval:
     const config = loadConfig(configPath)
 
     expect(config.knowledge_base_path).toBe('/tmp/my-kb')
+    expect(config.channel_kind).toBe('lark')
     expect(config.distiller.interval).toBe('1h')
-    expect(config.distiller.skip_short_conversations).toBe(5)
     expect(config.state_dir).toBeDefined()
-    expect(config.topics.initial).toHaveLength(1)
-    expect(config.topics.initial[0].name).toBe('health')
     expect(config.retrieval.max_results).toBe(10)
   })
 
@@ -50,7 +42,7 @@ retrieval:
     expect(config.knowledge_base_path).toBeDefined()
     expect(config.workspace_path).toBeDefined()
     expect(config.distiller.interval).toBeDefined()
-    expect(config.topics.auto_suggest).toBe(true)
+    expect(config.channel_kind).toBe('telegram')
   })
 
   it('expands ~ in knowledge_base_path', () => {

@@ -41,10 +41,11 @@ vi.mock('@ka/core', () => {
     KnowledgeStore: vi.fn().mockReturnValue(mockStore),
     KnowledgeRetrieval: vi.fn().mockReturnValue(mockRetrieval),
     loadConfig: vi.fn().mockReturnValue({
+      channel_kind: 'telegram',
       knowledge_base_path: '/tmp/test-kb',
-      distiller: { interval: '1h', model: 'claude-3-haiku-20240307', skip_short_conversations: 3 },
+      distiller: { interval: '1h' },
       retrieval: { max_results: 5, min_score: 0.3 },
-      topics: { initial: [], auto_suggest: true, require_approval: false },
+      memory: { frozen_snapshot: false },
     }),
   }
 })
