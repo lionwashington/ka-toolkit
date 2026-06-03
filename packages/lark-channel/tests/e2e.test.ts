@@ -129,6 +129,24 @@ describe('attachment routing follows the last text (option B)', () => {
   })
 })
 
+describe('multi-target routing', () => {
+  test('`to main, ka:` → BOTH main and ka receive the body', async () => {
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'mt-1', text: 'to main, ka: multi hello', createTime: nextTime(), selfOpenId: SELF })])
+    assert.ok(await waitFor(() => main.received.some(r => r.content === 'multi hello'), 5000), 'main receives it')
+    assert.ok(await waitFor(() => ka.received.some(r => r.content === 'multi hello'), 5000), 'ka receives the same body')
+  })
+  test('partial: `to main, ghost` → main delivered, a not-found notice for ghost goes back', async () => {
+    const before = webhook.sent().length
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'mt-2', text: 'to main, ghost: partial msg', createTime: nextTime(), selfOpenId: SELF })])
+    assert.ok(await waitFor(() => main.received.some(r => r.content === 'partial msg'), 5000), 'online target main delivered')
+    assert.ok(!ka.received.some(r => r.content === 'partial msg'), 'unmatched target not delivered to ka')
+    const ok = await waitFor(
+      () => webhook.sent().slice(before).some(s => /not found/i.test(s.text) && /ghost/.test(s.text)),
+      4000)
+    assert.ok(ok, 'a "not found: ghost" notice is posted back to the group')
+  })
+})
+
 describe('outbound (reply → webhook)', () => {
   test('reply tool → POST to the group webhook, prefixed with channel tag', async () => {
     const before = webhook.sent().length

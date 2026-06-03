@@ -9,7 +9,7 @@ import { setLogger, log } from './log.ts'
 import { initNumbering } from './sessions.ts'
 import { probeTick, PROBE_INTERVAL_MS } from './probe.ts'
 import { createHttpApp } from './http.ts'
-import { dispatch } from './dispatch.ts'
+import { dispatchTargets } from './dispatch.ts'
 import type { Platform } from './platform.ts'
 
 export interface DaemonOptions {
@@ -59,7 +59,7 @@ export function runChannelDaemon(opts: DaemonOptions): void {
     log(`${opts.platform.name}-channel daemon listening on ${opts.host}:${opts.port}/mcp (pid=${process.pid})`)
     // Hand the platform a dispatch bound to it; the platform starts its inbound loop.
     await opts.platform.startInbound(
-      (targetName, content, metaBase) => dispatch(opts.platform, targetName, content, metaBase),
+      (rawTargets, content, metaBase) => dispatchTargets(opts.platform, rawTargets, content, metaBase),
     )
   })
   // Port-bind singleton: on macOS there is no flock binary, so the launcher can't

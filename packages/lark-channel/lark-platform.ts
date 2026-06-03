@@ -114,7 +114,7 @@ const groupInFlight: Record<string, boolean> = {}
 // `to spot:` text points them at spot; they stay there until the next text moves
 // them. Per-chat, in-memory → a daemon restart resets to main (send any text to
 // re-point). Mental model: "images go where my last message went."
-const attachTarget = new Map<string, string>()
+const attachTarget = new Map<string, string[]>()
 
 // ─────────────────────────── lark-cli spawn (auth via lark-cli's own creds) ─────
 
@@ -332,37 +332,33 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
     rememberMsgId(recent, chatId, q.mid)
     saveState(state)
 
-    let targetName: string
+    let rawTargets: string[]
     let content: string
     let attachment_path = ''
-    const isOnline = (n: string | null): boolean => n === 'all' || (!!n && byName.has(n))
 
     if (q.att) {
-      // Attachment → the chat's STICKY attachment target (set by the most recent
-      // channel-naming text below); none yet → main. content = clean placeholder.
-      targetName = attachTarget.get(chatId) ?? 'main'
-      attachment_path = await larkPlatform.fetchAttachment({ ...q.att, channel: targetName })
+      // Attachment → the chat's STICKY target LIST (set by the most recent text;
+      // none yet → main). Fan out to the whole list. lark images carry no caption,
+      // so this sticky list is the only routing signal. Download ONCE to the first
+      // target's subdir (a deliberate multicast — the listed channels are all intended
+      // recipients, so sharing the file across them is fine).
+      rawTargets = attachTarget.get(chatId) ?? ['main']
+      attachment_path = await larkPlatform.fetchAttachment({ ...q.att, channel: rawTargets[0] ?? 'main' })
       content = attachmentPlaceholder(q.att.kind)
       if (!attachment_path) content += '\n (attachment download failed; text only)'
     } else {
-      // Text. Routing prefix: no prefix → main; `to X:` explicit; `to X` (no colon)
-      // only if X online, else main. Same as telegram.
+      // Text. Parse the (possibly multi-target, comma-separated) prefix; no prefix →
+      // main with the full text. Core (dispatchTargets) resolves the list: online
+      // targets receive it, offline/unknown are reported back. Colon has no semantic.
       const p = parseRoutingPrefix(q.text)
-      if (!p.matched) {
-        targetName = 'main'; content = q.text
-      } else {
-        const resolved = resolveTargetToName(p.rawTarget)
-        if (p.hadColon) { targetName = resolved ?? `#${p.rawTarget}`; content = p.body }
-        else if (isOnline(resolved)) { targetName = resolved as string; content = p.body }
-        else { targetName = 'main'; content = q.text }
-      }
-      // Point THIS chat's subsequent attachments at wherever this text went (option
-      // B): plain text → main, `to spot:` → spot, etc. Only an offline-miss
-      // ("#name", not a real online destination) is skipped, leaving the prior target.
-      if (!targetName.startsWith('#')) attachTarget.set(chatId, targetName)
+      rawTargets = p.matched ? p.rawTargets : ['main']
+      content = p.matched ? p.body : q.text
+      // Sticky: subsequent (captionless) attachments follow wherever THIS text was
+      // aimed — the whole list ("images go where my last message went").
+      attachTarget.set(chatId, rawTargets)
     }
 
-    await inboundDispatch(targetName, content, {
+    await inboundDispatch(rawTargets, content, {
       chat_id: chatId,            // the Lark group → reply routes back here
       sender_name: q.sender,
       sender_id: cfg.self_open_id,

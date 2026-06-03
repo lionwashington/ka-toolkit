@@ -9,9 +9,11 @@
 //
 // Only what crosses THIS interface differs between telegram and lark.
 
-/** Core hands the platform's inbound loop a bound dispatch (one per owner message). */
+/** Core hands the platform's inbound loop a bound dispatch (one per owner message).
+ *  `rawTargets` is the parsed routing list (names/numbers, e.g. ['main','2']); a single
+ *  target is a 1-element list. Core resolves online→deliver / offline·unknown→not-found. */
 export type InboundDispatch = (
-  targetName: string,
+  rawTargets: string[],
   content: string,
   metaBase: Record<string, unknown>,
 ) => Promise<void>

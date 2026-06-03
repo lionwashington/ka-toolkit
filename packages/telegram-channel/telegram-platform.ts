@@ -236,28 +236,14 @@ async function handleUpdate(u: any): Promise<'ok' | 'stop'> {
   state.offset = u.update_id + 1
   saveState(state)
 
-  // Routing — for an attachment the prefix (and caption) lives in `caption`:
-  //   - no prefix         → main, full text
-  //   - prefix + colon    → explicit routing; route even on miss (feedback)
-  //   - prefix, no colon  → only route if target is an ONLINE channel; else → main
+  // Routing — for an attachment the prefix (and caption) lives in `caption`.
+  // Parse the (possibly multi-target, comma-separated) prefix; no prefix → main with
+  // the full text. Core (dispatchTargets) resolves the list: online targets receive it,
+  // offline/unknown are reported back. Colon has no semantic.
   const routingText = text || caption
   const p = parseRoutingPrefix(routingText)
-  let targetName: string
-  let content: string
-  const isOnline = (n: string | null): boolean => n === 'all' || (!!n && byName.has(n))
-  if (!p.matched) {
-    targetName = 'main'; content = routingText
-  } else {
-    const resolved = resolveTargetToName(p.rawTarget)
-    if (p.hadColon) {
-      targetName = resolved ?? `#${p.rawTarget}`
-      content = p.body
-    } else if (isOnline(resolved)) {
-      targetName = resolved as string; content = p.body
-    } else {
-      targetName = 'main'; content = routingText
-    }
-  }
+  const rawTargets = p.matched ? p.rawTargets : ['main']
+  let content = p.matched ? p.body : routingText
 
   // Attachment → local path in meta so the consumer CC can Read it. content falls
   // back to a placeholder with no caption; on download failure deliver text + note.
@@ -268,7 +254,7 @@ async function handleUpdate(u: any): Promise<'ok' | 'stop'> {
     if (!attachmentPath) content += '\n (attachment download failed; text only)'
   }
 
-  await inboundDispatch(targetName, content, {
+  await inboundDispatch(rawTargets, content, {
     chat_id: msg.chat?.id ?? cfg.owner_chat_id,
     sender_name: msg.from?.first_name ?? msg.from?.username ?? 'owner',
     sender_id: fromId,

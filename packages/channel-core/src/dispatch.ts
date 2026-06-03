@@ -3,7 +3,8 @@
 // miss notice, typing ACK) stays in the daemon and calls fanout() here.
 import { log } from './log.ts'
 import { counters } from './counters.ts'
-import { type Session, sessionsOf, allSessions, onlineChannelListStr } from './sessions.ts'
+import { type Session, sessionsOf, allSessions, onlineChannelListStr, resolveTargetToName } from './sessions.ts'
+import { resolveTargetList } from './routing.ts'
 import type { Platform } from './platform.ts'
 
 // Lightweight cc loop guard: if the same (from→to) channel pair exchanges more
@@ -66,6 +67,66 @@ export async function dispatch(
   const ackChatId = metaBase.chat_id
   if (ackChatId !== undefined && ackChatId !== null && ackChatId !== '') {
     platform.ackDelivery?.(String(ackChatId))
+  }
+}
+
+// Dispatch one inbound (owner) message to a LIST of targets (multi-target routing).
+// Resolves each via resolveTargetList: online targets get the message (fanned out per
+// channel, deduped); offline/unknown targets are collected and reported back to the
+// originating chat in ONE consolidated "not found" notice. `all` broadcasts. This is
+// the multi-target replacement for the platform inbound path; a single target is just a
+// 1-element list.
+export async function dispatchTargets(
+  platform: Platform,
+  rawTargets: string[],
+  content: string,
+  metaBase: Record<string, unknown>,
+): Promise<void> {
+  const { deliver, notFound } = resolveTargetList(
+    rawTargets,
+    resolveTargetToName,
+    name => sessionsOf(name).length > 0,
+  )
+
+  let delivered = 0
+  if (deliver.length === 1 && deliver[0] === 'all') {
+    const targets = allSessions()
+    if (targets.length > 0) {
+      log(`dispatch → all [${targets.length} sess]: ${content.slice(0, 60)}`)
+      counters.dispatches++
+      await fanout(targets, content, metaBase, 'all')
+      delivered = targets.length
+    }
+  } else {
+    for (const name of deliver) {
+      const targets = sessionsOf(name)
+      if (targets.length === 0) continue
+      log(`dispatch → "${name}" [${targets.length} sess]: ${content.slice(0, 60)}`)
+      counters.dispatches++
+      await fanout(targets, content, metaBase, name)
+      delivered += targets.length
+    }
+  }
+
+  // Consolidated not-found feedback to the originating chat (skip when nothing missed).
+  if (notFound.length > 0) {
+    counters.routeMiss++
+    const replyTo = String(metaBase.chat_id ?? '')
+    if (replyTo) {
+      const deliveredNote = deliver.length > 0 ? `\nDelivered to: ${deliver.join(', ')}` : ''
+      await platform.send(
+        replyTo,
+        `⚠️ not found: ${notFound.join(', ')}\nOnline channels: ${onlineChannelListStr()}${deliveredNote}\n(target by name or number, comma-separated for several, e.g. \`to main, 2\`)`,
+      )
+    }
+  }
+
+  // Delivery ACK once if anything was delivered (same policy as single-target dispatch).
+  if (delivered > 0) {
+    const ackChatId = metaBase.chat_id
+    if (ackChatId !== undefined && ackChatId !== null && ackChatId !== '') {
+      platform.ackDelivery?.(String(ackChatId))
+    }
   }
 }
 
