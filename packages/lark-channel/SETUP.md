@@ -2,7 +2,7 @@
 
 Connect a Claude Code session to a Lark group: send a message in the group → cc receives it; cc calls `reply` → it goes back to the group.
 
-> Current status: this is the **dev/test workflow** (source mode, foreground). Packaging/install.sh deployment + supervision (mirroring telegram's `runtime/lark-daemon`) is the later phase D0. Attachments are not yet supported (P3).
+> Current status: install.sh deployment is done — `KA_CHANNEL=lark ./install.sh --only daemon` bundles the daemon to `runtime/lark-daemon@9876`; supervise it with a `ka cron` self-heal job (`ka cron add --name lark-daemon --schedule "every 1m" --kind shell --command '<runtime>/lark-daemon/start.sh …'` → `ka cron install`). Attachments ARE supported (image/file/audio/video → `lark-cli +messages-resources-download` → `attachments/` → surfaced as `meta.attachment_path`). The dev/test (source, foreground) flow below still works for iterating. See `docs/INSTALL_UBUNTU.md` for the full deploy.
 
 ---
 

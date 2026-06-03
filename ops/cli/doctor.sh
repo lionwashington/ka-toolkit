@@ -16,7 +16,10 @@ source "$OPS_DIR/lib/runtimes/dispatch.sh"
 
 CONFIG="$(resolve_workshop_config)"
 SESSION="$(workshop_session_name "$CONFIG")"
-PORT="${KA_CHANNEL_PORT:-9877}"
+# Channel kind picks which daemon to health-check: lark→9876 / telegram→9877.
+DKIND="${KA_CHANNEL_KIND:-telegram}"
+if [ "$DKIND" = "lark" ]; then _def_port=9876; _daemon_sub="lark-daemon"; else _def_port=9877; _daemon_sub="daemon"; fi
+PORT="${KA_CHANNEL_PORT:-$_def_port}"
 issues=0
 
 note_ok()   { printf '  %s %s\n' "$(glyph_ok)" "$*"; }
@@ -46,12 +49,12 @@ else
     hint "set 'runtime: cc' in workshop.yaml, or expect adapter-missing warnings"
 fi
 
-# 3. telegram daemon health (P2: telegram goes through the daemon)
+# 3. channel daemon health (daemon kind = KA_CHANNEL_KIND: lark→9876 / telegram→9877)
 if curl -sf --max-time 1 "http://127.0.0.1:$PORT/api/status" >/dev/null 2>&1; then
-    note_ok "telegram daemon: up (port $PORT)"
+    note_ok "$DKIND daemon: up (port $PORT)"
 else
-    note_err "telegram daemon: down (port $PORT) — channels offline"
-    _ds="$HOME/.knowledge-assistant/runtime/daemon/start.sh"; [ -x "${KA_REPO_ROOT:-}/daemon/start.sh" ] && _ds="$KA_REPO_ROOT/daemon/start.sh"
+    note_err "$DKIND daemon: down (port $PORT) — channels offline"
+    _ds="$HOME/.knowledge-assistant/runtime/$_daemon_sub/start.sh"; [ -x "${KA_REPO_ROOT:-}/$_daemon_sub/start.sh" ] && _ds="$KA_REPO_ROOT/$_daemon_sub/start.sh"
     hint "start: $_ds   (or just run ka workshop, which ensures the daemon is up)"
 fi
 
@@ -86,7 +89,10 @@ else
 fi
 
 # 5. declared mates (yaml default=true) vs running (tmux panes)
-declare -a DECLARED
+# NB: assign empty () not bare `declare -a` — under `set -u`, referencing
+# ${#DECLARED[@]} on a declared-but-unassigned array errors "unbound variable"
+# on bash < 4.4 (the case when there are no default mates).
+declare -a DECLARED=()
 if [ -n "$CONFIG" ] && [ -f "$CONFIG" ]; then
     while IFS= read -r rec; do
         [ -z "$rec" ] && continue
@@ -109,10 +115,16 @@ if [ "${#DECLARED[@]}" -gt 0 ] && tmux_has_session "$SESSION" 2>/dev/null; then
     fi
 fi
 
-# 6. cron jobs installed (declarative cron.yaml → launchd plists)
+# 6. cron jobs installed (declarative cron.yaml → launchd plists [macOS] / crontab lines [Linux])
+# Backend-aware to match detect_backend (Darwin→launchd, else→crontab); the old
+# launchd-only check always reported 0 on Linux/WSL even with jobs in crontab.
 cron_yaml="$HOME/.knowledge-assistant/cron.yaml"
 if [ -f "$cron_yaml" ]; then
-    installed="$(ls "$HOME"/Library/LaunchAgents/com.knowledge-assistant.ka.cron.*.plist 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "$(uname)" = "Darwin" ]; then
+        installed="$(ls "$HOME"/Library/LaunchAgents/com.knowledge-assistant.ka.cron.*.plist 2>/dev/null | wc -l | tr -d ' ')"
+    else
+        installed="$(crontab -l 2>/dev/null | grep -c '# ka-cron:')"
+    fi
     if [ "$installed" -gt 0 ]; then
         note_ok "cron: $installed job(s) installed (detail: ka cron list)"
     else

@@ -6,7 +6,7 @@ cron scheduled tasks. Each CC sends/receives through a Lark group: send a messag
 
 > Verified end-to-end in Docker Ubuntu (Linux aarch64 / Node 22 / pnpm / python3): the install flow,
 > the lark daemon build+run, the lark tests 19/19, the crontab cron backend — all passed (`ops/tests/ubuntu-lark.Dockerfile`).
-> Lark attachments are not yet supported (P3); cross-platform cc2cc in workshop is not done (lark groups can talk to each other, isolated from telegram).
+> Lark attachments ARE supported (image/file/audio/video → downloaded via `lark-cli +messages-resources-download` to the daemon's `attachments/`, surfaced to the CC as `meta.attachment_path` to Read). Cross-platform cc2cc in workshop is not done (lark groups can talk to each other, isolated from telegram).
 
 ---
 
@@ -91,6 +91,8 @@ KA_CHANNEL_KIND=lark ka workshop          # each mate pane connects to lark-chan
 `KA_CHANNEL_KIND=lark` makes workshop register each CC to the lark-channel daemon (the default is telegram).
 In the group, use `to <channel name>: …` to target, no prefix → `main`.
 
+> ⚠️ **`KA_CHANNEL_KIND=lark` is required on EVERY workshop/daemon command**, not just the first launch — `ka workshop`, `ka workshop start|stop|restart <name>`, and `ka workshop --restart-daemon` all default to **telegram (port 9877)** without it, so they'll target the wrong (or absent) daemon. Easiest: `export KA_CHANNEL_KIND=lark` once in your shell profile so the whole session is lark by default.
+
 > To manually attach just one CC (without workshop):
 > ```bash
 > claude mcp add --transport http --scope local lark-channel "http://127.0.0.1:9876/mcp?name=main"
@@ -108,7 +110,27 @@ ka cron list           # see installed jobs (marked # ka-cron:<name> in crontab)
 crontab -l             # view the crontab lines directly
 ```
 
-Make sure the cron daemon is running (see §1's WSL note). The daemon self-heal patrol can also be added as a cron line running `runtime/lark-daemon/start.sh`.
+Make sure the cron daemon is running (see §1's WSL note).
+
+### Lark daemon self-heal (recommended)
+
+The lark daemon needs a supervisor so it auto-revives if it ever dies (the old
+standalone `~/.lark-channel` had a `* * * * * start.sh` cron; the runtime daemon
+needs the equivalent). Add it as a `ka cron` job — its `start.sh` is idempotent
+(no-op when already up):
+
+```bash
+ka cron add --name lark-daemon --schedule "every 1m" --kind shell \
+  --command "$HOME/.knowledge-assistant/runtime/lark-daemon/start.sh >> $HOME/.knowledge-assistant/runtime/lark-daemon/supervisor.log 2>&1" \
+  --description "lark-channel daemon self-heal: idempotent start every 1 min"
+ka cron install            # materializes to crontab (Linux) — `crontab -l` shows the # ka-cron:lark-daemon line
+ka cron run lark-daemon    # foreground test (should report the daemon already up)
+```
+
+> Note: `ka cron` schedules use a DSL (`every 1m`, `daily 07:00`, …), **not** raw
+> cron syntax (`* * * * *` is rejected). On Linux `ka cron install` selects the
+> crontab backend automatically. The job only fires while the OS cron daemon is
+> running (WSL: `sudo service cron start`, see §1).
 
 ---
 

@@ -8,7 +8,7 @@
 // Run: node --experimental-strip-types --test tests/unit.test.ts
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { extractText, parseLarkTime, rememberMsgId } from '../lark-platform.ts'
+import { extractText, parseLarkTime, rememberMsgId, extractLarkAttachment, attachmentPlaceholder } from '../lark-platform.ts'
 
 describe('extractText', () => {
   test('plain text → trimmed', () => {
@@ -76,5 +76,39 @@ describe('rememberMsgId (per-chat dedup ring)', () => {
     assert.equal(recent['oc_a'][0], 'm30')          // oldest kept
     assert.equal(recent['oc_a'][99], 'm129')        // newest
     assert.ok(!recent['oc_a'].includes('m29'))      // m0..m29 evicted
+  })
+})
+
+// lark-cli +chat-messages-list renders media content as a tagged string with the
+// resource key embedded, e.g. "[Image: img_xxx]" / "[File: file_xxx name]" (NOT JSON).
+describe('extractLarkAttachment', () => {
+  test('image msg → img_ key pulled from rendered content', () => {
+    const att = extractLarkAttachment({ msg_type: 'image', message_id: 'm1', content: '[Image: img_v2_abc-DEF_123]' })
+    assert.deepEqual(att, { messageId: 'm1', resType: 'image', key: 'img_v2_abc-DEF_123', kind: 'image' })
+  })
+  test('file msg → file_ key pulled, resType=file, kind=file', () => {
+    const att = extractLarkAttachment({ msg_type: 'file', message_id: 'm2', content: '[File: file_v3_xyz report.pdf]' })
+    assert.deepEqual(att, { messageId: 'm2', resType: 'file', key: 'file_v3_xyz', kind: 'file' })
+  })
+  test('audio/media msgs → file resType but keep their own kind', () => {
+    assert.equal(extractLarkAttachment({ msg_type: 'audio', message_id: 'm3', content: '[Audio: file_aud1]' })!.kind, 'audio')
+    assert.equal(extractLarkAttachment({ msg_type: 'media', message_id: 'm4', content: '[Video: file_vid1]' })!.kind, 'media')
+    assert.equal(extractLarkAttachment({ msg_type: 'media', message_id: 'm4', content: '[Video: file_vid1]' })!.resType, 'file')
+  })
+  test('text / card / no-key → null (no downloadable resource)', () => {
+    assert.equal(extractLarkAttachment({ msg_type: 'text', message_id: 'm5', content: 'hello' }), null)
+    assert.equal(extractLarkAttachment({ msg_type: 'image', message_id: 'm6', content: 'no key here' }), null)
+    assert.equal(extractLarkAttachment({}), null)
+    assert.equal(extractLarkAttachment(null), null)
+  })
+})
+
+describe('attachmentPlaceholder', () => {
+  test('kind → human-readable stand-in (English, matches telegram)', () => {
+    assert.equal(attachmentPlaceholder('image'), '[image]')
+    assert.equal(attachmentPlaceholder('audio'), '[audio]')
+    assert.equal(attachmentPlaceholder('media'), '[video]')   // lark "media" = video
+    assert.equal(attachmentPlaceholder('file'), '[file]')
+    assert.equal(attachmentPlaceholder('whatever'), '[file]') // default
   })
 })

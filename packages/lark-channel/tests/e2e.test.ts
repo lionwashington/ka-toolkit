@@ -77,6 +77,23 @@ describe('inbound (lark-cli poll → dispatch)', () => {
   })
 })
 
+describe('inbound attachments', () => {
+  test('image message → downloaded, delivered to main with meta.attachment_path + [image] placeholder', async () => {
+    daemon.pushMessages(CHAT, [{
+      message_id: 'm-img', create_time: nextTime(),
+      sender: { id: SELF, sender_type: 'user', name: 'Owner' },
+      msg_type: 'image', content: '[Image: img_test_abc123]',
+    }])
+    const ok = await waitFor(() => main.received.some(r => r.meta.attachment_path), 6000)
+    assert.ok(ok, 'main should receive a message carrying meta.attachment_path')
+    const got = main.received.find(r => r.meta.attachment_path)!
+    assert.equal(got.content, '[image]', 'no caption → English placeholder')
+    assert.match(got.meta.attachment_path, /attachments\//, 'attachment_path points into the daemon attachments dir')
+    assert.equal(got.meta.message_id, 'm-img')
+    for (const v of Object.values(got.meta)) assert.equal(typeof v, 'string')  // meta all-string invariant
+  })
+})
+
 describe('routing', () => {
   test('"to ka:" prefix → delivered to ka, not main', async () => {
     daemon.pushMessages(CHAT, [ownerMsg({ mid: 'm-route', text: 'to ka: routed body', createTime: nextTime(), selfOpenId: SELF })])

@@ -50,15 +50,22 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 
 # Channel mode (`ka workshop`): when KA_CHANNEL is set, bind this pane to a
-# telegram-channel daemon channel instead of the old telegram plugin.
-#   - The `--dangerously-load-development-channels server:telegram-channel`
-#     CONSUMER resolves its channel from a PERSISTENTLY REGISTERED MCP server
-#     (a temp --mcp-config is NOT enough). So we register `telegram-channel` in
-#     THIS pane's cwd project-local scope, pointing at ?name=$KA_CHANNEL. Because
-#     each pane has its own cwd, these registrations are naturally isolated —
-#     no cross-pane race over a shared registration.
-#   - Then prepend the dev-channels flag (+ --dangerously-skip-permissions so the
-#     CC can auto-reply), deduping skip-permissions if the caller already passed it.
+# telegram-channel / lark-channel daemon channel.
+#   - The `--dangerously-load-development-channels server:<kind>-channel` CONSUMER
+#     resolves its channel from an MCP server named `<kind>-channel` pointing at
+#     ?name=$KA_CHANNEL.
+#   - Registration mode is selectable via KA_PANE_MCP_MODE:
+#       isolated (DEFAULT): write a per-pane --mcp-config file keyed by the CHANNEL
+#         NAME (= pane name = KA_CHANNEL), not the cwd. This lets multiple panes
+#         share one cwd without colliding. (The legacy `--scope local` registration
+#         is keyed by cwd, so same-cwd panes overwrite each other's name — e.g. three
+#         panes sharing one cwd all ended up as the last one. Mirrors how `claude-ch` ran.)
+#       local: legacy cwd-scoped `claude mcp add --scope local`. Kept as a fallback
+#         (KA_PANE_MCP_MODE=local) should a CC build ever need a persistent reg.
+#     For panes with DISTINCT cwds (the established telegram workshop) the two modes
+#     produce the same result, so isolated is a strict superset — no regression.
+#   - Then prepend --mcp-config (isolated only) + the dev-channels flag
+#     (+ --dangerously-skip-permissions so the CC can auto-reply), deduping skip.
 if [ -n "${KA_CHANNEL:-}" ]; then
     # Channel KIND picks which daemon this pane binds to: telegram-channel@9877 or
     # lark-channel@9876. KA_CHANNEL_KIND defaults to telegram (back-compat).
@@ -67,20 +74,32 @@ if [ -n "${KA_CHANNEL:-}" ]; then
     if [ "$_chan_kind" = "lark" ]; then _def_port=9876; else _def_port=9877; fi
     _chan_port="${KA_CHANNEL_PORT:-$_def_port}"
     _chan_url="http://127.0.0.1:${_chan_port}/mcp?name=${KA_CHANNEL}"
-    claude mcp remove "$_chan_server" >/dev/null 2>&1 || true
-    if claude mcp add --transport http --scope local "$_chan_server" "$_chan_url" >/dev/null 2>&1; then
-        echo "[start-pane:$PANE_NAME] channel: registered $_chan_server → $_chan_url"
+    _mcp_mode="${KA_PANE_MCP_MODE:-isolated}"   # isolated (default) | local (legacy)
+    _mcp_cfg=""
+    if [ "$_mcp_mode" = "local" ]; then
+        # legacy: cwd-scoped persistent registration (collides when panes share a cwd)
+        claude mcp remove "$_chan_server" >/dev/null 2>&1 || true
+        if claude mcp add --transport http --scope local "$_chan_server" "$_chan_url" >/dev/null 2>&1; then
+            echo "[start-pane:$PANE_NAME] channel: registered $_chan_server → $_chan_url (scope=local)"
+        else
+            echo "[start-pane:$PANE_NAME] channel: WARN failed to register $_chan_server → $_chan_url"
+        fi
     else
-        echo "[start-pane:$PANE_NAME] channel: WARN failed to register $_chan_server → $_chan_url"
+        # isolated: per-pane --mcp-config keyed by CHANNEL NAME → no cwd collision.
+        # Clear any stale local-scope reg in this cwd first so the names can't conflict.
+        claude mcp remove "$_chan_server" >/dev/null 2>&1 || true
+        _mcp_dir="${KA_PANE_MCP_DIR:-$HOME/.knowledge-assistant/runtime/panes-mcp}"
+        mkdir -p "$_mcp_dir"
+        _mcp_cfg="$_mcp_dir/${_chan_kind}-${KA_CHANNEL}.json"
+        printf '{"mcpServers":{"%s":{"type":"http","url":"%s"}}}\n' "$_chan_server" "$_chan_url" > "$_mcp_cfg"
+        echo "[start-pane:$PANE_NAME] channel: isolated --mcp-config $_mcp_cfg → $_chan_url"
     fi
     _has_skip=0
     for _a in "$@"; do [ "$_a" = "--dangerously-skip-permissions" ] && _has_skip=1; done
-    if [ "$_has_skip" -eq 1 ]; then
-        set -- --dangerously-load-development-channels "server:$_chan_server" "$@"
-    else
-        set -- --dangerously-skip-permissions --dangerously-load-development-channels "server:$_chan_server" "$@"
-    fi
-    echo "[start-pane:$PANE_NAME] channel: kind=$_chan_kind name=$KA_CHANNEL flags prepended"
+    set -- --dangerously-load-development-channels "server:$_chan_server" "$@"
+    [ "$_has_skip" -eq 1 ] || set -- --dangerously-skip-permissions "$@"
+    [ -n "$_mcp_cfg" ] && set -- --mcp-config "$_mcp_cfg" "$@"
+    echo "[start-pane:$PANE_NAME] channel: kind=$_chan_kind name=$KA_CHANNEL mode=$_mcp_mode flags prepended"
 fi
 
 # Dynamically resolve `--resume <sid>`: if the configured session id no longer

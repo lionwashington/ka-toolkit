@@ -8,8 +8,8 @@
  *   outbound   : Lark group webhook POST (msg_type=text)
  *   identity   : isSelf = message.sender.id === self_open_id (+ sender_type user)
  *   watermark  : per-chat create_time (MINUTE precision) + message_id dedup
- *   attachment : NONE yet (returns '' → text-only; P3 will add after verifying
- *                lark-cli can fetch message resources — see proposal §6.7)
+ *   attachment : image/file/audio/video → lark-cli +messages-resources-download to
+ *                ATTACH_DIR; path surfaced in meta.attachment_path (CC reads via Read)
  *   flavor     : MCP instructions / reply description / status fields
  *
  * SECURITY: only the owner's own messages (sender.id === self_open_id) are ever
@@ -18,7 +18,7 @@
  * this platform into runChannelDaemon via the { platform, init } contract.
  */
 import { spawn } from 'child_process'
-import { readFileSync, writeFileSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { parseRoutingPrefix } from '../channel-core/src/routing.ts'
@@ -34,6 +34,7 @@ const CONFIG_PATH = join(DATA_DIR, 'config.json')
 const STATE_PATH = join(DATA_DIR, 'state.json')
 const LOG_PATH = join(DATA_DIR, 'channel.log')
 const PID_PATH = join(DATA_DIR, 'daemon.pid')
+const ATTACH_DIR = join(DATA_DIR, 'attachments')   // downloaded inbound attachments
 
 type GroupConfig = {
   name: string                       // display name, e.g. "Team Group"
@@ -194,6 +195,71 @@ async function postToLarkWebhook(target: string, text: string): Promise<string |
   }
 }
 
+// ─────────────────────────── inbound attachments (image/file/audio/video) ───────
+
+// Lark attachment ref: image_key for images, file_key for file/audio/video.
+type LarkAttachment = { messageId: string; resType: 'image' | 'file'; key: string; kind: string }
+
+// `lark-cli +chat-messages-list` renders a media message's content as a tagged string
+// with the resource key embedded, e.g. "[Image: img_xxx]" / "[File: file_xxx …]". Pull
+// the key out by msg_type; null for a pure-text/card message (no downloadable resource).
+export function extractLarkAttachment(m: any): LarkAttachment | null {
+  const mt: string = m?.msg_type ?? ''
+  const content = String(m?.content ?? '')
+  if (mt === 'image') {
+    const mm = content.match(/img_[A-Za-z0-9_-]+/)
+    return mm ? { messageId: m?.message_id ?? '', resType: 'image', key: mm[0], kind: 'image' } : null
+  }
+  if (mt === 'file' || mt === 'audio' || mt === 'media') {
+    const mm = content.match(/file_[A-Za-z0-9_-]+/)
+    return mm ? { messageId: m?.message_id ?? '', resType: 'file', key: mm[0], kind: mt } : null
+  }
+  return null
+}
+
+// Human-readable stand-in for `content` (lark media messages carry no caption here).
+export function attachmentPlaceholder(kind: string): string {
+  if (kind === 'image') return '[image]'
+  if (kind === 'audio') return '[audio]'
+  if (kind === 'media') return '[video]'
+  return '[file]'
+}
+
+// Download a Lark message resource to ATTACH_DIR via `lark-cli +messages-resources-download`;
+// return the absolute saved path (lark-cli reports it in data.saved_path, extension inferred).
+// '' on any failure/timeout → caller degrades to text-only (message never dropped). Hard
+// timeout so a stuck CLI can't wedge the per-group poller.
+const ATTACH_DOWNLOAD_TIMEOUT_MS = 20000
+function downloadLarkAttachment(messageId: string, resType: string, key: string, kind: string): Promise<string> {
+  return new Promise(resolve => {
+    try { mkdirSync(ATTACH_DIR, { recursive: true }) } catch { /* ignore */ }
+    const base = (messageId || key).replace(/[^A-Za-z0-9._-]/g, '_').slice(-80) || 'att'
+    // NB: +messages-resources-download has NO --format flag (it emits JSON natively);
+    // passing --format makes lark-cli print "Usage:" and the download fails.
+    const args = ['im', '+messages-resources-download', '--message-id', messageId,
+      '--type', resType, '--file-key', key, '--output', base, '--as', 'user']
+    const quoted = args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ')
+    const child = spawn('bash', ['-lc',
+      `export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; ${cfg.lark_cli_bin} ${quoted}`],
+      { cwd: ATTACH_DIR })
+    let stdout = '', stderr = ''
+    child.stdout.on('data', d => (stdout += d.toString()))
+    child.stderr.on('data', d => (stderr += d.toString()))
+    const timer = setTimeout(() => { child.kill('SIGKILL'); resolve('') }, ATTACH_DOWNLOAD_TIMEOUT_MS)
+    child.on('close', () => {
+      clearTimeout(timer)
+      try {
+        const j = JSON.parse(stdout)
+        const p = j?.data?.saved_path
+        if (j?.ok && p) { log(`attachment saved (${kind}): ${p}`); resolve(String(p)); return }
+      } catch { /* fall through to failure */ }
+      log(`attachment download failed (${kind}): ${(stdout || stderr).slice(0, 200)}`)
+      resolve('')
+    })
+    child.on('error', () => { clearTimeout(timer); resolve('') })
+  })
+}
+
 // ─────────────────────────── inbound: per-group polling (B1/B3/B4) ──────────────
 
 // Poll one Lark group: fetch → self-filter → watermark + msgid dedup → route →
@@ -202,15 +268,27 @@ async function postToLarkWebhook(target: string, text: string): Promise<string |
 // there are no MCP sessions (offline replay on reconnect).
 async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
   lastPollAt = new Date().toISOString()
-  // Watermark is OUR ISO string (set below via toISOString); first poll for a chat
-  // defaults to NOW → only deliver messages that arrive after the daemon starts.
-  const lastSeenIso = state.last_seen_msg_time[chatId] ?? new Date().toISOString()
+  // Watermark is OUR ISO string (set below via toISOString). First poll for a chat:
+  // anchor at the START of the current minute and PERSIST it immediately.
+  // 🔴 Lark create_time is MINUTE-precision ("2026-06-02 21:54" → 21:54:00). The old
+  // `?? new Date().toISOString()` re-anchored to a *sub-minute* NOW on EVERY poll (never
+  // persisted, since the only writer is the dispatch loop, which never ran) — so a
+  // minute-floored message ts was ALWAYS `< NOW` → every message dropped; watermark and
+  // dispatch stayed empty forever. Flooring to the minute + persisting fixes both: the
+  // anchor stops floating, and same-minute messages (ts == floor) survive the strict `<`.
+  let lastSeenIso = state.last_seen_msg_time[chatId]
+  if (lastSeenIso === undefined) {
+    const anchor = new Date(); anchor.setSeconds(0, 0)
+    lastSeenIso = anchor.toISOString()
+    state.last_seen_msg_time[chatId] = lastSeenIso
+    saveState(state)
+  }
   const lastSeenMs = new Date(lastSeenIso).getTime()
   const recent = state.recent_msg_ids ?? (state.recent_msg_ids = {})
   const recentIds = recent[chatId] ?? []
 
   const msgs = await fetchChatMessages(chatId)
-  const queue: { ts: number; sender: string; text: string; mid: string }[] = []
+  const queue: { ts: number; sender: string; text: string; mid: string; att: LarkAttachment | null }[] = []
   for (const m of msgs) {
     const sender = m?.sender ?? {}
     // B3 self-filter: only the owner, only real users (not bots).
@@ -220,9 +298,10 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
     if (!t || t < lastSeenMs) continue          // 🔴 strict < keeps same-minute msgs
     const mid = m?.message_id ?? ''
     if (mid && recentIds.includes(mid)) continue // dedup
+    const att = extractLarkAttachment(m)
     const text = extractText(m?.content)
-    if (!text) continue
-    queue.push({ ts: t, sender: sender.name ?? 'owner', text, mid })
+    if (!text && !att) continue                 // deliver if there's text OR a downloadable attachment
+    queue.push({ ts: t, sender: sender.name ?? 'owner', text, mid, att })
   }
   queue.sort((a, b) => a.ts - b.ts)             // chronological
 
@@ -238,18 +317,31 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
     saveState(state)
 
     // Routing (prefix in the message text): no prefix → main; `to X:` explicit;
-    // `to X` (no colon) only if X online, else main. Same as telegram.
-    const p = parseRoutingPrefix(q.text)
+    // `to X` (no colon) only if X online, else main. Same as telegram. Attachment
+    // messages have no user caption (lark-cli renders content as "[Image: <key>]"),
+    // so they don't route on that string — they go to main.
+    const routingText = q.att ? '' : q.text
+    const p = parseRoutingPrefix(routingText)
     let targetName: string
     let content: string
     const isOnline = (n: string | null): boolean => n === 'all' || (!!n && byName.has(n))
-    if (!p.matched) {
-      targetName = 'main'; content = q.text
+    if (!routingText || !p.matched) {
+      targetName = 'main'; content = routingText
     } else {
       const resolved = resolveTargetToName(p.rawTarget)
       if (p.hadColon) { targetName = resolved ?? `#${p.rawTarget}`; content = p.body }
       else if (isOnline(resolved)) { targetName = resolved as string; content = p.body }
-      else { targetName = 'main'; content = q.text }
+      else { targetName = 'main'; content = routingText }
+    }
+
+    // Attachment → download to a local path so the consumer CC can Read it; replace
+    // the rendered "[Image: <key>]" content with a clean placeholder; on download
+    // failure deliver the placeholder + a note (message is never dropped).
+    let attachment_path = ''
+    if (q.att) {
+      attachment_path = await larkPlatform.fetchAttachment(q.att)
+      if (!content) content = attachmentPlaceholder(q.att.kind)
+      if (!attachment_path) content += '\n (attachment download failed; text only)'
     }
 
     await inboundDispatch(targetName, content, {
@@ -258,6 +350,7 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
       sender_id: cfg.self_open_id,
       message_id: q.mid,
       ts: Math.floor(q.ts / 1000),
+      ...(attachment_path ? { attachment_path } : {}),
     })
   }
 }
@@ -300,6 +393,7 @@ export const larkPlatform: Platform = {
       '• Owner messages from Lark: the owner sent this from a Lark group (they read Lark on phone/laptop, NOT this terminal; your transcript never reaches them). ' +
       'Reply with the `reply` tool, passing the `chat_id` from the tag — it routes back to that same group. Replies are auto-prefixed with ' +
       `**[#${channelNumber}-${channelName}]** so the owner knows which session answered and can route back by number, e.g. \`to ${channelNumber}:\`.\n` +
+      '• When the meta tag has `attachment_path` (a local absolute file path), the owner sent an image/file — use the Read tool on that path to view it.\n' +
       '• source="cc": ANOTHER Claude Code session sent this; the tag also has `from_channel=<their channel>`. ' +
       'To answer them, call `send_to_channel` with target=<that from_channel>. Do NOT use `reply` for a cc message (that goes to the Lark group, not the sender).\n' +
       'Reply only when a response is actually warranted — do NOT reflexively bounce a message back (two CCs auto-replying to each other creates an infinite loop). ' +
@@ -312,9 +406,10 @@ export const larkPlatform: Platform = {
     const sender = msg?.sender ?? {}
     return sender.id === cfg.self_open_id && (!sender.sender_type || sender.sender_type === 'user')
   },
-  // No attachment support yet (P3, pending lark-cli resource-fetch verification).
-  fetchAttachment(_ref: any): Promise<string> {
-    return Promise.resolve('')
+  // Download an image/file/audio/video resource to ATTACH_DIR; '' on any failure.
+  fetchAttachment(ref: any): Promise<string> {
+    if (!ref?.key || !ref?.messageId) return Promise.resolve('')
+    return downloadLarkAttachment(ref.messageId, ref.resType, ref.key, ref.kind)
   },
   startInbound(dispatch: InboundDispatch): void {
     inboundDispatch = dispatch
