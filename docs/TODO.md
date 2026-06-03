@@ -30,25 +30,3 @@ No knowledge-base **data** changes are needed (R1+R2 are pure code). The vector 
 so resolution changes don't double-count.
 
 _Deferred by request 2026-06-03 — fix later._
-
-## Telegram: captionless attachment ignores routing intent → goes to main
-
-**Bug.** Sending a photo/file meant for a specific channel (`to N`) can land on `main`.
-Telegram routing parses the prefix from `text || caption` (`telegram-platform.ts`); a
-photo has no `text`, and if its **caption is empty** there is no prefix → it defaults to
-`main` (delivered with an `[image]` placeholder). The routing prefix only takes effect
-when it is in the **photo's own caption** — a separately-typed `to N` text message does
-not apply to the next photo. Also: `to N` **without a colon** only routes when channel N
-is online; `to N:` (colon) routes explicitly regardless.
-
-**Workaround (no code):** put the prefix in the photo's caption, with a colon — `to N:`.
-
-**Proposed fix (option B, mirrors the lark daemon):** track each chat's last-text
-destination; a captionless attachment follows it. Caveat: only helps if that text
-actually routed to N (i.e. used a colon, or N was online) — a no-colon `to N` to an
-offline N routes to main, so the attachment would too. Pair with the colon guidance.
-(Alternative: deliver captionless attachments to main but append a hint to use a
-`to N:` caption.) Pure-code change in `packages/telegram-channel/telegram-platform.ts`;
-needs an `install.sh` redeploy to reach the running daemon.
-
-_Deferred by request 2026-06-03 — fix later._
