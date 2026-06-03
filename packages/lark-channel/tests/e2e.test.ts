@@ -103,20 +103,26 @@ describe('routing', () => {
   })
 })
 
-describe('sticky attachment routing', () => {
-  test('a text naming a channel makes THIS chat\'s subsequent attachments stick to it', async () => {
-    // a text "to ka:" points this chat's attachment target at ka
-    daemon.pushMessages(CHAT, [ownerMsg({ mid: 's-text', text: 'to ka: incoming pics', createTime: nextTime(), selfOpenId: SELF })])
+describe('attachment routing follows the last text (option B)', () => {
+  const img = (mid: string, key: string) => ({
+    message_id: mid, create_time: nextTime(),
+    sender: { id: SELF, sender_type: 'user', name: 'Owner' },
+    msg_type: 'image', content: `[Image: ${key}]`,
+  })
+  test('`to ka:` points images at ka; a later plain text resets them to main', async () => {
+    // a text routed to ka → this chat's subsequent attachments go to ka
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'b-text1', text: 'to ka: incoming pics', createTime: nextTime(), selfOpenId: SELF })])
     await waitFor(() => ka.received.some(r => r.content === 'incoming pics'), 5000)
-    // a following image (no channel of its own) → sticks to ka, NOT main
-    daemon.pushMessages(CHAT, [{
-      message_id: 's-img', create_time: nextTime(),
-      sender: { id: SELF, sender_type: 'user', name: 'Owner' },
-      msg_type: 'image', content: '[Image: img_sticky_1]',
-    }])
-    const ok = await waitFor(() => ka.received.some(r => r.meta.message_id === 's-img' && r.meta.attachment_path), 6000)
-    assert.ok(ok, 'image should stick to ka (the last channel named by a text)')
-    assert.ok(!main.received.some(r => r.meta.message_id === 's-img'), 'image must NOT fall through to main')
+    daemon.pushMessages(CHAT, [img('b-img1', 'img_b_1')])
+    assert.ok(await waitFor(() => ka.received.some(r => r.meta.message_id === 'b-img1' && r.meta.attachment_path), 6000), 'image1 → ka (follows the to-ka text)')
+    assert.ok(!main.received.some(r => r.meta.message_id === 'b-img1'), 'image1 must NOT go to main')
+
+    // a later PLAIN text (→ main) re-points attachments back to main (the v3 fix)
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'b-text2', text: 'back to main now', createTime: nextTime(), selfOpenId: SELF })])
+    await waitFor(() => main.received.some(r => r.content === 'back to main now'), 5000)
+    daemon.pushMessages(CHAT, [img('b-img2', 'img_b_2')])
+    assert.ok(await waitFor(() => main.received.some(r => r.meta.message_id === 'b-img2' && r.meta.attachment_path), 6000), 'image2 → main (a plain text reset the target)')
+    assert.ok(!ka.received.some(r => r.meta.message_id === 'b-img2'), 'image2 must NOT stick to ka')
   })
 })
 

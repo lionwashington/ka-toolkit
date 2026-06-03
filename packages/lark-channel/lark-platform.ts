@@ -108,12 +108,12 @@ let inboundDispatch: InboundDispatch
 // Per-group scheduler bookkeeping.
 const groupLastPolledMs: Record<string, number> = {}
 const groupInFlight: Record<string, boolean> = {}
-// Sticky attachment routing. Lark images carry no channel/caption of their own, so
-// a TEXT that names a channel ("to spot: …") sets where THIS chat's subsequent
-// attachments go — and it STAYS that channel for all following attachments until a
-// later text names a different channel. A no-channel text (→ main) leaves it
-// unchanged. Per-chat, in-memory → a daemon restart resets to main (re-issue
-// `to <chan>:` to re-point).
+// Attachment routing follows the MOST RECENT text's destination (option B). Lark
+// images carry no channel of their own, so each attachment goes wherever this chat's
+// last text went: a plain text (→ main) points subsequent attachments at main; a
+// `to spot:` text points them at spot; they stay there until the next text moves
+// them. Per-chat, in-memory → a daemon restart resets to main (send any text to
+// re-point). Mental model: "images go where my last message went."
 const attachTarget = new Map<string, string>()
 
 // ─────────────────────────── lark-cli spawn (auth via lark-cli's own creds) ─────
@@ -351,10 +351,10 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
         else if (isOnline(resolved)) { targetName = resolved as string; content = p.body }
         else { targetName = 'main'; content = q.text }
       }
-      // Sticky: if this text named a real channel, point THIS chat's subsequent
-      // attachments there until a later text names a different one. A no-channel
-      // text (→ main) or an offline-miss (→ "#name") leaves the sticky target as-is.
-      if (targetName !== 'main' && !targetName.startsWith('#')) attachTarget.set(chatId, targetName)
+      // Point THIS chat's subsequent attachments at wherever this text went (option
+      // B): plain text → main, `to spot:` → spot, etc. Only an offline-miss
+      // ("#name", not a real online destination) is skipped, leaving the prior target.
+      if (!targetName.startsWith('#')) attachTarget.set(chatId, targetName)
     }
 
     await inboundDispatch(targetName, content, {
