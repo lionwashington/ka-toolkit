@@ -124,57 +124,113 @@ The acyclic shape (4 → {1,3}; 2 → 3; 1,3 leaves) is what makes the split cle
   lives in this repo; `install.sh` produces the runtime under
   `~/.knowledge-assistant/runtime/`. gen3 changes only the source organization.
 
-## 5. Current → target package mapping (the gen3 reorg)
+## 5. The standard (one axis) and why today is inconsistent
 
-Today the source maps to the four parts **unevenly** — Part 3 is already clean,
-but Parts 1/2/4 are interleaved (esp. `ops/` is a mixed bucket of workshop +
-cron + distill sh). gen3 regroups source so each part is self-contained.
+Today the repo mixes **four different axes** with no single rule:
 
-| Part | Already-aligned source | Interleaved / to regroup |
-|------|------------------------|--------------------------|
-| 1 KB+capability | `packages/core`, `mcp-server`, `skill(s)`, `*-mcp` | `ops/kb/distill-bg.sh`, `distill-status.sh`, `ops/kb/distill-bg-worker.sh` (KB sh currently in ops/) |
-| 2 workshop | — | `ops/cli/workshop.sh`, `ops/lib/start-pane.sh`, `tmux-helpers.sh`, `yaml-parse.sh`, `inject-prompt.sh`, `wait-ready.sh`, `yaml-upsert-mate.py` (mixed in ops/) |
-| 3 channels | `packages/channel-core`, `telegram-channel`, `lark-channel` | — (already clean) |
-| 4 cron | — | `ops/cli/cron*`, `ops/lib/cron/`, `ops/scripts/cron-run.sh` (mixed in ops/) |
-| cross-cutting | `bin/ka`, `ops/cli/common.sh`, `help.sh`, `doctor.sh`, `status.sh` | the ka CLI dispatcher + shared helpers stay shared |
+- by **artifact type**: `packages/` (TS) vs `ops/` (sh) vs `tests/`
+- by **role**: `ops/cli/` (entries) vs `ops/lib/` (libraries) vs `ops/scripts/`
+- by **functional part**: `ops/kb/` (just added)
+- by **data**: `ops/panes/`
 
-**Reorg principle**: split the `ops/` "one bucket of sh" so workshop / cron /
-KB-distill live in part-aligned places, while keeping `common.sh` + the `ka`
-dispatcher shared. The TS packages mostly already align (just confirm boundaries
-in the doc). The exact target directory names are decided per-part during the
-incremental move (see §6).
+…plus config templates scattered (`config/` has only config+secrets; the
+workshop template sits in `ops/`, the daemon templates in `packages/`, cron has
+none) and **two** `scripts/` dirs (root `scripts/e2e-test.sh` vs
+`ops/scripts/cron-run.sh`). That is the "no clustering" the owner flagged.
 
-## 6. Execution plan (gen3 = step 1; gen4 = step 2)
+**The gen3 standard — a single axis:** organize the **whole repo by the four
+functional parts**, plus exactly three non-part buckets. Every top-level dir is
+one of: a **part** (`kb` / `workshop` / `channels` / `cron`), the **shared**
+cross-cutting bucket, **config** (all templates), or **tests** (the harness).
+Nothing is organized by artifact-type or role at the top level any more.
+
+## 6. Final target structure
+
+```
+ka-toolkit/
+├── kb/             Part 1 — KB + capability (per-runtime ability)
+│   ├── core/             capture · distill · retrieval · knowledge-store   (TS, was packages/core)
+│   ├── mcp-server/       kb_search / kb_read_topic / …                      (TS, was packages/mcp-server)
+│   ├── skill/  skills/   /kb + daily-brief · mail · calendar · jd · …       (was packages/skill, /skills)
+│   ├── tools/            domain MCP servers: hkprop · ibkr · market · nutrition  (was packages/*-mcp)
+│   ├── adapter-cc/       cc capture-hook + install                          (was packages/adapters/claude-code)
+│   └── ops/             distill-bg.sh · distill-status.sh · distill-bg-worker.sh
+├── workshop/       Part 2 — orchestration (sh only; no TS package)
+│   └── ops/             workshop.sh · start-pane.sh · tmux-helpers.sh · yaml-parse.sh ·
+│                        inject-prompt.sh · wait-ready.sh · yaml-upsert-mate.py · runtimes/cc · panes/
+├── channels/       Part 3 — communication (the daemon)
+│   ├── core/             channel-core kernel: routing · dispatch · sessions · http   (TS)
+│   ├── telegram/         telegram platform adapter                          (TS, was packages/telegram-channel)
+│   └── lark/             lark platform adapter                              (TS, was packages/lark-channel)
+├── cron/           Part 4 — scheduling (sh only)
+│   └── ops/             cron.sh · cron/<internals> · cron-run.sh · maintenance/
+├── shared/         cross-cutting (spans all parts — not a part itself)
+│   ├── bin/ka            the dispatcher (routes `ka workshop|daemon|cron|distill|…`)
+│   └── ops/             common.sh · doctor.sh · status.sh · help.sh
+├── config/         ALL config templates, centralized
+│   ├── config.example.yaml · secrets.example.yaml
+│   ├── workshop.example.yaml · cron.example.yaml
+│   └── telegram-daemon.example.json · lark-daemon.example.json
+├── tests/          cross-cutting test infrastructure (the Docker harness + cases)
+├── docs/  ·  install.sh  ·  pnpm-workspace.yaml  ·  package.json  ·  tsconfig.base.json
+```
+
+### Why each thing lands where (rationale)
+
+- **Each part is self-contained**: a part holds *everything* it owns — its TS
+  package(s), its sh tooling, nothing scattered. Read `kb/` and you see the whole
+  KB part; you never hunt across `packages/` + `ops/cli` + `ops/lib`.
+- **`shared/` exists because some code genuinely spans parts**: `common.sh`
+  (sourced everywhere), the `ka` dispatcher (routes to all parts), and
+  `doctor`/`status` (report across workshop + daemon + cron + kb). Forcing these
+  into one part would be wrong — so one explicit cross-cutting bucket, no more.
+- **`config/` centralizes ALL templates** (problem 2): config + secrets +
+  workshop + cron + per-daemon templates live in one place; the runtime still
+  reads its live copies from `~/.knowledge-assistant/`.
+- **`tests/` is the one infra bucket** (problem 1/3): the Docker harness tests
+  *all* parts, so it isn't a part; the root `scripts/e2e-test.sh` folds in here,
+  and `ops/scripts/cron-run.sh` goes to `cron/` (it's cron's entrypoint). The two
+  stray `scripts/` dirs disappear.
+- **No top-level `packages/` vs `ops/`** (problems 1 & 4): the TS-vs-sh
+  distinction becomes a *sub-detail inside a part* (`kb/core` is TS, `kb/ops` is
+  sh), not a top-level axis. pnpm workspace globs change from `packages/*` to the
+  part dirs (`kb/*`, `channels/*`).
+- **workshop & cron have no TS** — they're pure sh, so they're just
+  `workshop/ops/` and `cron/ops/`. That's expected, not a gap.
+
+### Migration implications (all design-side; runtime untouched)
+
+- `pnpm-workspace.yaml` globs + every cross-package TS import path (e.g.
+  `mcp-server` → `core`, `telegram` → `channel-core`) get rewritten to the new
+  locations.
+- `install.sh` source paths get rewritten — but it deploys into the **same**
+  runtime layout (`runtime/ops`, `runtime/core-cli`, `runtime/<kind>-daemon`, …),
+  so the running system is unaffected (gen3 rule).
+- `tsup`/`esbuild` entry paths + `tests/` references updated accordingly.
+
+## 7. Execution plan
 
 **gen3 (this branch) — design reorg, runtime layout UNCHANGED:**
 
-1. This doc (the contract) → owner review.
-2. Reorganize source **one part at a time**, Docker-green after each (the repo
-   is always green; nothing big-bang).
-3. `install.sh` maps the new source paths onto the **existing** runtime layout
-   (`runtime/ops`, `runtime/core-cli`, `runtime/<kind>-daemon`, …) — so the
-   deployed/running system is unaffected through the whole reorg.
-4. Full verification on the `ka-gen3` branch = **build all packages + ops Docker
-   (the case suite) + channel e2e (telegram/lark fakes) + each MCP smoke**, all
-   green.
-5. `install.sh` → runtime on this Mac → run tests pass.
-6. `install.sh` → runtime on the Ubuntu machine → run tests pass.
+1. This doc (the contract) → owner approves the final structure **first**.
+2. Then move **one part at a time**, Docker-green after each (repo always green;
+   nothing big-bang). (The earlier lone `ops/kb/` move is folded into this — it
+   gets re-aligned to the agreed structure.)
+3. `install.sh` maps new source paths → the **existing** runtime layout.
+4. Full verification = build all packages + ops Docker suite + channel e2e
+   (telegram/lark fakes) + each MCP smoke, all green.
+5. `install.sh` → runtime on this Mac → tests pass.
+6. `install.sh` → runtime on the Ubuntu machine → tests pass.
 
 Because the running runtime keeps the old deployed code until step 5, **the
-production system has zero risk for the entire design reorg**.
+production system has zero risk through the entire design reorg.**
 
-**gen4 (later) — restructure the runtime layout** into the four parts (changes
-`install.sh` deploy paths + how scripts resolve each other). Deferred; out of
-scope for gen3.
+**gen4 (later)** — restructure the **runtime** layout to mirror the four parts
+(changes `install.sh` deploy paths). Deferred; out of scope for gen3.
 
-## 7. Open questions for review
-
-1. Target directory shape for the regrouped `ops/` sh — e.g. keep `ops/` and add
-   `ops/workshop/`, `ops/cron/`, `ops/kb/` subdirs, vs promote some to packages?
-   (Leaning: subdirs under `ops/` for the sh, since they're host-tooling, not
-   shippable TS packages.)
-2. Should the KB-distill sh (`distill-bg*.sh`, worker) move next to
-   `packages/core` (part 1) or stay in `ops/` under an `ops/kb/`? (Leaning:
-   `ops/kb/` — it's orchestration sh around the core CLI, not core TS.)
-3. Naming: keep "daemon" or rename Part 3 to "channels" in docs/dirs? (Leaning:
-   keep `*-daemon` runtime dirs; use "channels" as the conceptual name in docs.)
+> Decision needed from the owner: confirm this final structure. The one judgment
+> call is **§6's "no top-level packages/ vs ops/"** — fully by-part (recommended,
+> answers all four problems, but rewrites pnpm-workspace + TS imports) vs a
+> lighter variant that keeps `packages/` and `ops/` at the top but sub-groups
+> each by part (less churn, but retains the artifact-type split the owner
+> flagged). Recommendation: the fully by-part structure above.
