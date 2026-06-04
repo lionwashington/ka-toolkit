@@ -20,4 +20,9 @@ AGENTS.md
 GEMINI.md
 
 # Test run artifacts
-ops/tests/results/
+tests/results/
+
+# Local runtime / per-machine scaffolding (migrated from the old ops/.gitignore)
+state/
+*.local.env
+workshop/ops/panes/*.local.env
