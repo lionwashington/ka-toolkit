@@ -2,7 +2,7 @@
 # cc/ready-signals.sh — CC adapter: ready-state predicates.
 #
 # Pure predicates on a captured-pane string. No side effects, no tmux calls.
-# See ops/lib/runtimes/interface.md §runtime::ready_match.
+# See docs/components/workshop-runtime-interface.md §runtime::ready_match.
 
 # runtime::ready_match <captured_text>
 # Exit 0 if the text looks like a booted-and-idle CC TUI, 1 otherwise.

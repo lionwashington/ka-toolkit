@@ -3,7 +3,7 @@
 > **This document is KA's canonical architecture overview.** The four-layer model, the daemon + workshop
 > pillars, and the five design principles are unchanged since ka-gen2 (2026-05-31); the paths and the
 > deployed runtime layout below reflect the **ka-gen3 reorganization** (source organized by the four
-> functional parts; runtime is a single root with no `runtime/` wrapper — see `docs/ARCHITECTURE_GEN3.md`).
+> functional parts; runtime is a single root with no `runtime/` wrapper — see §1.5).
 > It no longer describes any retired legacy paths. If it conflicts with the code, the code wins (ground truth: top-level `install.sh`,
 > `workshop/ops/workshop.sh`, `shared/bin/ka`, `docs/telegram-channel-design.md`).
 >
@@ -106,6 +106,78 @@ clone it on a different machine, load it with a different CLI, and the same Agen
 | **Change the internal structure of the workspace** | ❌ this is the Agent itself |
 
 **Conclusion**: KB + PA are the architectural foundation; KA / CC / tmux are all replaceable periphery.
+
+---
+
+## §1.5 The four functional parts (the KA layer, decomposed)
+
+§1 stacks four *layers* (Agent / KA / runtime / host) — "what runs on what". A
+second, orthogonal cut decomposes **the one KA layer itself** into four functional
+**parts**, each a distinct concern. This is the axis the whole repo (and the
+deployed runtime) is organized by since gen3.
+
+| # | Part | Concern | One-line role | Code |
+|---|------|---------|---------------|------|
+| 1 | **KB + capability** | capability | give a *single* agent runtime more ability | `kb/` |
+| 2 | **workshop** | orchestration | manage *many* co-located runtimes | `workshop/` |
+| 3 | **channels** (daemon) | communication | message in/out + runtime↔runtime | `channels/` |
+| 4 | **cron** | scheduling | fire things on a schedule | `cron/` |
+
+- **Part 1 — KB + capability**: everything that makes *one* runtime more capable —
+  kb core (`kb/core`: capture→distill→deposit→query), kb MCP server
+  (`kb/mcp-server`), skills (`kb/skill`, `kb/skills`), domain MCP tool servers
+  (`kb/tools/*`). Consumed by a runtime; it does not orchestrate / message / schedule.
+- **Part 2 — workshop**: brings up and manages *multiple* runtime processes, each in
+  its own tmux pane + cwd (`workshop/ops/*`), plus the tmux-native collaboration mode
+  (capture-pane / send-keys). Owns processes + panes; not the messaging channel.
+- **Part 3 — channels / daemon**: a single long-lived channel daemon (telegram or
+  lark) over MCP-over-HTTP — external IM↔runtime (`reply`) + runtime↔runtime
+  (`send_to_channel` cc2cc). `channels/core` (kernel) + `channels/{telegram,lark}`
+  (platform adapters). Owns message transport only.
+- **Part 4 — cron**: declarative OS-level scheduling (`cron/ops/*` → launchd/crontab).
+  Cross-cutting — owns *when*, not *what*; the jobs it fires belong to Parts 1/3.
+
+```
+   Part 4 cron ──fires──▶ Part 1 (distill/brief) · Part 3 (daemon self-heal)
+   Part 2 workshop ──messages via──▶ Part 3 channels (cc2cc / owner reply)
+   Part 1 capability ◀──called by── the agent runtime (each pane is a runtime)
+```
+
+The `ka` CLI (`shared/bin/ka`) is cross-cutting, not a fifth part — its verbs map
+onto the parts (`ka workshop`→2, `ka daemon`→3, `ka cron`→4, `ka distill`→1).
+
+### Repo / runtime structure (organized by the four parts)
+
+Every top-level dir is one of: a **part** (`kb`/`workshop`/`channels`/`cron`), the
+**shared** cross-cutting bucket, **config** (all templates), or **tests**. The
+deployed runtime mirrors this directly under `KA_HOME` (no `runtime/` wrapper; see §4).
+
+```
+ka-toolkit/
+├── kb/             Part 1 — KB + capability
+│   ├── core/             capture · distill · retrieval · knowledge-store      (TS)
+│   ├── mcp-server/       kb_search / kb_read_topic / kb_list_topics / kb_status (TS)
+│   ├── skill/  skills/   /kb + daily-brief · mail · calendar · jd · …
+│   ├── tools/            domain MCP servers: hkprop · ibkr · market · nutrition (TS/py)
+│   ├── adapter-cc/       cc capture-hook + install                            (TS)
+│   └── ops/              distill-bg.sh · distill-bg-worker.sh · distill-status.sh
+├── workshop/       Part 2 — orchestration (sh only)
+│   └── ops/              workshop.sh · start-pane.sh · tmux-helpers.sh · yaml-parse.sh ·
+│                         inject-prompt.sh · wait-ready.sh · runtimes/cc · panes/
+├── channels/       Part 3 — communication (the daemon)
+│   ├── core/             channel-core kernel: routing · dispatch · sessions · http (TS)
+│   ├── telegram/         telegram platform adapter                            (TS)
+│   └── lark/             lark platform adapter                                (TS)
+├── cron/           Part 4 — scheduling (sh only)
+│   └── ops/              cron.sh · cron-run.sh · cmd/ · internals/ · maintenance/
+├── shared/         cross-cutting (spans all parts — not a part itself)
+│   ├── bin/ka            the dispatcher (routes `ka workshop|daemon|cron|distill|…`)
+│   └── ops/              common.sh (the one directory map) · doctor.sh · status.sh · help.sh
+├── config/         ALL config templates (yaml only — full-B dropped per-daemon json)
+│   └── config.example.yaml · secrets.example.yaml · workshop.example.yaml
+├── tests/          cross-cutting test infrastructure (the Docker harness + cases)
+└── docs/  ·  install.sh  ·  pnpm-workspace.yaml  ·  package.json  ·  tsconfig.base.json
+```
 
 ---
 

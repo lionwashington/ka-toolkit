@@ -5,7 +5,7 @@ workshop (multi-CC tmux collaboration) + **channel daemon = Lark** (not telegram
 cron scheduled tasks. Each CC sends/receives through a Lark group: send a message in the group → the CC receives it; the CC calls `reply` → it goes back to the group.
 
 > Verified end-to-end in Docker Ubuntu (Linux aarch64 / Node 22 / pnpm / python3): the install flow,
-> the lark daemon build+run, the lark tests 19/19, the crontab cron backend — all passed (`ops/tests/ubuntu-lark.Dockerfile`).
+> the lark daemon build+run, the lark tests, the crontab cron backend — all passed (`tests/ubuntu-lark.Dockerfile`).
 > Lark attachments ARE supported (image/file/audio/video → downloaded via `lark-cli +messages-resources-download` to the daemon's `attachments/`, surfaced to the CC as `meta.attachment_path` to Read). Cross-platform cc2cc in workshop is not done (lark groups can talk to each other, isolated from telegram).
 
 ---

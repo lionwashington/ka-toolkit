@@ -55,37 +55,3 @@ No knowledge-base **data** changes are needed (R1+R2 are pure code). The vector 
 so resolution changes don't double-count.
 
 _Deferred by request 2026-06-03 — fix later._
-
-## distill OOM on very large snapshots — ✅ RESOLVED 2026-06-04
-
-**Fixed** in `kb/ops/distill-bg-worker.sh`: the worker now splits a snapshot
-larger than `KA_DISTILL_CHUNK_BYTES` (default 8 MiB) into multiple passes, each a
-**fresh `claude -p`** over `[cur_offset, cur_offset+CHUNK]`, so peak memory stays
-bounded. It reads the persisted `last_parsed_offset` from the raw frontmatter to
-drive the loop and verifies the offset advances each pass (aborts cleanly if a
-pass makes no progress, rather than looping forever). A snapshot that fits in one
-chunk runs exactly as before (single pass). Covered by test 28-distill-chunk.
-The original report is kept below for context.
-
----
-
-**Bug (robustness).** A `/kb distill` over a very large snapshot is hard-killed
-(OOM) before it can run — the headless distiller loads the whole input at once.
-
-- Repro: the main session (`dbe22096`) snapshot was **86 MB / 3871 messages**.
-  After `/kb distill` started, the worker was hard-killed; the run log held only
-  **111 bytes** (a single `start_iso` line — no error, and it never wrote the
-  failure sentinel). `ka distill status` then showed
-  `running-but-pid-dead (likely crashed)`.
-- Same symptom as the earlier ~43 MB self-transcript crash. Pure
-  **input-too-large** → OOM/kill, not a logic error.
-- `chdir` is **ruled out** (already fixed — the worker derives `WORKSPACE_CWD`
-  from config.yaml, no placeholder).
-
-**Proposed fix (to design, not implemented):** make the distiller process large
-snapshots **chunked / streaming**, or segment an over-threshold snapshot into
-several distill passes, so it never tries to hold the whole input in memory.
-Secondary: when the worker dies without writing a result, still emit the failure
-sentinel (so `ka distill status` reports `failed`, not a stuck `running`).
-
-**Priority: low — backlog.** Deferred by the owner 2026-06-04 ("放进 todo,先不急修").

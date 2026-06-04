@@ -4,7 +4,7 @@ Standalone background daemon that bridges **Lark group chats** with **multiple C
 the owner routes group messages to different CCs with `to <name>: content`, and a CC replies back to the group via the `reply` tool (auto-prefixed with `[#<number>-<name>]`).
 The webhook token lives only at this single daemon exit; **CC processes never touch it**.
 
-> **Architecture design** is in [`ARCHITECTURE.md`](./ARCHITECTURE.md); ops/troubleshooting in [`skill/SKILL.md`](./skill/SKILL.md).
+> **Architecture design** is in [`ARCHITECTURE.md`](./ARCHITECTURE.md); ops/troubleshooting in the lark-channel skill (`channels/lark/skill/SKILL.md`).
 
 ```
 Lark (group msg)

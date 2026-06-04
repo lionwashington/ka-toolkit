@@ -64,7 +64,7 @@ The dataset archive (~60 MB) is **not committed to this repo**. Before building,
 `opennutrition-dataset-2025.1.zip` from <https://www.opennutrition.app/> and place it at:
 
 ```
-packages/mcp-opennutrition/data/opennutrition-dataset-2025.1.zip
+kb/tools/mcp-opennutrition/data/opennutrition-dataset-2025.1.zip
 ```
 
 `npm run build` (via `convert-data`) decompresses it and builds the local SQLite database.

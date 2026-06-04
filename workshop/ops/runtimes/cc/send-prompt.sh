@@ -1,7 +1,7 @@
 #!/bin/bash
 # cc/send-prompt.sh — CC adapter: paste + submit a prompt into a tmux pane.
 #
-# See ops/lib/runtimes/interface.md §runtime::inject_prompt.
+# See docs/components/workshop-runtime-interface.md §runtime::inject_prompt.
 
 # runtime::inject_prompt <tmux_target> <text>
 # Pastes `text` literally and submits. Two CC-specific quirks baked in:

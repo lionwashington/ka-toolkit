@@ -1,7 +1,7 @@
 # lark-channel Architecture Design
 
 > v0.4.0 · 2026-05-20
-> Companion docs: user manual in [`README.md`](./README.md); ops/troubleshooting in [`SKILL.md`](../../.claude/skills/lark-channel/SKILL.md)
+> Companion docs: user manual in [`README.md`](./README.md); ops/troubleshooting in the lark-channel skill (`channels/lark/skill/SKILL.md`)
 
 ## 1. Goal & Positioning
 

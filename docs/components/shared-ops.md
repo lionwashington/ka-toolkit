@@ -4,7 +4,7 @@ Operational plumbing for the Knowledge Assistant **workshop** — a set of
 independent Claude Code (CC) processes, each running in its own tmux pane + cwd,
 talking to the owner and to each other through the **telegram-channel daemon**.
 
-Everything here is driven by the `ka` CLI (`bin/ka` → `ops/cli/*.sh`). The
+Everything here is driven by the `ka` CLI (`shared/bin/ka` → each part's `*/ops/*.sh`). The
 canonical entry point is `ka workshop`. The whole tree is deployed to
 `~/.knowledge-assistant/runtime/` by the top-level `install.sh`.
 
@@ -90,7 +90,7 @@ goes through the daemon, see below). Every other entry is a mate; each mate's
 `name` is sanitized into its own daemon channel.
 
 > Migrating from the legacy two-section schema (`panes:` + `telegram: true`)?
-> Run `ops/lib/migrate-workshop-yaml.py <workshop.yaml>` — it folds `panes:` into
+> Run `workshop/ops/migrate-workshop-yaml.py <workshop.yaml>` — it folds `panes:` into
 > `mates:` and rewrites `telegram: true` → `main: true` (data-preserving).
 
 ## telegram-channel daemon (not a plugin)
@@ -130,7 +130,7 @@ registration, `.claude/settings.json`) applies. Three layers enforce this:
 `ka workshop` refuses to (re)build the `workshop` session while you're attached
 to it (detach with `Ctrl-b d`, or run from outside tmux, or use `--dry-run`).
 Destructive scenarios (existing session, restart
-loops, corrupt config) are covered by `ops/tests/` — a Docker harness that
+loops, corrupt config) are covered by `tests/` — a Docker harness that
 simulates tmux + multi-pane Claude and **never touches your live workshop
 session**.
 
@@ -149,7 +149,7 @@ session**.
 Scheduled jobs are declared in `~/.knowledge-assistant/cron.yaml` and managed via
 `ka cron` (`add` / `remove` / `enable` / `disable` / `install` / `list` / …),
 which syncs the yaml to the OS scheduler (macOS launchd plists). At fire time
-launchd invokes `ops/scripts/cron-run.sh <name>`, which resolves the job, takes a
+launchd invokes `cron/ops/cron-run.sh <name>`, which resolves the job, takes a
 per-name flock, and runs it by `kind`: `shell`, `inject-prompt` (sends a prompt
 into a CC pane), or `ka-cli`. Full design: `docs/KA_CRON_DESIGN.md`.
 

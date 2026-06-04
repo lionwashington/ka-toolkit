@@ -4,7 +4,7 @@ Standalone background daemon that bridges **the owner's Telegram DM** with **mul
 the owner routes messages to different CCs with `to <channel name>: content`, and a CC replies to the owner's DM via the `reply` tool.
 The credential (bot token) lives only at this single daemon exit; **CC processes never touch the token**.
 
-> Implementation-level design / invariants / historical decisions are in [`docs/telegram-channel-design.md`](../../docs/telegram-channel-design.md) (as-built).
+> Implementation-level design / invariants / historical decisions are in [`telegram-channel-design.md`](../../telegram-channel-design.md) (as-built).
 
 ```
 Owner's Telegram DM

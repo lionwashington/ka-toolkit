@@ -54,8 +54,8 @@ All tools accept a ``source`` argument (default ``"28hse"``). Accepted values:
 
 Once the package and venv are installed on the machine:
 
-- Code: `<repo>/packages/hkprop-mcp/`
-- Venv: `~/.knowledge-assistant/hkprop-venv/`
+- Code: `<repo>/kb/tools/hkprop-mcp/`
+- Venv: `~/.knowledge-assistant/kb/venvs/hkprop/`
 - MCP entry: `~/.claude.json` → `mcpServers.hkprop`
 
 **To activate**: restart Claude Code. The tools appear as:
@@ -203,8 +203,8 @@ narrow set of HTML-only fields needs re-tuning.
 ## Testing
 
 ```bash
-cd <repo>/packages/hkprop-mcp
-~/.knowledge-assistant/hkprop-venv/bin/python -m pytest tests/ -v
+cd <repo>/kb/tools/hkprop-mcp
+~/.knowledge-assistant/kb/venvs/hkprop/bin/python -m pytest tests/ -v
 ```
 
 ## Why 28Hse + Centanet?

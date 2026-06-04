@@ -6,7 +6,7 @@
 # script where it is (tmux runs it directly as an executable) and this adapter
 # just exposes its path + the CC-specific binary name.
 #
-# See ops/lib/runtimes/interface.md §runtime::launch_pane.
+# See docs/components/workshop-runtime-interface.md §runtime::launch_pane.
 
 # runtime::launch_pane_script
 # Echo the absolute path of the pane entrypoint. start.sh uses this to build

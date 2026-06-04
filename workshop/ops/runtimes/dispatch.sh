@@ -1,14 +1,14 @@
 #!/bin/bash
-# ops/lib/runtimes/dispatch.sh — source the adapter files for a runtime.
+# workshop/ops/runtimes/dispatch.sh — source the adapter files for a runtime.
 #
 # Usage (from a `ka` CLI subcommand):
 #
 #     source "$KA_RUNTIMES_DIR/dispatch.sh"
-#     runtime_load "cc"                 # sources ops/lib/runtimes/cc/*.sh
+#     runtime_load "cc"                 # sources workshop/ops/runtimes/cc/*.sh
 #     runtime::ready_match "$content"   # call any adapter function
 #
-# Adapters live at `ops/lib/runtimes/<name>/*.sh` and define shell functions
-# named `runtime::<verb>` (see ops/lib/runtimes/interface.md). Only one runtime
+# Adapters live at `workshop/ops/runtimes/<name>/*.sh` and define shell functions
+# named `runtime::<verb>` (see docs/components/workshop-runtime-interface.md). Only one runtime
 # is active per CLI invocation — we use a flat `runtime::` namespace instead of
 # an associative dispatch table to stay bash 3.2 compatible.
 #
