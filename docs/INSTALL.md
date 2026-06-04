@@ -89,8 +89,10 @@ All paths below are relative to `KA_HOME` (`~/.knowledge-assistant`).
 | `--dry-run` | Print every action; change nothing. |
 | `--only <component>` | Deploy a single component. Valid: `ka`, `node-mcp`, `python-mcp`, `daemon`, `hooks`, `core-cli`, `skills`, `config`. |
 | `--switch` | After deploying, flip live registrations to the runtime (MCP, ka link, cron, hooks, daemon, skills). See Step 6. |
-| `--rollback` | Restore the `.pre-switch` backups taken by `--switch`. |
 | `--cleanup-old` | After a verified switch, remove the old standalone daemon dir and `.pre-switch` backups (irreversible). |
+
+Each `--switch` step writes a `.pre-switch-*` backup first; there is **no
+`--rollback` flag** — to undo, restore those backups by hand (see Step 6).
 
 `KA_HOME=/tmp/ka-itest ./install.sh --dry-run` runs an isolated test against a
 temp root, never touching your real runtime.
@@ -206,11 +208,12 @@ the runtime, migrates any legacy daemon `state.json` into
 `$KA_HOME/channels/<kind>-daemon/` and restarts the active daemon, and symlinks
 `~/.claude/skills/<name>/SKILL.md` at the runtime copies. (Daemon **secrets** are
 not migrated automatically — populate `config/secrets.yaml channels.<kind>` first.)
-Each step leaves a `.pre-switch` backup. If anything looks wrong:
-
-```bash
-./install.sh --rollback            # restore the backups
-```
+Each step leaves a `.pre-switch-*` backup. There is **no `--rollback` command** —
+if anything looks wrong, restore the backups by hand: copy each
+`~/.claude.json.pre-switch-*` / `~/.claude/settings.json.pre-switch-*` /
+`*.plist.pre-switch` back over the original, re-point the `~/.local/bin/ka`
+symlink at its `.pre-switch-target`, and restart the old daemon. (Don't run
+`--cleanup-old` until you're sure — it deletes these backups.)
 
 After verifying the switch is healthy, optionally reclaim the old layout:
 

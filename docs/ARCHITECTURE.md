@@ -333,7 +333,7 @@ The runtime isn't one lump; it's **two big blocks belonging to different owners*
 - The steps that actually "switch the live runtime" (rewriting `~/.claude.json` MCP registrations, moving the daemon, changing hook paths, creating skill
   symlinks) are **SKIPPED by default**; they require an explicit `--switch` and must be run by the user — a plain install **never touches** the running
   `~/.claude.json` / daemon.
-- Each `--switch` step backs up first (`.pre-switch-*`) and is `--rollback`-able.
+- Each `--switch` step backs up first (`.pre-switch-*`); recovery is a manual restore of those backups (there is no `--rollback` command).
 - seed_config never overwrites existing config/credentials.
 - A single copy mode (no dev/prod dual mode): apply development changes with incremental redeploys via `./install.sh --only <component>`,
   running `--dry-run` first to confirm it only touches the target component.
