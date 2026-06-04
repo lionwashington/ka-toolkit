@@ -19,8 +19,8 @@
 #   2 — file/env error (jsonl missing, can't write state dir, etc.)
 
 set -euo pipefail
-KA_ROOT="${KA_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/.ka-root" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
-source "$KA_ROOT/shared/ops/common.sh"
+: "${KA_HOME:=$HOME/.knowledge-assistant}"
+source "$KA_HOME/shared/ops/common.sh"
 
 JSONL=""
 SESSION_ID=""
@@ -108,8 +108,8 @@ fi
 
 # Locate ka-jsonl-reader CLI bundle. Core CLIs live in runtime/core-cli (deploy
 # layout) or kb/core/dist (repo layout) — try both.
-JSONL_READER="$KA_ROOT/core-cli/jsonl-reader-cli.js"                       # runtime layout
-[ -f "$JSONL_READER" ] || JSONL_READER="$KA_ROOT/kb/core/dist/jsonl-reader-cli.js"  # repo layout
+JSONL_READER="$KA_HOME/core-cli/jsonl-reader-cli.js"                       # runtime layout
+[ -f "$JSONL_READER" ] || JSONL_READER="$KA_HOME/kb/core/dist/jsonl-reader-cli.js"  # repo layout
 [ -f "$JSONL_READER" ] || { log_err "jsonl-reader bundle missing — run './install.sh --only core-cli' (or 'pnpm --filter @ka/core build' in repo) ($JSONL_READER)"; exit 2; }
 
 # Capture snapshot via the lightweight --format snapshot path (no message body)

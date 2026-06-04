@@ -64,7 +64,7 @@ for name in "${CRON_JOB_NAMES[@]+"${CRON_JOB_NAMES[@]}"}"; do
     # Export the job's unit inputs so the backend can build its unit. launchd reads
     # them via plist-gen (below); the crontab backend reads them directly in
     # backend::install (it ignores the generated plist).
-    export KA_ROOT KA_CRON_NAME="$name" KA_CRON_SCHEDULE="$schedule" \
+    export KA_HOME KA_CRON_NAME="$name" KA_CRON_SCHEDULE="$schedule" \
            KA_CRON_LOG="$log_file" KA_CRON_ENV="$env_str"
     # Generate plist to temp file (launchd unit; ignored by the crontab backend).
     tmp_plist="$(mktemp -t ka-cron-XXXXXX).plist"

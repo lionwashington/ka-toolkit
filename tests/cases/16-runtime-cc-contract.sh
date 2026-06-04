@@ -7,7 +7,7 @@
 set -uo pipefail
 
 REPO="${REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
-export KA_ROOT="$REPO"
+export KA_HOME="$REPO"
 OPS="$REPO/workshop/ops"
 DISPATCH="$OPS/runtimes/dispatch.sh"
 [ -f "$DISPATCH" ] || { echo "FAIL: $DISPATCH missing"; exit 1; }

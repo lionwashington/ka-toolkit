@@ -16,7 +16,7 @@ JSONL="$TMP/fake.jsonl"
 } > "$JSONL"
 
 # --- 1. Dry-run: snapshot capture + state file plan --------------------------
-out="$(KA_ROOT="$REPO" bash "$REPO/kb/ops/distill-bg.sh" --jsonl "$JSONL" --dry-run)"
+out="$(KA_HOME="$REPO" bash "$REPO/kb/ops/distill-bg.sh" --jsonl "$JSONL" --dry-run)"
 echo "$out" | grep -q "session_id=fake"
 echo "$out" | grep -q "snapshot.offset="
 echo "$out" | grep -q "snapshot.count=2"
@@ -25,7 +25,7 @@ echo "$out" | grep -q "snapshot.count=2"
 HOME_BAK="$HOME"
 export HOME="$TMP/home"
 mkdir -p "$HOME"
-status_empty="$(KA_ROOT="$REPO" bash "$REPO/kb/ops/distill-status.sh")"
+status_empty="$(KA_HOME="$REPO" bash "$REPO/kb/ops/distill-status.sh")"
 echo "$status_empty" | grep -q "no distill run recorded"
 
 # --- 3. Full spawn with a fake claude that just emits the summary JSON -------
@@ -50,7 +50,7 @@ WORKSPACE="$TMP/workspace"
 mkdir -p "$WORKSPACE/memory/raw" "$WORKSPACE/memory/conversations" "$WORKSPACE/memory/topics"
 
 # Spawn (background); capture pid and wait for completion.
-spawn_out="$(KA_ROOT="$REPO" WORKSPACE_CWD="$WORKSPACE" bash "$REPO/kb/ops/distill-bg.sh" \
+spawn_out="$(KA_HOME="$REPO" WORKSPACE_CWD="$WORKSPACE" bash "$REPO/kb/ops/distill-bg.sh" \
     --jsonl "$JSONL" \
     --session-id "fake-session")"
 echo "$spawn_out" | grep -q "distill-bg: pid="
@@ -75,7 +75,7 @@ grep -q '"topics_updated": 2' "$state_json"
 grep -q '"exit_code": 0' "$state_json"
 
 # Verify distill-status reports verdict=done
-status_output="$(KA_ROOT="$REPO" bash "$REPO/kb/ops/distill-status.sh")"
+status_output="$(KA_HOME="$REPO" bash "$REPO/kb/ops/distill-status.sh")"
 echo "$status_output" | grep -q "verdict.*done"
 echo "$status_output" | grep -q "session_id .*fake-session"
 

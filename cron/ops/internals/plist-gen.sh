@@ -2,7 +2,7 @@
 # plist-gen.sh — generate a launchd plist for a ka cron job.
 #
 # Usage (env-driven, for determinism in tests):
-#   KA_ROOT=/path/to/repo \
+#   KA_HOME=/path/to/repo \
 #   KA_CRON_NAME=foo \
 #   KA_CRON_SCHEDULE="daily 07:00" \
 #   KA_CRON_LOG=/tmp/ka-cron/foo.log \
@@ -19,15 +19,15 @@
 
 set -euo pipefail
 
-: "${KA_ROOT:?KA_ROOT required}"
+: "${KA_HOME:?KA_HOME required}"
 : "${KA_CRON_NAME:?KA_CRON_NAME required}"
 : "${KA_CRON_SCHEDULE:?KA_CRON_SCHEDULE required}"
 : "${KA_CRON_LOG:?KA_CRON_LOG required}"
 
 KA_CRON_ENV="${KA_CRON_ENV:-}"
 LABEL="com.knowledge-assistant.ka.cron.${KA_CRON_NAME}"
-RUNNER="${KA_ROOT}/cron/ops/cron-run.sh"
-PARSER="${KA_ROOT}/cron/ops/internals/schedule-parser.sh"
+RUNNER="${KA_HOME}/cron/ops/cron-run.sh"
+PARSER="${KA_HOME}/cron/ops/internals/schedule-parser.sh"
 
 [ -f "$PARSER" ] || { echo "plist-gen: missing $PARSER" >&2; exit 1; }
 

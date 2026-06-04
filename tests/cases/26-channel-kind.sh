@@ -12,9 +12,9 @@ REPO="${REPO:-/repo}"
 COMMON="$REPO/shared/ops/common.sh"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
-# Run a common.sh helper with controlled env (KA_CONFIG / HOME / KA_ROOT).
+# Run a common.sh helper with controlled env (KA_CONFIG / HOME / KA_HOME).
 runh() {  # $1=helper expr  $2=config.yaml path  $3=HOME
-    KA_ROOT="$REPO" KA_CONFIG="$2" HOME="$3" bash -c "source '$COMMON' 2>/dev/null; $1"
+    KA_HOME="$REPO" KA_CONFIG="$2" HOME="$3" bash -c "source '$COMMON' 2>/dev/null; $1"
 }
 
 echo "[1/6] no config → telegram / telegram-daemon / 9877 (fallback)"

@@ -3,9 +3,9 @@
 # Sourced, not executed.
 
 # shellcheck disable=SC2034
-KA_ROOT="${KA_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/.ka-root" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
+: "${KA_HOME:=$HOME/.knowledge-assistant}"
 # shellcheck source=../common.sh
-source "$KA_ROOT/shared/ops/common.sh"
+source "$KA_HOME/shared/ops/common.sh"
 # shellcheck source=../../lib/cron/backend-adapter.sh
 source "$KA_CRON_INTERNALS_DIR/backend-adapter.sh"
 

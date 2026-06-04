@@ -16,8 +16,8 @@ PANE_NAME="${1:?pane name required}"
 EXPECTED_CWD="${2:?expected cwd required}"
 shift 2
 
-KA_ROOT="${KA_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/.ka-root" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
-source "$KA_ROOT/shared/ops/common.sh"
+: "${KA_HOME:=$HOME/.knowledge-assistant}"
+source "$KA_HOME/shared/ops/common.sh"
 
 echo "[start-pane:$PANE_NAME] pwd=$PWD expected=$EXPECTED_CWD"
 

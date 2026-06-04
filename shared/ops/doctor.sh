@@ -8,8 +8,8 @@
 #   1  one or more issues found (warnings or errors)
 set -uo pipefail
 
-KA_ROOT="${KA_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/.ka-root" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
-source "$KA_ROOT/shared/ops/common.sh"
+: "${KA_HOME:=$HOME/.knowledge-assistant}"
+source "$KA_HOME/shared/ops/common.sh"
 # shellcheck source=../lib/runtimes/dispatch.sh
 source "$KA_RUNTIMES_DIR/dispatch.sh"
 
@@ -55,7 +55,7 @@ if curl -sf --max-time 1 "http://127.0.0.1:$PORT/api/status" >/dev/null 2>&1; th
     note_ok "$DKIND daemon: up (port $PORT)"
 else
     note_err "$DKIND daemon: down (port $PORT) — channels offline"
-    _ds="$HOME/.knowledge-assistant/runtime/$_daemon_sub/start.sh"; [ -x "${KA_ROOT:-}/$_daemon_sub/start.sh" ] && _ds="$KA_ROOT/$_daemon_sub/start.sh"
+    _ds="$HOME/.knowledge-assistant/runtime/$_daemon_sub/start.sh"; [ -x "${KA_HOME:-}/$_daemon_sub/start.sh" ] && _ds="$KA_HOME/$_daemon_sub/start.sh"
     hint "start: $_ds   (or just run ka workshop, which ensures the daemon is up)"
 fi
 
@@ -140,7 +140,7 @@ fi
 # Read through config-cli (the single source); a name is "resolvable" if a running
 # workshop pane carries that @ka_channel.
 cfgcli="$HOME/.knowledge-assistant/runtime/core-cli/config-cli.js"
-[ -f "${KA_ROOT:-}/packages/core/dist/config-cli.js" ] && cfgcli="$KA_ROOT/packages/core/dist/config-cli.js"
+[ -f "${KA_HOME:-}/packages/core/dist/config-cli.js" ] && cfgcli="$KA_HOME/packages/core/dist/config-cli.js"
 node_bin="$(command -v node || echo /opt/homebrew/bin/node)"
 if [ -f "$cfgcli" ] && [ -x "$node_bin" ]; then
     running_ch="$("$TMUX_BIN" list-panes -s -t "$SESSION" -F '#{@ka_channel}' 2>/dev/null | grep -v '^$')"
@@ -237,7 +237,7 @@ printf '%s── hooks (settings.json) ──%s\n' "$C_DIM" "$C_RST"
 SETTINGS="$HOME/.claude/settings.json"
 if [ -f "$SETTINGS" ] && command -v python3 >/dev/null 2>&1; then
     runtime_hooks_dir="$HOME/.knowledge-assistant/runtime"
-    hook_rows="$(python3 - "$SETTINGS" "$runtime_hooks_dir" "$KA_ROOT" <<'PY' 2>/dev/null
+    hook_rows="$(python3 - "$SETTINGS" "$runtime_hooks_dir" "$KA_HOME" <<'PY' 2>/dev/null
 import json, sys
 settings, rt_dir, repo = sys.argv[1], sys.argv[2], sys.argv[3]
 try:

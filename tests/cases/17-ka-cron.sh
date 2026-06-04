@@ -61,7 +61,7 @@ echo "    ok"
 
 echo "[2/8] plist-gen byte-stable for fixed input"
 ENV_REPO="$REPO" \
-KA_ROOT="$REPO" \
+KA_HOME="$REPO" \
 KA_CRON_NAME="unit-single" \
 KA_CRON_SCHEDULE="daily 07:00" \
 KA_CRON_LOG="/tmp/u.log" \
@@ -77,7 +77,7 @@ grep -q '<string>com.knowledge-assistant.ka.cron.unit-single</string>' "$TMP/sin
     || { echo "FAIL: label wrong"; exit 1; }
 
 # Re-run → byte-identical (deterministic)
-KA_ROOT="$REPO" \
+KA_HOME="$REPO" \
 KA_CRON_NAME="unit-single" \
 KA_CRON_SCHEDULE="daily 07:00" \
 KA_CRON_LOG="/tmp/u.log" \
@@ -86,7 +86,7 @@ cmp -s "$TMP/single.plist" "$TMP/single2.plist" \
     || { echo "FAIL: plist-gen not deterministic"; diff "$TMP/single.plist" "$TMP/single2.plist"; exit 1; }
 
 # Multi-dict (array form)
-KA_ROOT="$REPO" \
+KA_HOME="$REPO" \
 KA_CRON_NAME="unit-multi" \
 KA_CRON_SCHEDULE="every 2h" \
 KA_CRON_LOG="/tmp/m.log" \

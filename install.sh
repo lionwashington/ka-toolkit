@@ -129,7 +129,7 @@ deploy_ka() {            # ka CLI + the by-part sh trees copied to runtime (D1, 
   done
   rm -rf "$RUNTIME/config"; cp -R "$REPO_ROOT/config" "$RUNTIME/config"
   # The runtime MIRRORS the repo's by-part layout: bin/ka walks up to ${RUNTIME}/.ka-root
-  # → KA_ROOT=runtime, common.sh's map points at runtime/<part>/ops. Self-consistent,
+  # → KA_HOME=runtime, common.sh's map points at runtime/<part>/ops. Self-consistent,
   # never points at the repo. (tests/ is top-level in the repo and is not deployed.)
   log "  OK ${RUNTIME}/{bin/ka,.ka-root,shared/ops,workshop/ops,channels/ops,cron/ops,kb/ops,config}"
 }

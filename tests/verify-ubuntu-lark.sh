@@ -47,7 +47,7 @@ echo "[5] crontab cron backend (Linux)"
 source cron/ops/internals/backend-adapter.sh
 load_backend "$(detect_backend)"
 if [ "$(backend::name)" = "crontab" ]; then ok "detect_backend → crontab"; else bad "backend is $(backend::name)"; fi
-export KA_ROOT=/repo KA_CRON_SCHEDULE="every 5m" KA_CRON_LOG=/tmp/j.log
+export KA_HOME=/repo KA_CRON_SCHEDULE="every 5m" KA_CRON_LOG=/tmp/j.log
 if backend::install testjob /dev/null && backend::is_loaded testjob; then ok "crontab install + is_loaded"; else bad "crontab install/is_loaded"; fi
 backend::uninstall testjob
 backend::is_loaded testjob && bad "uninstall left it" || ok "crontab uninstall"
@@ -57,7 +57,7 @@ echo "[6] workshop binds lark daemon (KA_CHANNEL_KIND=lark dry-run)"
 # then exits on the example yaml's nonexistent cwd — so assert the ensure line
 # (lark-daemon dir + lark-channel daemon), NOT the status-verb "port 9876" line
 # which lives on a different code path and isn't reached here.
-wout="$(env -u KA_CHANNEL_PORT KA_CHANNEL_KIND=lark KA_ROOT=/repo bash workshop/ops/workshop.sh --dry-run 2>&1 || true)"
+wout="$(env -u KA_CHANNEL_PORT KA_CHANNEL_KIND=lark KA_HOME=/repo bash workshop/ops/workshop.sh --dry-run 2>&1 || true)"
 if echo "$wout" | grep -q "lark-daemon" && echo "$wout" | grep -q "lark-channel daemon"; then
   ok "workshop → binds lark-daemon (lark-channel)"
 else

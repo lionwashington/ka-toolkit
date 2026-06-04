@@ -5,8 +5,8 @@
 # no per-command kind override — to switch kinds, edit config.yaml (or re-run
 # ./install.sh --channel-kind=…) and restart.
 set -euo pipefail
-KA_ROOT="${KA_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/.ka-root" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
-source "$KA_ROOT/shared/ops/common.sh"
+: "${KA_HOME:=$HOME/.knowledge-assistant}"
+source "$KA_HOME/shared/ops/common.sh"
 
 KIND="$(ka_channel_kind)" || exit 2
 DIR="$(ka_daemon_dir)"
