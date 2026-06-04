@@ -1,5 +1,5 @@
 #!/bin/bash
-# ops/lib/distill-bg-worker.sh — background worker spawned by distill-bg.sh.
+# ops/kb/distill-bg-worker.sh — background worker spawned by ops/kb/distill-bg.sh.
 #
 # Responsibilities:
 #   1. Run `claude -p` (headless Opus) cwd=workspace, instruct it to follow the

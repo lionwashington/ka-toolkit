@@ -33,7 +33,7 @@ _Deferred by request 2026-06-03 — fix later._
 
 ## distill OOM on very large snapshots — ✅ RESOLVED 2026-06-04
 
-**Fixed** in `ops/lib/distill-bg-worker.sh`: the worker now splits a snapshot
+**Fixed** in `ops/kb/distill-bg-worker.sh`: the worker now splits a snapshot
 larger than `KA_DISTILL_CHUNK_BYTES` (default 8 MiB) into multiple passes, each a
 **fresh `claude -p`** over `[cur_offset, cur_offset+CHUNK]`, so peak memory stays
 bounded. It reads the persisted `last_parsed_offset` from the raw frontmatter to

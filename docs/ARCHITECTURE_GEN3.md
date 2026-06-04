@@ -33,7 +33,7 @@ possible; the agent calls these as tools/skills.
 
 - **kb core**: capture → distill → deposit → query of LLM conversations into an
   Obsidian-compatible Markdown KB (`packages/core`). Includes the headless
-  background distiller (`ops/cli/distill-bg.sh` + `ops/lib/distill-bg-worker.sh`)
+  background distiller (`ops/kb/distill-bg.sh` + `ops/kb/distill-bg-worker.sh`)
   and the capture hook.
 - **kb MCP server**: `kb_search` / `kb_read_topic` / `kb_list_topics` /
   `kb_status` (`packages/mcp-server`).
@@ -132,7 +132,7 @@ cron + distill sh). gen3 regroups source so each part is self-contained.
 
 | Part | Already-aligned source | Interleaved / to regroup |
 |------|------------------------|--------------------------|
-| 1 KB+capability | `packages/core`, `mcp-server`, `skill(s)`, `*-mcp` | `ops/cli/distill-bg.sh`, `distill-status.sh`, `ops/lib/distill-bg-worker.sh` (KB sh currently in ops/) |
+| 1 KB+capability | `packages/core`, `mcp-server`, `skill(s)`, `*-mcp` | `ops/kb/distill-bg.sh`, `distill-status.sh`, `ops/kb/distill-bg-worker.sh` (KB sh currently in ops/) |
 | 2 workshop | — | `ops/cli/workshop.sh`, `ops/lib/start-pane.sh`, `tmux-helpers.sh`, `yaml-parse.sh`, `inject-prompt.sh`, `wait-ready.sh`, `yaml-upsert-mate.py` (mixed in ops/) |
 | 3 channels | `packages/channel-core`, `telegram-channel`, `lark-channel` | — (already clean) |
 | 4 cron | — | `ops/cli/cron*`, `ops/lib/cron/`, `ops/scripts/cron-run.sh` (mixed in ops/) |

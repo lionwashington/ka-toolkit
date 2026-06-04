@@ -44,7 +44,7 @@ restore_state() {
 run_and_collect() {
     local case_name="$1"
     KA_REPO_ROOT="$REPO" WORKSPACE_CWD="$WORKSPACE" \
-        bash "$REPO/ops/cli/distill-bg.sh" --jsonl "$JSONL" --session-id "fake-${case_name}" \
+        bash "$REPO/ops/kb/distill-bg.sh" --jsonl "$JSONL" --session-id "fake-${case_name}" \
         > /dev/null
     local state="$HOME/.knowledge-assistant/state/distill-current.json"
     for _ in $(seq 1 30); do

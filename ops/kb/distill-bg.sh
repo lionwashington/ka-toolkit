@@ -1,5 +1,5 @@
 #!/bin/bash
-# ops/cli/distill-bg.sh — start a background /kb distill in a headless claude
+# ops/kb/distill-bg.sh — start a background /kb distill in a headless claude
 # Opus process. Returns immediately after spawning the worker; the worker
 # writes status to ~/.knowledge-assistant/state/distill-current.json and a
 # per-run log to ~/.knowledge-assistant/state/distill-<timestamp>.log.
@@ -21,7 +21,7 @@
 set -euo pipefail
 THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
-source "$THIS_DIR/common.sh"
+source "$THIS_DIR/../cli/common.sh"
 
 JSONL=""
 SESSION_ID=""
@@ -130,7 +130,7 @@ TIMESTAMP_FILE="$(date -u +%Y%m%dT%H%M%SZ)"
 TIMESTAMP_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 LOG_PATH="$STATE_DIR/distill-${TIMESTAMP_FILE}.log"
 
-WORKER="$KA_REPO_ROOT/ops/lib/distill-bg-worker.sh"
+WORKER="$KA_REPO_ROOT/ops/kb/distill-bg-worker.sh"
 [ -f "$WORKER" ] || { log_err "worker missing: $WORKER"; exit 2; }
 
 if [ "$DRY_RUN" -eq 1 ]; then

@@ -34,12 +34,12 @@ case "$CMD" in
         # /kb distill --foreground). `ka distill status` shows the last run.
         if [ "${1:-}" = "status" ]; then
             shift
-            exec "$CLI_DIR/distill-status.sh" "$@"
+            exec "$REPO_ROOT/ops/kb/distill-status.sh" "$@"
         fi
         # Tolerate a legacy --background flag (background is the default now).
         FILTERED=()
         for arg in "$@"; do [ "$arg" = "--background" ] && continue; FILTERED+=("$arg"); done
-        exec "$CLI_DIR/distill-bg.sh" ${FILTERED[@]+"${FILTERED[@]}"}
+        exec "$REPO_ROOT/ops/kb/distill-bg.sh" ${FILTERED[@]+"${FILTERED[@]}"}
         ;;
     -h|--help|help|'')
         exec "$CLI_DIR/help.sh" "$@"

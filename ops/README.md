@@ -18,8 +18,8 @@ canonical entry point is `ka workshop`. The whole tree is deployed to
 | `cli/doctor.sh`               | `ka doctor` — deeper consistency diagnostics + fix hints.                        |
 | `cli/wait-ready.sh`           | Internal: poll a tmux pane until its CC runtime is idle-ready (not a `ka` verb). |
 | `cli/cron.sh` + `cli/cron/`   | `ka cron` — declarative cron (list/add/remove/enable/disable/run/install/…).     |
-| `cli/distill-bg.sh`           | `ka distill` — spawn a headless `/kb distill` worker.               |
-| `cli/distill-status.sh`       | `ka distill status` — state of the last/current background distill.             |
+| `kb/distill-bg.sh`           | `ka distill` — spawn a headless `/kb distill` worker.               |
+| `kb/distill-status.sh`       | `ka distill status` — state of the last/current background distill.             |
 | `cli/help.sh`                 | `ka help`.                                                                       |
 | `cli/common.sh`               | Shared helpers (logging, glyphs, config resolution) sourced by every subcommand. |
 | `lib/start-pane.sh`           | A pane's first process — validates cwd, loads env, binds channel, execs claude.  |

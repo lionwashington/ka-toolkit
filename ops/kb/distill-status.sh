@@ -1,5 +1,5 @@
 #!/bin/bash
-# ops/cli/distill-status.sh — print the current state of the background
+# ops/kb/distill-status.sh — print the current state of the background
 # distill worker (~/.knowledge-assistant/state/distill-current.json) plus a
 # health verdict (running vs. dead).
 #
@@ -9,7 +9,7 @@
 set -euo pipefail
 THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
-source "$THIS_DIR/common.sh"
+source "$THIS_DIR/../cli/common.sh"
 
 STATUS_FILE="$HOME/.knowledge-assistant/state/distill-current.json"
 EMIT_JSON=0
