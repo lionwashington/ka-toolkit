@@ -14,22 +14,23 @@ chat-channel daemon so you can drive agent sessions from Telegram or Lark.
 
 ## What's in here
 
-A pnpm monorepo of independent packages:
+A pnpm + sh monorepo, organized by **four functional parts** (capability /
+orchestration / communication / scheduling) plus shared / config / tests:
 
-| Package | What it does |
+| Path | Part — what it does |
 |---|---|
-| `packages/core` | The knowledge pipeline — capture, distill, retrieval, knowledge-store, daily-log / topic splitters (CJK-aware) |
-| `packages/mcp-server` | Knowledge-base MCP server: `kb_search` / `kb_read_topic` / `kb_list_topics` / `kb_status` |
-| `packages/channel-core` | Platform-independent MCP-over-HTTP daemon kernel (sessions, routing, dispatch, re-adopt self-heal) |
-| `packages/telegram-channel` | Telegram platform adapter for the channel daemon |
-| `packages/lark-channel` | Lark (Feishu) platform adapter for the channel daemon |
-| `packages/skill`, `packages/skills` | Agent skills: `/kb`, daily-brief, mail, calendar, and more |
-| `packages/adapters/claude-code` | Claude Code runtime adapter (capture hook, scheduler, install) |
-| `packages/hkprop-mcp` | Hong Kong rental-property search MCP (28Hse + Centanet) |
-| `packages/ibkr-mcp` | IBKR position / P&L query MCP |
-| `packages/market-mcp` | US-equity / crypto quote MCP |
-| `packages/mcp-opennutrition` | Food-nutrition lookup MCP |
-| `ops/` | The `ka` CLI (`start` / `stop` / `restart` / `workshop` / `cron`) and supporting libs |
+| `kb/core` | **Capability.** The knowledge pipeline: capture, distill, retrieval, knowledge-store, daily-log / topic splitters (CJK-aware) |
+| `kb/mcp-server` | KB MCP server: `kb_search` / `kb_read_topic` / `kb_list_topics` / `kb_status` |
+| `kb/skill`, `kb/skills` | Agent skills: `/kb`, daily-brief, mail, calendar, and more |
+| `kb/tools/*` | Domain MCP servers: `hkprop-mcp` (HK rentals · 28Hse + Centanet), `ibkr-mcp` (IBKR P&L), `market-mcp` (equity/crypto quotes), `mcp-opennutrition` (food lookup) |
+| `kb/adapter-cc` | Claude Code runtime adapter (capture hook, scheduler, install) |
+| `kb/ops` | Background distill worker scripts |
+| `channels/core` | **Communication.** Platform-independent MCP-over-HTTP daemon kernel (sessions, routing, dispatch, re-adopt self-heal) |
+| `channels/telegram`, `channels/lark` | Telegram / Lark platform adapters; `channels/ops/daemon.sh` is the `ka daemon` CLI |
+| `workshop/ops` | **Orchestration.** `ka workshop` (tmux panes / CCs) + start-pane / wait-ready / tmux & yaml helpers |
+| `cron/ops` | **Scheduling.** `ka cron` + the run / plist / crontab backend |
+| `shared/ops`, `shared/bin/ka` | Cross-cutting: the `ka` dispatcher + `common.sh` / `doctor` / `status` / `help` |
+| `config/`, `tests/` | Bundled config templates; the Docker test harness |
 
 ## How it fits together
 
@@ -66,7 +67,7 @@ Configuration and secrets live in `~/.knowledge-assistant/` (e.g. `config.yaml`,
 
 ```bash
 pnpm test                                   # JS/TS packages
-cd packages/hkprop-mcp && uv run pytest      # Python MCP
+cd kb/tools/hkprop-mcp && uv run pytest      # Python MCP
 ```
 
 ## Status & scope
