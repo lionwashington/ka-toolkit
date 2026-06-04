@@ -17,26 +17,25 @@ if [ -z "${KA_REPO_ROOT:-}" ]; then
 fi
 export KA_REPO_ROOT
 
-# Code-location map — the repo (and the runtime that mirrors it) is organized by
-# the four functional parts. When the layout changes, edit ONLY these lines; the
-# whole script tree references these vars, never relative paths. Exported so a
-# child process (an exec'd helper) inherits the map without re-sourcing.
-KA_SHARED_DIR="$KA_REPO_ROOT/shared/ops"        # common/doctor/status/help
-KA_WORKSHOP_DIR="$KA_REPO_ROOT/workshop/ops"    # workshop.sh/wait-ready + libs
-KA_CHANNELS_DIR="$KA_REPO_ROOT/channels/ops"    # daemon.sh
-KA_CRON_OPS_DIR="$KA_REPO_ROOT/cron/ops"        # cron.sh/cron-run + cmd/internals/maintenance
-KA_KB_DIR="$KA_REPO_ROOT/kb/ops"                # distill-bg/status/worker sh
-KA_CONFIG_DIR="$KA_REPO_ROOT/config"            # bundled config templates
-# fine-grained vars (names kept stable for callers; RHS repointed to the parts)
-KA_LIB_DIR="$KA_WORKSHOP_DIR"                   # tmux-helpers/yaml-parse/start-pane/inject-prompt/upsert
-KA_RUNTIMES_DIR="$KA_WORKSHOP_DIR/runtimes"
-KA_PANES_DIR="$KA_WORKSHOP_DIR/panes"
-KA_CRON_DIR="$KA_CRON_OPS_DIR/cmd"              # cron subcommands (+ _common.sh, install.sh)
-KA_CRON_LIB_DIR="$KA_CRON_OPS_DIR/internals"    # parse-yaml/schedule-parser/plist-gen/backend-adapter
-KA_SCRIPTS_DIR="$KA_CRON_OPS_DIR"               # cron-run.sh + maintenance/
-KA_CLI_DIR="$KA_SHARED_DIR"; CLI_DIR="$KA_SHARED_DIR"   # back-compat
+# Code-location map — a strict two-level tree rooted at KA_REPO_ROOT. The repo
+# (and the runtime that mirrors it) is organized by the four functional parts;
+# when the layout changes, edit ONLY these lines. The whole script tree
+# references these vars, never relative paths. Exported so a child process (an
+# exec'd helper) inherits the map without re-sourcing.
+#   level 1 — the parts (each = $KA_REPO_ROOT/<part>/ops; plus the config dir)
+KA_SHARED_DIR="$KA_REPO_ROOT/shared/ops"            # common/doctor/status/help
+KA_WORKSHOP_DIR="$KA_REPO_ROOT/workshop/ops"        # workshop.sh/wait-ready + start-pane/tmux-helpers/yaml-parse/inject-prompt/upsert
+KA_CHANNELS_DIR="$KA_REPO_ROOT/channels/ops"        # daemon.sh
+KA_CRON_OPS_DIR="$KA_REPO_ROOT/cron/ops"            # cron.sh + cron-run.sh + maintenance/
+KA_KB_DIR="$KA_REPO_ROOT/kb/ops"                    # distill-bg/status/worker
+KA_CONFIG_DIR="$KA_REPO_ROOT/config"                # bundled config templates
+#   level 2 — sub-dirs of a part (each derives from its level-1 parent above)
+KA_RUNTIMES_DIR="$KA_WORKSHOP_DIR/runtimes"         # runtime adapters (cc/…)
+KA_PANES_DIR="$KA_WORKSHOP_DIR/panes"               # per-pane *.env
+KA_CRON_CMD_DIR="$KA_CRON_OPS_DIR/cmd"              # cron subcommands (+ _common.sh, install.sh)
+KA_CRON_INTERNALS_DIR="$KA_CRON_OPS_DIR/internals"  # parse-yaml/schedule-parser/plist-gen/backend-adapter
 export KA_SHARED_DIR KA_WORKSHOP_DIR KA_CHANNELS_DIR KA_CRON_OPS_DIR KA_KB_DIR KA_CONFIG_DIR
-export KA_LIB_DIR KA_RUNTIMES_DIR KA_PANES_DIR KA_CRON_DIR KA_CRON_LIB_DIR KA_SCRIPTS_DIR KA_CLI_DIR CLI_DIR
+export KA_RUNTIMES_DIR KA_PANES_DIR KA_CRON_CMD_DIR KA_CRON_INTERNALS_DIR
 
 # Colors (disabled when stdout is not a TTY or NO_COLOR is set).
 if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -89,7 +88,7 @@ workshop_session_name() {
     local cfg="$1"
     [ -f "$cfg" ] || { printf 'workshop'; return; }
     local s
-    s="$("$KA_LIB_DIR/yaml-parse.sh" "$cfg" 2>/dev/null \
+    s="$("$KA_WORKSHOP_DIR/yaml-parse.sh" "$cfg" 2>/dev/null \
          | awk -F'\t' '$1=="session"{print $2; exit}')"
     [ -n "$s" ] && printf '%s' "$s" || printf 'workshop'
 }

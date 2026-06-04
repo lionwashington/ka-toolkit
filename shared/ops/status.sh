@@ -38,7 +38,7 @@ if [ -n "$CONFIG" ] && [ -f "$CONFIG" ]; then
             runtime_default="$a"
             break
         fi
-    done < <("$KA_LIB_DIR/yaml-parse.sh" "$CONFIG" 2>/dev/null)
+    done < <("$KA_WORKSHOP_DIR/yaml-parse.sh" "$CONFIG" 2>/dev/null)
 fi
 if runtime_load "$runtime_default" 2>/dev/null; then
     printf '  %s runtime:   %s\n' "$(glyph_ok)" "$runtime_default"
@@ -67,7 +67,7 @@ if [ -n "$CONFIG" ] && [ -f "$CONFIG" ]; then
         if [ "$kind" = "mate" ] && [ "$d" = "1" ]; then
             DECLARED_NAMES+=("$a")
         fi
-    done < <("$KA_LIB_DIR/yaml-parse.sh" "$CONFIG" 2>/dev/null)
+    done < <("$KA_WORKSHOP_DIR/yaml-parse.sh" "$CONFIG" 2>/dev/null)
 fi
 declared_n="${#DECLARED_NAMES[@]}"
 
@@ -189,7 +189,7 @@ fi
 # f. cron: each job schedule + last-run + status
 echo ""
 printf '%s── cron ──%s\n' "$C_DIM" "$C_RST"
-_cron_list="$CLI_DIR/cron/list.sh"
+_cron_list="$KA_CRON_CMD_DIR/list.sh"
 if [ -x "$_cron_list" ]; then
     "$_cron_list" 2>/dev/null | sed 's/^/    /'
 else

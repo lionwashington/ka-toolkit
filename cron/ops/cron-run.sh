@@ -49,7 +49,7 @@ mkdir -p "$LOCK_DIR"
 LOCK_FILE="$LOCK_DIR/${NAME}.lock"
 
 # --- Parse cron.yaml, extract fields for <name> ------------------------------
-PARSE="$KA_CRON_LIB_DIR/parse-yaml.sh"
+PARSE="$KA_CRON_INTERNALS_DIR/parse-yaml.sh"
 [ -x "$PARSE" ] || chmod +x "$PARSE" 2>/dev/null || true
 
 schedule=""; kind="shell"; command_str=""
@@ -94,10 +94,10 @@ run_cmd() {
             bash -c "$command_str"
             ;;
         inject-prompt)
-            local inject="$KA_LIB_DIR/inject-prompt.sh"
+            local inject="$KA_WORKSHOP_DIR/inject-prompt.sh"
             [ -x "$inject" ] || { echo "missing $inject" >&2; return 127; }
             # shellcheck source=../lib/tmux-helpers.sh
-            source "$KA_LIB_DIR/tmux-helpers.sh"
+            source "$KA_WORKSHOP_DIR/tmux-helpers.sh"
             # Target channels are read from config.yaml — the single fail-closed
             # source (config-cli). cron.yaml no longer carries target_pane.
             local node_bin; node_bin="$(command -v node || echo /opt/homebrew/bin/node)"

@@ -38,7 +38,7 @@ set -euo pipefail
 KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/.ka-root" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
 source "$KA_REPO_ROOT/shared/ops/common.sh"
 # shellcheck source=../lib/tmux-helpers.sh
-source "$KA_LIB_DIR/tmux-helpers.sh"
+source "$KA_WORKSHOP_DIR/tmux-helpers.sh"
 # shellcheck source=../lib/runtimes/dispatch.sh
 source "$KA_RUNTIMES_DIR/dispatch.sh"
 

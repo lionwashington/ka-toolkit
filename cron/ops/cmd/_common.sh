@@ -7,16 +7,16 @@ KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
 # shellcheck source=../common.sh
 source "$KA_REPO_ROOT/shared/ops/common.sh"
 # shellcheck source=../../lib/cron/backend-adapter.sh
-source "$KA_CRON_LIB_DIR/backend-adapter.sh"
+source "$KA_CRON_INTERNALS_DIR/backend-adapter.sh"
 
 CRON_YAML_DEFAULT="$HOME/.knowledge-assistant/cron.yaml"
 CRON_YAML="${KA_CRON_CONFIG:-$CRON_YAML_DEFAULT}"
 
 CRON_LOG_DIR="${KA_CRON_LOG_DIR:-$HOME/Library/Logs/knowledge-assistant/cron}"
-CRON_PARSE="$KA_CRON_LIB_DIR/parse-yaml.sh"
-CRON_SCHED_PARSE="$KA_CRON_LIB_DIR/schedule-parser.sh"
-CRON_PLIST_GEN="$KA_CRON_LIB_DIR/plist-gen.sh"
-CRON_RUNNER="$KA_SCRIPTS_DIR/cron-run.sh"
+CRON_PARSE="$KA_CRON_INTERNALS_DIR/parse-yaml.sh"
+CRON_SCHED_PARSE="$KA_CRON_INTERNALS_DIR/schedule-parser.sh"
+CRON_PLIST_GEN="$KA_CRON_INTERNALS_DIR/plist-gen.sh"
+CRON_RUNNER="$KA_CRON_OPS_DIR/cron-run.sh"
 
 cron_yaml_exists() { [ -f "$CRON_YAML" ]; }
 

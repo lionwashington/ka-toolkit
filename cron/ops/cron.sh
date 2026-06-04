@@ -24,7 +24,7 @@ SUB="${1:-help}"
 
 case "$SUB" in
     list|add|remove|enable|disable|run|install|uninstall|import|status)
-        exec "$KA_CRON_DIR/${SUB}.sh" "$@"
+        exec "$KA_CRON_CMD_DIR/${SUB}.sh" "$@"
         ;;
     -h|--help|help|'')
         cat <<'EOF'

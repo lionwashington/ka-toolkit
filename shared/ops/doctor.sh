@@ -100,7 +100,7 @@ if [ -n "$CONFIG" ] && [ -f "$CONFIG" ]; then
         rec_safe="${rec//$'\t'/$'\x1f'}"
         IFS=$'\x1f' read -r kind a b c d <<<"$rec_safe"
         [ "$kind" = "mate" ] && [ "$d" = "1" ] && DECLARED+=("$a")
-    done < <("$KA_LIB_DIR/yaml-parse.sh" "$CONFIG" 2>/dev/null)
+    done < <("$KA_WORKSHOP_DIR/yaml-parse.sh" "$CONFIG" 2>/dev/null)
 fi
 if [ "${#DECLARED[@]}" -gt 0 ] && tmux_has_session "$SESSION" 2>/dev/null; then
     running="$("$TMUX_BIN" list-panes -s -t "$SESSION" -F '#{@ka_channel}' 2>/dev/null | grep -vx main | grep -v '^$')"
@@ -208,7 +208,7 @@ if [ -n "$CONFIG" ] && [ -f "$CONFIG" ]; then
         fi
         mflag="no"; [ "$c" = "1" ] && mflag="yes"
         printf '    %-14s %-4s %s\n' "$a" "$mflag" "$b"
-    done < <("$KA_LIB_DIR/yaml-parse.sh" "$CONFIG" 2>/dev/null)
+    done < <("$KA_WORKSHOP_DIR/yaml-parse.sh" "$CONFIG" 2>/dev/null)
     [ "$have_pane" = 0 ] && printf '  panes:  (none declared)\n'
 
     # mates
@@ -225,7 +225,7 @@ if [ -n "$CONFIG" ] && [ -f "$CONFIG" ]; then
         fi
         dflag="no"; [ "$d" = "1" ] && dflag="yes"
         printf '    %-16s %-8s %s\n' "$a" "$dflag" "$b"
-    done < <("$KA_LIB_DIR/yaml-parse.sh" "$CONFIG" 2>/dev/null)
+    done < <("$KA_WORKSHOP_DIR/yaml-parse.sh" "$CONFIG" 2>/dev/null)
     [ "$have_mate" = 0 ] && printf '  mates:  (none declared)\n'
 else
     printf '  %s(no workshop.yaml — nothing to show)%s\n' "$C_DIM" "$C_RST"
