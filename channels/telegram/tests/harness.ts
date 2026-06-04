@@ -97,13 +97,14 @@ export async function startDaemon(opts: { apiRoot: string; ownerChatId?: string 
   const dataDir = mkdtempSync(join(tmpdir(), 'tg-daemon-test-'))
   const port = await getFreePort()
   const ownerChatId = opts.ownerChatId ?? '12345'
-  writeFileSync(join(dataDir, 'config.json'), JSON.stringify({
-    bot_token_env: 'TELEGRAM_BOT_TOKEN',
-    http_host: '127.0.0.1',
-    http_port: port,
-    poll_timeout: 1,
-    owner_chat_id: ownerChatId,
-  }))
+  // Two-bucket data, same as prod: config.yaml (non-secret port/poll) +
+  // secrets.yaml (token/owner) in the config dir the daemon resolves via
+  // KA_CONFIG_DIR. state.json/log/pid stay in KA_DAEMON_DATA_DIR. Here both
+  // point at dataDir so the test exercises the real resolution path.
+  writeFileSync(join(dataDir, 'config.yaml'),
+    `channels:\n  telegram:\n    port: ${port}\n    poll_timeout: 1\n`)
+  writeFileSync(join(dataDir, 'secrets.yaml'),
+    `channels:\n  telegram:\n    token: "test-token"\n    owner_chat_id: "${ownerChatId}"\n`)
   // Two launch modes, SAME assertions:
   //  - default (source): node --experimental-strip-types channel-core/main.ts,
   //    platform plugin via KA_PLATFORM_MODULE (matches start.sh in source tree).
@@ -113,15 +114,14 @@ export async function startDaemon(opts: { apiRoot: string; ownerChatId?: string 
   let cmd: string[]
   const env: Record<string, string> = {
     ...process.env as Record<string, string>,
-    TELEGRAM_BOT_TOKEN: 'test-token',
     TELEGRAM_API_ROOT: opts.apiRoot,
     KA_DAEMON_DATA_DIR: dataDir,
-    OWNER_CHAT_ID: ownerChatId,
+    KA_CONFIG_DIR: dataDir,
   }
   if (bundle) {
     cmd = ['node', bundle]
   } else {
-    cmd = ['node', '--experimental-strip-types', join(PKG_DIR, '..', 'channel-core', 'src', 'main.ts')]
+    cmd = ['node', '--experimental-strip-types', join(PKG_DIR, '..', 'core', 'src', 'main.ts')]
     env.KA_PLATFORM_MODULE = join(PKG_DIR, 'telegram-platform.ts')
   }
   const proc = spawn(cmd[0], cmd.slice(1), { cwd: PKG_DIR, env, stdio: ['ignore', 'pipe', 'pipe'] })

@@ -10,35 +10,48 @@
  *   attachment : getFile → download bytes to ATTACH_DIR
  *   flavor     : MCP instructions / reply description / typing ACK / status fields
  *
- * SECURITY: the bot token lives ONLY in this process (process.env[bot_token_env],
- * populated by daemon.sh sourcing <deploy-dir>/.env). CC sessions never see it —
- * they only send/receive via MCP. The entry point (server.ts) wires this platform
- * into runChannelDaemon().
+ * SECURITY: the bot token lives ONLY in this process (read from secrets.yaml
+ * channels.telegram.token, in the shared config dir). CC sessions never see it —
+ * they only send/receive via MCP. The entry point (channel-core/main.ts) wires
+ * this platform into runChannelDaemon().
  */
 import { Bot } from 'grammy'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { homedir } from 'os'
+import { parse as parseYaml } from 'yaml'
 import { parseRoutingPrefix } from '../core/src/routing.ts'
 import { byName, sessionsById, resolveTargetToName } from '../core/src/sessions.ts'
 import type { Platform, InboundDispatch } from '../core/src/platform.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-// Data dir holds config.json / state.json / channel.log / daemon.pid / attachments/.
-// Defaults to the daemon's own dir (prod: ~/.knowledge-assistant/runtime/daemon).
-// KA_DAEMON_DATA_DIR overrides it for isolated e2e tests (prod leaves it unset).
+// Data dir holds state.json / channel.log / daemon.pid / attachments/ — the
+// daemon's own runtime working files. Defaults to the daemon's own dir (prod:
+// ~/.knowledge-assistant/channels/telegram-daemon). KA_DAEMON_DATA_DIR overrides
+// it for isolated e2e tests (prod leaves it unset).
 const DATA_DIR = process.env.KA_DAEMON_DATA_DIR || __dirname
-const CONFIG_PATH = join(DATA_DIR, 'config.json')
 const STATE_PATH = join(DATA_DIR, 'state.json')
 const LOG_PATH = join(DATA_DIR, 'channel.log')
 const PID_PATH = join(DATA_DIR, 'daemon.pid')
 const ATTACH_DIR = join(DATA_DIR, 'attachments')
 
+// Config dir holds the SHARED config.yaml (non-secret: port/poll_timeout under
+// channels.telegram) and secrets.yaml (token/owner_chat_id under the same key) —
+// the same two-bucket data layout the rest of ka uses. Resolved exactly like
+// common.sh: KA_CONFIG_DIR override, else $KA_HOME/config (KA_HOME default
+// ~/.knowledge-assistant). Tests point KA_CONFIG_DIR at a fixture so they
+// exercise the real resolution path rather than a separate one.
+const CONFIG_DIR = process.env.KA_CONFIG_DIR
+  || join(process.env.KA_HOME || join(homedir(), '.knowledge-assistant'), 'config')
+const CONFIG_YAML = join(CONFIG_DIR, 'config.yaml')
+const SECRETS_YAML = join(CONFIG_DIR, 'secrets.yaml')
+
 type Config = {
-  bot_token_env: string
   http_host: string
   http_port: number
   poll_timeout: number      // getUpdates long-poll seconds
+  token: string             // bot token (secrets.yaml channels.telegram.token)
   owner_chat_id: string     // only this Telegram user id may reach the daemon
 }
 type State = {
@@ -53,16 +66,24 @@ function log(msg: string): void {
   process.stderr.write(line)
 }
 
+// Parse a yaml file into a plain object; missing/empty/malformed → {} (the
+// caller fails closed on the absence of required fields, not on a read error).
+function readYaml(path: string): any {
+  try { return parseYaml(readFileSync(path, 'utf-8')) ?? {} } catch { return {} }
+}
+
 function loadConfig(): Config {
-  const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'))
+  const pub = readYaml(CONFIG_YAML)?.channels?.telegram ?? {}
+  const sec = readYaml(SECRETS_YAML)?.channels?.telegram ?? {}
   return {
-    bot_token_env: raw.bot_token_env ?? 'TELEGRAM_BOT_TOKEN',
-    http_host: raw.http_host ?? '127.0.0.1',
-    http_port: raw.http_port ?? 9877,
-    poll_timeout: raw.poll_timeout ?? 25,
-    // owner: env-first (OWNER_CHAT_ID from .env, sourced by daemon.sh), then
-    // config.json owner_chat_id as fallback — single secret source in .env.
-    owner_chat_id: String(process.env.OWNER_CHAT_ID || raw.owner_chat_id || ''),
+    http_host: String(pub.host ?? '127.0.0.1'),
+    http_port: Number(pub.port ?? 9877),
+    poll_timeout: Number(pub.poll_timeout ?? 25),
+    // Secrets (token, owner_chat_id) come ONLY from secrets.yaml — never from
+    // config.yaml or the environment. No silent default: an empty token/owner
+    // is fail-closed in initTelegram (the daemon refuses to start).
+    token: String(sec.token ?? ''),
+    owner_chat_id: String(sec.owner_chat_id ?? ''),
   }
 }
 
@@ -363,9 +384,13 @@ export function initTelegram() {
   cfg = loadConfig()
   state = loadState()
   OWNER_ID = Number(cfg.owner_chat_id)
-  TOKEN = process.env[cfg.bot_token_env] ?? ''
+  TOKEN = cfg.token
   if (!TOKEN) {
-    log(`FATAL: env ${cfg.bot_token_env} is empty — daemon cannot poll Telegram. Exiting.`)
+    log(`FATAL: channels.telegram.token is empty in ${SECRETS_YAML} — daemon cannot poll Telegram. Exiting.`)
+    process.exit(1)
+  }
+  if (!cfg.owner_chat_id) {
+    log(`FATAL: channels.telegram.owner_chat_id is empty in ${SECRETS_YAML} — cannot filter to the owner. Exiting.`)
     process.exit(1)
   }
   // apiRoot override (env): prod unset → real api.telegram.org; e2e points it at a

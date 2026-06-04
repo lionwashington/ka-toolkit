@@ -21,17 +21,28 @@ fi
 
 echo "[2] build lark daemon bundle on Linux (esbuild)"
 if KA_CHANNEL=lark KA_HOME=/tmp/rt ./install.sh --only daemon >/tmp/build.log 2>&1; then
-  [ -f /tmp/rt/runtime/lark-daemon/daemon.mjs ] && ok "lark daemon.mjs built" || bad "daemon.mjs missing"
+  [ -f /tmp/rt/channels/lark-daemon/daemon.mjs ] && ok "lark daemon.mjs built" || bad "daemon.mjs missing"
 else
   bad "deploy_lark_daemon failed"; tail -10 /tmp/build.log
 fi
 
 echo "[3] run lark daemon bundle on Linux + /api/status"
-mkdir -p /tmp/ld
-cat > /tmp/ld/config.json <<'JSON'
-{ "self_open_id":"ou_x","poll_interval_seconds":60,"page_size":10,"lark_cli_bin":"true","http_host":"127.0.0.1","http_port":9876,"groups":{} }
-JSON
-KA_DAEMON_DATA_DIR=/tmp/ld node /tmp/rt/runtime/lark-daemon/daemon.mjs >/tmp/ld/out.log 2>&1 &
+mkdir -p /tmp/ld/config
+cat > /tmp/ld/config/config.yaml <<'YAML'
+channels:
+  lark:
+    port: 9876
+    poll_interval_seconds: 60
+    page_size: 10
+    lark_cli_bin: "true"
+YAML
+cat > /tmp/ld/config/secrets.yaml <<'YAML'
+channels:
+  lark:
+    self_open_id: ou_x
+    groups: {}
+YAML
+KA_DAEMON_DATA_DIR=/tmp/ld KA_CONFIG_DIR=/tmp/ld/config node /tmp/rt/channels/lark-daemon/daemon.mjs >/tmp/ld/out.log 2>&1 &
 sleep 2
 st="$(node -e 'fetch("http://127.0.0.1:9876/api/status").then(r=>r.json()).then(d=>console.log(d.ok)).catch(()=>console.log("ERR"))')"
 [ "$st" = "true" ] && ok "/api/status ok=true on Linux" || { bad "/api/status failed"; tail -5 /tmp/ld/out.log; }

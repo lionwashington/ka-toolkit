@@ -7,7 +7,7 @@ import { z } from 'zod'
 const ConfigSchema = z.object({
   // Active channel daemon (telegram | lark). Single source of truth — every ka
   // command derives the daemon type from here (default telegram). The port
-  // lives in runtime/<kind>-daemon/config.json.
+  // lives in config.yaml channels.<kind>.port (read by the daemon directly).
   channel_kind: z.enum(['telegram', 'lark']).default('telegram'),
   knowledge_base_path: z.string().default('~/knowledge-base'),
   workspace_path: z.string().optional(),

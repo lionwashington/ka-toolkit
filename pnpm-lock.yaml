@@ -25,6 +25,9 @@ importers:
       express:
         specifier: ^4.21.2
         version: 4.22.2
+      yaml:
+        specifier: ^2.4.0
+        version: 2.8.3
 
   channels/telegram:
     dependencies:
@@ -37,6 +40,9 @@ importers:
       grammy:
         specifier: ^1.39.3
         version: 1.43.0
+      yaml:
+        specifier: ^2.4.0
+        version: 2.8.3
 
   kb/adapter-cc:
     dependencies:

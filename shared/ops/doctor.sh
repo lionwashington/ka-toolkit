@@ -16,8 +16,7 @@ source "$KA_RUNTIMES_DIR/dispatch.sh"
 CONFIG="$(resolve_workshop_config)"
 SESSION="$(workshop_session_name "$CONFIG")"
 # Channel kind + port = single source of truth: config.yaml channel_kind +
-# the active daemon's config.json http_port (resolved in common.sh). Daemon
-# dir is <kind>-daemon.
+# channels.<kind>.port (resolved in common.sh). Daemon dir is <kind>-daemon.
 DKIND="$(ka_channel_kind)" || exit 2
 _daemon_sub="${DKIND}-daemon"
 PORT="$(ka_channel_port)"

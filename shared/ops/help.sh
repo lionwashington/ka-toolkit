@@ -30,10 +30,10 @@ COMMANDS
                           `start <name>`. Already running → left untouched.
                     Flags: --dry-run, --all, --only NAME[,...], --skip-daemon
     daemon          Operate on the ACTIVE channel daemon (telegram|lark, from
-                    config.yaml channel_kind; port from its config.json). Verbs:
+                    config.yaml channel_kind; port from channels.<kind>.port). Verbs:
                       ka daemon start | stop | restart | status | config
                     `restart` re-adopts every CC automatically (~2s blip);
-                    `config` opens the daemon's config.json in $EDITOR.
+                    `config` opens config.yaml + secrets.yaml in $EDITOR.
     status          Print a <1s health summary (tmux / channel daemon / mates).
     doctor          Deeper consistency diagnostics + fix hints (daemon / channel
                     uniqueness / pane cwd / mates / cron). Exit 1 if issues found.
@@ -50,7 +50,7 @@ ENVIRONMENT
     NO_COLOR=1       Disable ANSI colors in output.
 
     The daemon kind + port are NOT env vars — they come from config.yaml
-    channel_kind and runtime/<kind>-daemon/config.json (set the kind with
+    channel_kind and channels.<kind>.port (set the kind with
     ./install.sh --channel-kind=telegram|lark).
 
 DESIGN

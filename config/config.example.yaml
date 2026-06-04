@@ -2,9 +2,22 @@
 
 # Which channel daemon is active: telegram | lark (default telegram).
 # Single source of truth — every ka command reads the daemon type from here.
-# Set at install time with `./install.sh --channel-kind=telegram|lark`; the
-# port itself lives in runtime/<kind>-daemon/config.json (http_port).
+# Set at install time with `./install.sh --channel-kind=telegram|lark`.
 channel_kind: telegram
+
+# Channel daemon settings — NON-SECRET only (ports + tuning). The active kind is
+# `channel_kind` above; both blocks may be present (only the active one is used).
+# Secrets (bot token, owner chat id, lark webhooks) live in secrets.yaml under
+# the SAME channels.<kind> keys — never here.
+channels:
+  telegram:
+    port: 9877
+    poll_timeout: 25            # getUpdates long-poll seconds
+  lark:
+    port: 9876
+    poll_interval_seconds: 1    # base poll tick (seconds)
+    page_size: 10               # lark-cli chat-messages-list page size
+    lark_cli_bin: lark-cli      # lark-cli binary (path or $PATH name)
 
 # Knowledge base location (absolute path)
 knowledge_base_path: ~/knowledge-base/

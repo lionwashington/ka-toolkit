@@ -1,8 +1,8 @@
 #!/bin/bash
 # ka daemon — operate on the ACTIVE channel daemon. Which daemon (telegram|lark)
 # and its port come from the single source of truth: config.yaml channel_kind +
-# runtime/<kind>-daemon/config.json http_port (resolved in common.sh). There is
-# no per-command kind override — to switch kinds, edit config.yaml (or re-run
+# config.yaml channels.<kind>.port (resolved in common.sh). There is no
+# per-command kind override — to switch kinds, edit config.yaml (or re-run
 # ./install.sh --channel-kind=…) and restart.
 set -euo pipefail
 : "${KA_HOME:=$HOME/.knowledge-assistant}"
@@ -73,10 +73,11 @@ print(f"  dispatches {d.get('dispatches_total', 0)} · replies {d.get('replies_t
 PY
         ;;
     config)
-        cfgjson="$DIR/config.json"
-        [ -f "$cfgjson" ] || { log_err "no config.json at $cfgjson (run ./install.sh --only daemon first)"; exit 1; }
-        log_info "editing $KIND daemon config: $cfgjson (apply with: ka daemon restart)"
-        exec "${EDITOR:-vi}" "$cfgjson"
+        cfg="${KA_CONFIG:-$KA_CONFIG_DIR/config.yaml}"
+        secrets="$KA_CONFIG_DIR/secrets.yaml"
+        [ -f "$cfg" ] || { log_err "no config.yaml at $cfg (run ./install.sh --only config first)"; exit 1; }
+        log_info "editing $KIND daemon config: $cfg + $secrets (channels.$KIND; apply with: ka daemon restart)"
+        exec "${EDITOR:-vi}" "$cfg" "$secrets"
         ;;
     -h|--help|help|'')
         cat <<EOF
@@ -85,7 +86,7 @@ ka daemon — operate on the active channel daemon ($KIND, from config.yaml chan
   ka daemon stop       stop the daemon
   ka daemon restart    restart it (CCs re-adopt automatically, ~2s blip)
   ka daemon status     health check (shows kind + port)
-  ka daemon config     edit the daemon's config.json (\$EDITOR), then: ka daemon restart
+  ka daemon config     edit config.yaml + secrets.yaml (\$EDITOR), then: ka daemon restart
 EOF
         ;;
     *)

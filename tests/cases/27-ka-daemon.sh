@@ -1,6 +1,6 @@
 #!/bin/bash
 # Verifies the `ka daemon` command: it resolves the ACTIVE daemon from
-# config.yaml channel_kind (port from its config.json), exposes start/stop/
+# config.yaml channel_kind (port from channels.<kind>.port), exposes start/stop/
 # restart/status/config, and fails gracefully. No real daemon runs in the test
 # image, so lifecycle verbs report "down" / "not deployed" rather than acting.
 set -euo pipefail

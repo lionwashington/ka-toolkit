@@ -101,8 +101,8 @@ else
     [ "$declared_n" -gt 0 ] && degraded=1
 fi
 
-# channel daemon health. Kind + port come from config.yaml + the active
-# daemon's config.json (resolved in common.sh) — telegram→9877 / lark→9876.
+# channel daemon health. Kind + port come from config.yaml channel_kind +
+# channels.<kind>.port (resolved in common.sh) — telegram→9877 / lark→9876.
 _dkind="$(ka_channel_kind)" || _dkind="telegram"
 _dport="$(ka_channel_port)"
 _daemon_json=""

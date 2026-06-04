@@ -74,23 +74,25 @@ export async function startDaemon(opts: {
   const fakeCli = join(PKG_DIR, 'tests', 'fake-lark-cli.sh')
   try { chmodSync(fakeCli, 0o755) } catch {}
 
-  writeFileSync(join(dataDir, 'config.json'), JSON.stringify({
-    self_open_id: selfOpenId,
-    poll_interval_seconds: opts.pollIntervalSeconds ?? 1,
-    page_size: 20,
-    lark_cli_bin: fakeCli,
-    http_host: '127.0.0.1',
-    http_port: port,
-    groups: { [chatId]: { name: 'Test Group', webhook_url: opts.webhookUrl } },
-  }))
+  // Two-bucket data, same as prod: config.yaml (non-secret) + secrets.yaml
+  // (self_open_id + group webhooks) in the config dir the daemon resolves via
+  // KA_CONFIG_DIR. state.json/log/pid stay in KA_DAEMON_DATA_DIR; both = dataDir.
+  writeFileSync(join(dataDir, 'config.yaml'),
+    `channels:\n  lark:\n    port: ${port}\n` +
+    `    poll_interval_seconds: ${opts.pollIntervalSeconds ?? 1}\n` +
+    `    page_size: 20\n    lark_cli_bin: "${fakeCli}"\n`)
+  writeFileSync(join(dataDir, 'secrets.yaml'),
+    `channels:\n  lark:\n    self_open_id: "${selfOpenId}"\n    groups:\n` +
+    `      ${chatId}:\n        name: "Test Group"\n        webhook_url: "${opts.webhookUrl}"\n`)
 
   const env: Record<string, string> = {
     ...process.env as Record<string, string>,
     KA_DAEMON_DATA_DIR: dataDir,
+    KA_CONFIG_DIR: dataDir,
     KA_PLATFORM_MODULE: join(PKG_DIR, 'lark-platform.ts'),
     LARK_MOCK_DIR: mockDir,
   }
-  const cmd = ['node', '--experimental-strip-types', join(REPO, 'packages', 'channel-core', 'src', 'main.ts')]
+  const cmd = ['node', '--experimental-strip-types', join(PKG_DIR, '..', 'core', 'src', 'main.ts')]
   const proc = spawn(cmd[0], cmd.slice(1), { cwd: PKG_DIR, env, stdio: ['ignore', 'pipe', 'pipe'] })
   // proc.stderr?.on('data', d => process.stderr.write(`[lark-daemon] ${d}`))  // debug
 

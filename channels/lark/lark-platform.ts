@@ -14,27 +14,40 @@
  *
  * SECURITY: only the owner's own messages (sender.id === self_open_id) are ever
  * dispatched (prompt-injection guard). Webhook tokens live ONLY in this process's
- * config.json (gitignored, never in git). The entry (channel-core/main.ts) wires
- * this platform into runChannelDaemon via the { platform, init } contract.
+ * secrets.yaml (channels.lark, gitignored, never in git). The entry
+ * (channel-core/main.ts) wires this platform into runChannelDaemon via the
+ * { platform, init } contract.
  */
 import { spawn } from 'child_process'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { homedir } from 'os'
+import { parse as parseYaml } from 'yaml'
 import { parseRoutingPrefix } from '../core/src/routing.ts'
 import { byName, sessionsById, resolveTargetToName } from '../core/src/sessions.ts'
 import type { Platform, InboundDispatch } from '../core/src/platform.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-// Data dir holds config.json / state.json / channel.log / daemon.pid.
-// Defaults to the daemon's own dir (prod: ~/.knowledge-assistant/runtime/lark-daemon).
-// KA_DAEMON_DATA_DIR overrides it for isolated e2e tests (prod leaves it unset).
+// Data dir holds state.json / channel.log / daemon.pid / attachments/ — the
+// daemon's own runtime working files. Defaults to the daemon's own dir (prod:
+// ~/.knowledge-assistant/channels/lark-daemon). KA_DAEMON_DATA_DIR overrides it
+// for isolated e2e tests (prod leaves it unset).
 const DATA_DIR = process.env.KA_DAEMON_DATA_DIR || __dirname
-const CONFIG_PATH = join(DATA_DIR, 'config.json')
 const STATE_PATH = join(DATA_DIR, 'state.json')
 const LOG_PATH = join(DATA_DIR, 'channel.log')
 const PID_PATH = join(DATA_DIR, 'daemon.pid')
 const ATTACH_DIR = join(DATA_DIR, 'attachments')   // downloaded inbound attachments
+
+// Config dir holds the SHARED config.yaml (non-secret: port/poll/page_size/
+// lark_cli_bin under channels.lark) and secrets.yaml (self_open_id + groups,
+// each group's webhook_url being the secret). Resolved exactly like common.sh:
+// KA_CONFIG_DIR override, else $KA_HOME/config (KA_HOME default
+// ~/.knowledge-assistant). Tests point KA_CONFIG_DIR at a fixture.
+const CONFIG_DIR = process.env.KA_CONFIG_DIR
+  || join(process.env.KA_HOME || join(homedir(), '.knowledge-assistant'), 'config')
+const CONFIG_YAML = join(CONFIG_DIR, 'config.yaml')
+const SECRETS_YAML = join(CONFIG_DIR, 'secrets.yaml')
 
 type GroupConfig = {
   name: string                       // display name, e.g. "Team Group"
@@ -66,17 +79,26 @@ function log(msg: string): void {
   process.stderr.write(line)
 }
 
+// Parse a yaml file into a plain object; missing/empty/malformed → {} (the
+// caller fails closed on the absence of required fields, not on a read error).
+function readYaml(path: string): any {
+  try { return parseYaml(readFileSync(path, 'utf-8')) ?? {} } catch { return {} }
+}
+
 function loadConfig(): Config {
-  const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'))
+  const pub = readYaml(CONFIG_YAML)?.channels?.lark ?? {}
+  const sec = readYaml(SECRETS_YAML)?.channels?.lark ?? {}
   return {
-    // self_open_id: env-first (SELF_OPEN_ID), then config.json — single source.
-    self_open_id: String(process.env.SELF_OPEN_ID || raw.self_open_id || ''),
-    poll_interval_seconds: raw.poll_interval_seconds ?? 5,
-    page_size: raw.page_size ?? 10,
-    lark_cli_bin: raw.lark_cli_bin ?? 'lark-cli',
-    http_host: raw.http_host ?? '127.0.0.1',
-    http_port: raw.http_port ?? 9876,
-    groups: raw.groups ?? {},
+    // Secrets (self_open_id, groups+webhook_url) come ONLY from secrets.yaml —
+    // never from config.yaml or the environment. Empty self_open_id is
+    // fail-closed in initLark (the daemon refuses to start).
+    self_open_id: String(sec.self_open_id ?? ''),
+    poll_interval_seconds: Number(pub.poll_interval_seconds ?? 5),
+    page_size: Number(pub.page_size ?? 10),
+    lark_cli_bin: String(pub.lark_cli_bin ?? 'lark-cli'),
+    http_host: String(pub.host ?? '127.0.0.1'),
+    http_port: Number(pub.port ?? 9876),
+    groups: sec.groups ?? {},
   }
 }
 
@@ -439,11 +461,11 @@ export function initLark() {
   cfg = loadConfig()
   state = loadState()
   if (!cfg.self_open_id) {
-    log('FATAL: self_open_id is empty (config.json / SELF_OPEN_ID) — cannot filter to owner. Exiting.')
+    log(`FATAL: channels.lark.self_open_id is empty in ${SECRETS_YAML} — cannot filter to owner. Exiting.`)
     process.exit(1)
   }
   if (Object.keys(cfg.groups).length === 0) {
-    log('WARN: no groups configured — daemon will run but poll nothing until config.json groups are set.')
+    log(`WARN: no groups configured — daemon will run but poll nothing until channels.lark.groups in ${SECRETS_YAML} is set.`)
   }
   return {
     host: cfg.http_host,

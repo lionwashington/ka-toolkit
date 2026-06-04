@@ -245,13 +245,14 @@ deploy_daemon() {        # telegram channel daemon → runtime/telegram-daemon (
   #    a single module graph guarantees a single channel-core instance (shared
   #    byName/sessionsById/counters); bundling core and platform separately would
   #    duplicate the kernel → session state not shared → broken.
-  # 🔴 Do NOT copy secrets (.env/config.json/state.json), do not restart, do not change
-  #    registration; the actual switch is --switch.
+  # 🔴 Do NOT touch secrets/state (config/secrets.yaml live in $KA_HOME/config; the
+  #    daemon reads them at runtime), do not restart, do not change registration;
+  #    the actual switch is --switch.
   local src="$REPO_ROOT/channels/telegram" dest="$RUNTIME/channels/telegram-daemon"
   log "channel daemon → ${dest} (esbuild single-file bundle: core+telegram-platform+deps self-contained, runtime has no source)"
   if [ "$DRY_RUN" = 1 ]; then
     echo "  [dry-run] generate temp static entry → esbuild --bundle → ${dest}/daemon.mjs (single core instance, self-contained)"
-    echo "  [dry-run] cp daemon.sh start.sh stop.sh status.sh config.example.json -> ${dest} (no .ts / no node_modules)"
+    echo "  [dry-run] cp daemon.sh start.sh stop.sh status.sh -> ${dest} (no .ts / no node_modules; config from \$KA_HOME/config)"
     return 0
   fi
   local ESB; ESB="$(find "$REPO_ROOT/node_modules/.pnpm" -path '*esbuild@*/node_modules/esbuild/bin/esbuild' -type f 2>/dev/null | head -1 || true)"
@@ -288,21 +289,23 @@ EOF
     log "  FAIL esbuild daemon bundle (see above)"; return 0
   fi
   local f
-  for f in daemon.sh start.sh stop.sh status.sh config.example.json; do
+  for f in daemon.sh start.sh stop.sh status.sh; do
     [ -f "$src/$f" ] && cp "$src/$f" "$dest/$f"
   done
   chmod +x "$dest"/*.sh 2>/dev/null || true
-  # seed a placeholder config (don't overwrite existing); real secrets are migrated by the
-  # owner at switch time, install doesn't touch them
-  [ -f "$dest/config.json" ] || cp "$src/config.example.json" "$dest/config.json"
+  # No per-daemon config to seed: the daemon reads config.yaml/secrets.yaml from
+  # $KA_HOME/config (seeded by deploy_config). config.example.json is dead in the
+  # new layout — prune it (a template, no secrets), but NEVER the old config.json/
+  # .env (they may still hold the running daemon's token until the owner migrates
+  # those secrets into secrets.yaml at --switch time).
   # Prune previous-generation (pre-bundle) artifacts: raw server.ts + node_modules +
   # package*.json + tg-ch are superseded by the self-contained bundle and are dead code if
-  # left behind. Keep secrets/state/config/logs/attachments.
+  # left behind. Keep secrets/state/logs/attachments.
   local stale
-  for stale in server.ts node_modules package.json package-lock.json tg-ch; do
+  for stale in server.ts node_modules package.json package-lock.json tg-ch config.example.json; do
     [ -e "$dest/$stale" ] && { rm -rf "$dest/$stale"; log "  pruned previous-gen: $stale"; }
   done
-  log "  OK ${dest} (bundle + scripts in place; secrets/.env not included, owner migrates them at switch time)"
+  log "  OK ${dest} (bundle + scripts in place; config from \$KA_HOME/config, owner migrates legacy secrets at --switch)"
 }
 
 deploy_lark_daemon() {   # lark channel daemon → runtime/lark-daemon (esbuild single-file bundle)
@@ -311,13 +314,14 @@ deploy_lark_daemon() {   # lark channel daemon → runtime/lark-daemon (esbuild 
   # Same as deploy_daemon: channel-core kernel + lark-platform plugin + deps esbuild'd into a
   # single self-contained daemon.mjs (generated temp static entry guarantees a single core
   # instance). runtime/lark-daemon has no .ts/node_modules.
-  # 🔴 Do NOT copy secrets (config.json contains the webhook token), do not restart, do not
-  #    change registration; the actual switch is --switch.
+  # 🔴 Do NOT touch secrets/state (config/secrets.yaml live in $KA_HOME/config —
+  #    the webhook tokens are in secrets.yaml channels.lark), do not restart, do
+  #    not change registration; the actual switch is --switch.
   local src="$REPO_ROOT/channels/lark" dest="$RUNTIME/channels/lark-daemon"
   log "lark daemon → ${dest} (esbuild: core+lark-platform+deps self-contained, runtime has no source)"
   if [ "$DRY_RUN" = 1 ]; then
     echo "  [dry-run] generate temp static entry → esbuild --bundle → ${dest}/daemon.mjs (single core instance)"
-    echo "  [dry-run] cp daemon.sh start.sh stop.sh status.sh config.example.json -> ${dest}"
+    echo "  [dry-run] cp daemon.sh start.sh stop.sh status.sh -> ${dest} (config from \$KA_HOME/config)"
     return 0
   fi
   local ESB; ESB="$(find "$REPO_ROOT/node_modules/.pnpm" -path '*esbuild@*/node_modules/esbuild/bin/esbuild' -type f 2>/dev/null | head -1 || true)"
@@ -347,14 +351,18 @@ EOF
     log "  FAIL esbuild lark daemon bundle"; return 0
   fi
   local f
-  for f in daemon.sh start.sh stop.sh status.sh config.example.json; do
+  for f in daemon.sh start.sh stop.sh status.sh; do
     [ -f "$src/$f" ] && cp "$src/$f" "$dest/$f"
   done
   chmod +x "$dest"/*.sh 2>/dev/null || true
-  # seed a placeholder config (don't overwrite existing); real lark credentials are filled in
-  # by the owner, install doesn't touch them
-  [ -f "$dest/config.json" ] || cp "$src/config.example.json" "$dest/config.json"
-  log "  OK ${dest} (bundle + scripts in place; config.json needs self_open_id/groups/webhook_url filled in)"
+  # No per-daemon config to seed: the daemon reads config.yaml/secrets.yaml from
+  # $KA_HOME/config. Prune the dead config.example.json template (never the old
+  # config.json/.env — they may hold the running daemon's creds until migration).
+  local stale
+  for stale in server.ts node_modules package.json package-lock.json config.example.json; do
+    [ -e "$dest/$stale" ] && { rm -rf "$dest/$stale"; log "  pruned previous-gen: $stale"; }
+  done
+  log "  OK ${dest} (bundle + scripts in place; fill channels.lark in config.yaml/secrets.yaml)"
 }
 
 deploy_hooks() {         # CC hooks (capture-hook) → runtime (esbuild bundle + prune stale; @ka/core bundled in, self-contained)
@@ -598,22 +606,26 @@ switch_daemon() {        # switch ⑤: migrate secrets + (re)start the telegram 
   [ "$DO_SWITCH" = 1 ] || return 0
   local dest="$RUNTIME/channels/telegram-daemon"
   local legacy_rt="$RUNTIME/daemon"   # pre-rename runtime location (migrate secrets from, then retire)
-  log "switch ⑤ telegram daemon → migrate secrets + restart ${dest} (active kind)"
-  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] migrate {config.json,.env,state.json} from ${legacy_rt} else ${TELEGRAM_DIR} -> ${dest}; stop old (incl ${legacy_rt}) + start ${dest} (telegram drops a few seconds; CCs re-adopt)"; return 0; fi
+  log "switch ⑤ telegram daemon → migrate state + restart ${dest} (active kind)"
+  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] migrate {state.json} from ${legacy_rt} else ${TELEGRAM_DIR} -> ${dest}; stop old (incl ${legacy_rt}) + start ${dest} (telegram drops a few seconds; CCs re-adopt). Secrets now live in \$KA_HOME/config/secrets.yaml — populate channels.telegram there first."; return 0; fi
   [ -d "$dest" ] || { log "  WARN ${dest} not deployed (run deploy_daemon first), skipping"; return 0; }
 
-  # 1) Migrate secrets — prefer the pre-rename runtime dir (runtime/daemon), else the
-  #    legacy standalone (~/.telegram-channel). Never overwrite existing.
+  # 1) Migrate runtime STATE only (offset/watermark/channel-numbers). Secrets no
+  #    longer live in a per-daemon config.json/.env — they're in
+  #    $KA_HOME/config/secrets.yaml (channels.telegram), which the owner populates
+  #    once (migrating the old config.json token + owner_chat_id). Prefer the
+  #    pre-rename runtime dir (runtime/daemon), else the legacy standalone
+  #    (~/.telegram-channel). Never overwrite existing.
   local mig_src=""
   if [ -d "$legacy_rt" ]; then mig_src="$legacy_rt"; elif [ -d "$TELEGRAM_DIR" ]; then mig_src="$TELEGRAM_DIR"; fi
   if [ -n "$mig_src" ]; then
     local f migrated=0
-    for f in config.json .env state.json; do
+    for f in state.json; do
       [ -f "$mig_src/$f" ] && [ ! -f "$dest/$f" ] && { cp "$mig_src/$f" "$dest/$f"; migrated=$((migrated + 1)); }
     done
-    log "  OK migrated ${migrated} secrets/state file(s) from ${mig_src} (existing not overwritten)"
+    log "  OK migrated ${migrated} state file(s) from ${mig_src} (existing not overwritten; secrets → secrets.yaml)"
   else
-    log "  no legacy daemon dir to migrate — ${dest} holds its own secrets"
+    log "  no legacy daemon dir to migrate — ${dest} reads config/secrets.yaml from \$KA_HOME/config"
   fi
 
   # 2) Restart to load the freshly-deployed bundle. Test-safety: only touch the real
@@ -647,23 +659,24 @@ switch_lark_daemon() {   # switch ⑤b: start runtime/lark-daemon IFF lark is th
   [ "$DO_SWITCH" = 1 ] || return 0
   local dest="$RUNTIME/channels/lark-daemon"
   log "switch ⑤b lark daemon → start ${dest} (@9876)"
-  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] migrate config.json/.env/state.json from ${LARK_DIR} (no overwrite); stop old + start runtime/lark-daemon"; return 0; fi
+  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] migrate state.json from ${LARK_DIR} (no overwrite); stop old + start runtime/lark-daemon. Secrets now live in \$KA_HOME/config/secrets.yaml — populate channels.lark there first."; return 0; fi
   [ -d "$dest" ] || { log "  WARN runtime/lark-daemon not deployed (run deploy_lark_daemon first), skipping"; return 0; }
-  # Migrate secrets/state from old ~/.lark-channel (if any; a fresh Ubuntu install usually has
-  # none → use the placeholder config, owner then fills in self_open_id/groups/webhook_url).
+  # Migrate runtime STATE only from old ~/.lark-channel (if any). Secrets
+  # (self_open_id/groups/webhook_url) now live in $KA_HOME/config/secrets.yaml
+  # (channels.lark), which the owner populates once.
   if [ -d "$LARK_DIR" ]; then
     local f migrated=0
-    for f in config.json .env state.json; do
+    for f in state.json; do
       [ -f "$LARK_DIR/$f" ] && [ ! -f "$dest/$f" ] && { cp "$LARK_DIR/$f" "$dest/$f"; migrated=$((migrated + 1)); }
     done
-    [ "$migrated" -gt 0 ] && log "  OK migrated ${migrated} secrets/state file(s) from ${LARK_DIR}"
+    [ "$migrated" -gt 0 ] && log "  OK migrated ${migrated} state file(s) from ${LARK_DIR} (secrets → secrets.yaml)"
   fi
   log "  stop old + start runtime/lark-daemon..."
   [ -x "$LARK_DIR/stop.sh" ] && "$LARK_DIR/stop.sh" >/dev/null 2>&1 || true
   [ -x "$dest/stop.sh" ] && "$dest/stop.sh" >/dev/null 2>&1 || true
   sleep 1
   if [ -x "$dest/start.sh" ]; then
-    if "$dest/start.sh" >/dev/null 2>&1; then log "  OK runtime/lark-daemon is up (on 9876)"; else log "  WARN start failed, see ${dest}/daemon.stdout.log (most likely config.json hasn't been filled with real credentials yet)"; fi
+    if "$dest/start.sh" >/dev/null 2>&1; then log "  OK runtime/lark-daemon is up (on 9876)"; else log "  WARN start failed, see ${dest}/daemon.stdout.log (most likely channels.lark in secrets.yaml isn't filled with real credentials yet)"; fi
   else
     log "  WARN ${dest}/start.sh does not exist"
   fi

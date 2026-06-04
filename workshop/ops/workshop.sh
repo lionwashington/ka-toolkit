@@ -43,8 +43,8 @@ source "$KA_WORKSHOP_DIR/tmux-helpers.sh"
 
 YAML_PARSE="$KA_WORKSHOP_DIR/yaml-parse.sh"
 START_PANE="$KA_WORKSHOP_DIR/start-pane.sh"
-# Channel kind + port = single source of truth: config.yaml channel_kind + the
-# active daemon's config.json http_port (resolved in common.sh). Daemon dir is
+# Channel kind + port = single source of truth: config.yaml channel_kind +
+# channels.<kind>.port (resolved in common.sh). Daemon dir is
 # <kind>-daemon. The lead passes kind+port to each pane's CC child via env
 # (the start-pane launch below) — that internal hand-off is the only place a
 # channel env var is set, and its values originate from config.

@@ -90,9 +90,9 @@ workshop_session_name() {
 
 # ── channel daemon resolution (single source of truth) ──────────────────────
 # Which channel daemon is active comes ONLY from config.yaml `channel_kind`
-# (telegram | lark; default telegram). The port comes ONLY from the active
-# daemon's own config.json `http_port`. No runtime env knobs — config.yaml +
-# the daemon's config.json are the two sources, each for its own concern.
+# (telegram | lark; default telegram). The port comes ONLY from config.yaml
+# `channels.<kind>.port`. No runtime env knobs, no per-daemon config file —
+# config.yaml is the single source for both the kind and every channel's port.
 
 # ka_channel_kind → telegram | lark (default telegram). Invalid value =
 # fail-closed: error to stderr + return 2 (empty stdout), no silent default.
@@ -119,18 +119,30 @@ ka_daemon_dir() {
     printf '%s' "$KA_HOME/channels/${kind}-daemon"
 }
 
-# ka_channel_port → the port the active daemon binds, read from its config.json
-# `http_port`. Falls back to the kind default (telegram 9877 / lark 9876) only
-# when config.json is absent (e.g. before first deploy).
+# _ka_yaml_channel_port <config.yaml> <kind> → the numeric port under
+# channels.<kind>.port, or empty if absent. Two-level indentation walk (channels:
+# → <kind>: → port:) — Bash 3.2 / BSD-awk compatible, no yaml dep in the shell.
+_ka_yaml_channel_port() {
+    awk -v kind="$2" '
+        { match($0, /^ */); ind = RLENGTH }
+        ind==0 { k=$0; sub(/:.*/,"",k); gsub(/[ \t]/,"",k); inch=(k=="channels"); cur=""; next }
+        inch && ind==2 { k=$0; gsub(/^ +/,"",k); sub(/:.*/,"",k); gsub(/[ \t]/,"",k); cur=k; next }
+        inch && cur==kind && ind>=4 && /port[ \t]*:/ {
+            v=$0; sub(/.*port[ \t]*:[ \t]*/,"",v); gsub(/[^0-9]/,"",v)
+            if (v!="") { print v; exit }
+        }
+    ' "$1"
+}
+
+# ka_channel_port → the port the active daemon binds, read from config.yaml
+# `channels.<kind>.port`. Falls back to the kind default (telegram 9877 /
+# lark 9876) only when config.yaml lacks the entry (e.g. before first deploy).
 ka_channel_port() {
-    local kind dir cfgjson port
+    local kind cfg port
     kind="$(ka_channel_kind)" || return 2
-    dir="$(ka_daemon_dir)"
-    cfgjson="$dir/config.json"
+    cfg="${KA_CONFIG:-$KA_CONFIG_DIR/config.yaml}"
     port=""
-    if [ -f "$cfgjson" ]; then
-        port="$(sed -n 's/.*"http_port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$cfgjson" | head -1)"
-    fi
+    [ -f "$cfg" ] && port="$(_ka_yaml_channel_port "$cfg" "$kind")"
     if [ -z "$port" ]; then
         if [ "$kind" = "lark" ]; then port=9876; else port=9877; fi
     fi

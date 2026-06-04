@@ -2,7 +2,7 @@
 # Verifies the single-source-of-truth channel-daemon resolution:
 #   - config.yaml `channel_kind` picks the daemon (telegram|lark; default telegram)
 #   - the daemon dir is <kind>-daemon
-#   - the port comes from the active daemon's config.json `http_port` (NOT hardcoded)
+#   - the port comes from config.yaml `channels.<kind>.port` (NOT hardcoded)
 #   - an invalid channel_kind is fail-closed (non-zero, no silent default)
 #   - install.sh --channel-kind validates + persists channel_kind into config.yaml
 #     (run in an isolated fake runtime root — never touches a real machine)
@@ -32,10 +32,9 @@ h="$TMP/h2"; mkdir -p "$h"; cfg="$h/config.yaml"; printf 'channel_kind: lark\n' 
 case "$(runh ka_daemon_dir "$cfg" "$h")" in */lark-daemon) ;; *) echo "FAIL: dir not lark-daemon"; exit 1;; esac
 echo "    ok"
 
-echo "[3/6] port read from the daemon's config.json http_port (not hardcoded)"
-mkdir -p "$h/channels/lark-daemon"
-printf '{\n  "http_port": 9999\n}\n' > "$h/channels/lark-daemon/config.json"
-[ "$(runh ka_channel_port "$cfg" "$h")" = "9999" ] || { echo "FAIL: port not read from config.json"; exit 1; }
+echo "[3/6] port read from config.yaml channels.<kind>.port (not hardcoded)"
+printf 'channel_kind: lark\nchannels:\n  lark:\n    port: 9999\n' > "$cfg"
+[ "$(runh ka_channel_port "$cfg" "$h")" = "9999" ] || { echo "FAIL: port not read from config.yaml"; exit 1; }
 echo "    ok"
 
 echo "[4/6] invalid channel_kind → fail-closed (non-zero)"
