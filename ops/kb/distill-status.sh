@@ -7,9 +7,8 @@
 #   ka distill status [--json]
 
 set -euo pipefail
-THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
-source "$THIS_DIR/../cli/common.sh"
+KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/bin/ka" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
+source "$KA_REPO_ROOT/ops/cli/common.sh"
 
 STATUS_FILE="$HOME/.knowledge-assistant/state/distill-current.json"
 EMIT_JSON=0

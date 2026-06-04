@@ -29,9 +29,11 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-export KA_REPO_ROOT="$REPO_ROOT"
+KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/bin/ka" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
+export KA_REPO_ROOT
+# shellcheck source=../cli/common.sh
+source "$KA_REPO_ROOT/ops/cli/common.sh"
+REPO_ROOT="$KA_REPO_ROOT"   # back-compat alias used below
 
 CRON_YAML="${KA_CRON_CONFIG:-$HOME/.knowledge-assistant/cron.yaml}"
 if [ ! -f "$CRON_YAML" ]; then
@@ -47,7 +49,7 @@ mkdir -p "$LOCK_DIR"
 LOCK_FILE="$LOCK_DIR/${NAME}.lock"
 
 # --- Parse cron.yaml, extract fields for <name> ------------------------------
-PARSE="$REPO_ROOT/ops/lib/cron/parse-yaml.sh"
+PARSE="$KA_CRON_LIB_DIR/parse-yaml.sh"
 [ -x "$PARSE" ] || chmod +x "$PARSE" 2>/dev/null || true
 
 schedule=""; kind="shell"; command_str=""
@@ -92,10 +94,10 @@ run_cmd() {
             bash -c "$command_str"
             ;;
         inject-prompt)
-            local inject="$REPO_ROOT/ops/lib/inject-prompt.sh"
+            local inject="$KA_LIB_DIR/inject-prompt.sh"
             [ -x "$inject" ] || { echo "missing $inject" >&2; return 127; }
             # shellcheck source=../lib/tmux-helpers.sh
-            source "$REPO_ROOT/ops/lib/tmux-helpers.sh"
+            source "$KA_LIB_DIR/tmux-helpers.sh"
             # Target channels are read from config.yaml — the single fail-closed
             # source (config-cli). cron.yaml no longer carries target_pane.
             local node_bin; node_bin="$(command -v node || echo /opt/homebrew/bin/node)"

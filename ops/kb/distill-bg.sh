@@ -19,9 +19,8 @@
 #   2 — file/env error (jsonl missing, can't write state dir, etc.)
 
 set -euo pipefail
-THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
-source "$THIS_DIR/../cli/common.sh"
+KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/bin/ka" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
+source "$KA_REPO_ROOT/ops/cli/common.sh"
 
 JSONL=""
 SESSION_ID=""
@@ -130,7 +129,7 @@ TIMESTAMP_FILE="$(date -u +%Y%m%dT%H%M%SZ)"
 TIMESTAMP_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 LOG_PATH="$STATE_DIR/distill-${TIMESTAMP_FILE}.log"
 
-WORKER="$KA_REPO_ROOT/ops/kb/distill-bg-worker.sh"
+WORKER="$KA_KB_DIR/distill-bg-worker.sh"
 [ -f "$WORKER" ] || { log_err "worker missing: $WORKER"; exit 2; }
 
 if [ "$DRY_RUN" -eq 1 ]; then

@@ -7,11 +7,10 @@
 #   2  broken   (workshop session not running at all)
 set -euo pipefail
 
-THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
-source "$THIS_DIR/common.sh"
+KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/bin/ka" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
+source "$KA_REPO_ROOT/ops/cli/common.sh"
 # shellcheck source=../lib/runtimes/dispatch.sh
-source "$OPS_DIR/lib/runtimes/dispatch.sh"
+source "$KA_RUNTIMES_DIR/dispatch.sh"
 
 CONFIG="$(resolve_workshop_config)"
 SESSION="$(workshop_session_name "$CONFIG")"
@@ -39,7 +38,7 @@ if [ -n "$CONFIG" ] && [ -f "$CONFIG" ]; then
             runtime_default="$a"
             break
         fi
-    done < <("$OPS_DIR/lib/yaml-parse.sh" "$CONFIG" 2>/dev/null)
+    done < <("$KA_LIB_DIR/yaml-parse.sh" "$CONFIG" 2>/dev/null)
 fi
 if runtime_load "$runtime_default" 2>/dev/null; then
     printf '  %s runtime:   %s\n' "$(glyph_ok)" "$runtime_default"
@@ -68,7 +67,7 @@ if [ -n "$CONFIG" ] && [ -f "$CONFIG" ]; then
         if [ "$kind" = "mate" ] && [ "$d" = "1" ]; then
             DECLARED_NAMES+=("$a")
         fi
-    done < <("$OPS_DIR/lib/yaml-parse.sh" "$CONFIG" 2>/dev/null)
+    done < <("$KA_LIB_DIR/yaml-parse.sh" "$CONFIG" 2>/dev/null)
 fi
 declared_n="${#DECLARED_NAMES[@]}"
 

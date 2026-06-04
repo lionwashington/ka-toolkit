@@ -16,16 +16,15 @@
 
 set -euo pipefail
 
-THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
-source "$THIS_DIR/common.sh"
+KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/bin/ka" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
+source "$KA_REPO_ROOT/ops/cli/common.sh"
 
 SUB="${1:-help}"
 [ $# -gt 0 ] && shift || true
 
 case "$SUB" in
     list|add|remove|enable|disable|run|install|uninstall|import|status)
-        exec "$THIS_DIR/cron/${SUB}.sh" "$@"
+        exec "$KA_CRON_DIR/${SUB}.sh" "$@"
         ;;
     -h|--help|help|'')
         cat <<'EOF'

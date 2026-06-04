@@ -16,8 +16,8 @@ PANE_NAME="${1:?pane name required}"
 EXPECTED_CWD="${2:?expected cwd required}"
 shift 2
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OPS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/bin/ka" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
+source "$KA_REPO_ROOT/ops/cli/common.sh"
 
 echo "[start-pane:$PANE_NAME] pwd=$PWD expected=$EXPECTED_CWD"
 

@@ -36,14 +36,13 @@
 #   OPS_CONFIG       override workshop.yaml path
 set -euo pipefail
 
-THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
-source "$THIS_DIR/common.sh"
+KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/bin/ka" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
+source "$KA_REPO_ROOT/ops/cli/common.sh"
 # shellcheck source=../lib/tmux-helpers.sh
-source "$OPS_DIR/lib/tmux-helpers.sh"
+source "$KA_LIB_DIR/tmux-helpers.sh"
 
-YAML_PARSE="$OPS_DIR/lib/yaml-parse.sh"
-START_PANE="$OPS_DIR/lib/start-pane.sh"
+YAML_PARSE="$KA_LIB_DIR/yaml-parse.sh"
+START_PANE="$KA_LIB_DIR/start-pane.sh"
 # Channel kind + port = single source of truth: config.yaml channel_kind + the
 # active daemon's config.json http_port (resolved in common.sh). Daemon dir is
 # <kind>-daemon. The lead passes kind+port to each pane's CC child via env
@@ -573,7 +572,7 @@ cmd_spawn_mates() {
         log_err "workdir does not exist: $WORKDIR_ARG"
         exit 1
     fi
-    local upsert="$OPS_DIR/lib/yaml-upsert-mate.py"
+    local upsert="$KA_LIB_DIR/yaml-upsert-mate.py"
     if [ "$DRY_RUN" = "1" ]; then
         echo "[dry-run] python3 $upsert $CONFIG $TARGET $WORKDIR_ARG   # add/replace mate (default=false)"
         echo "[dry-run] then: ka workshop start $TARGET   # launch with the edited yaml"

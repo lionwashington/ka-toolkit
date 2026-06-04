@@ -3,24 +3,20 @@
 # Sourced, not executed.
 
 # shellcheck disable=SC2034
-CRON_CLI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CRON_OPS_DIR="$(cd "$CRON_CLI_DIR/../.." && pwd)"
-CRON_REPO_ROOT="$(cd "$CRON_OPS_DIR/.." && pwd)"
-export KA_REPO_ROOT="${KA_REPO_ROOT:-$CRON_REPO_ROOT}"
-
+KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/bin/ka" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
 # shellcheck source=../common.sh
-source "$CRON_CLI_DIR/../common.sh"
+source "$KA_REPO_ROOT/ops/cli/common.sh"
 # shellcheck source=../../lib/cron/backend-adapter.sh
-source "$CRON_OPS_DIR/lib/cron/backend-adapter.sh"
+source "$KA_CRON_LIB_DIR/backend-adapter.sh"
 
 CRON_YAML_DEFAULT="$HOME/.knowledge-assistant/cron.yaml"
 CRON_YAML="${KA_CRON_CONFIG:-$CRON_YAML_DEFAULT}"
 
 CRON_LOG_DIR="${KA_CRON_LOG_DIR:-$HOME/Library/Logs/knowledge-assistant/cron}"
-CRON_PARSE="$CRON_OPS_DIR/lib/cron/parse-yaml.sh"
-CRON_SCHED_PARSE="$CRON_OPS_DIR/lib/cron/schedule-parser.sh"
-CRON_PLIST_GEN="$CRON_OPS_DIR/lib/cron/plist-gen.sh"
-CRON_RUNNER="$CRON_OPS_DIR/scripts/cron-run.sh"
+CRON_PARSE="$KA_CRON_LIB_DIR/parse-yaml.sh"
+CRON_SCHED_PARSE="$KA_CRON_LIB_DIR/schedule-parser.sh"
+CRON_PLIST_GEN="$KA_CRON_LIB_DIR/plist-gen.sh"
+CRON_RUNNER="$KA_SCRIPTS_DIR/cron-run.sh"
 
 cron_yaml_exists() { [ -f "$CRON_YAML" ]; }
 

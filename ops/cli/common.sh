@@ -2,10 +2,35 @@
 # ops/cli/common.sh — shared helpers sourced by every ka subcommand.
 # Bash 3.2 compatible (macOS default).
 
+# ── location anchor + directory map (single source of truth for code paths) ─────
+# Every ka script resolves sibling scripts/dirs from KA_REPO_ROOT, never from its
+# own location, so a script keeps working no matter where it (or common.sh) is
+# moved. KA_REPO_ROOT is exported by bin/ka; a standalone run (e.g. the test
+# suite) finds it by walking up to the dir that contains bin/ka.
 # shellcheck disable=SC2034
-KA_REPO_ROOT="${KA_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+if [ -z "${KA_REPO_ROOT:-}" ]; then
+    _ka_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    while [ "$_ka_d" != / ] && [ ! -e "$_ka_d/bin/ka" ]; do _ka_d="$(dirname "$_ka_d")"; done
+    KA_REPO_ROOT="$_ka_d"
+    unset _ka_d
+fi
+export KA_REPO_ROOT
+
+# Code-location map — when the repo layout changes, edit ONLY these lines; the
+# whole script tree references these vars, never relative paths. Exported so a
+# child process (an exec'd helper) inherits the map without re-sourcing.
 OPS_DIR="$KA_REPO_ROOT/ops"
-CLI_DIR="$OPS_DIR/cli"
+KA_CLI_DIR="$OPS_DIR/cli"
+KA_LIB_DIR="$OPS_DIR/lib"
+KA_KB_DIR="$OPS_DIR/kb"
+KA_CRON_DIR="$KA_CLI_DIR/cron"
+KA_CRON_LIB_DIR="$KA_LIB_DIR/cron"
+KA_PANES_DIR="$OPS_DIR/panes"
+KA_SCRIPTS_DIR="$OPS_DIR/scripts"
+KA_RUNTIMES_DIR="$KA_LIB_DIR/runtimes"
+CLI_DIR="$KA_CLI_DIR"   # back-compat alias
+export OPS_DIR KA_CLI_DIR KA_LIB_DIR KA_KB_DIR KA_CRON_DIR KA_CRON_LIB_DIR
+export KA_PANES_DIR KA_SCRIPTS_DIR KA_RUNTIMES_DIR CLI_DIR
 
 # Colors (disabled when stdout is not a TTY or NO_COLOR is set).
 if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -58,7 +83,7 @@ workshop_session_name() {
     local cfg="$1"
     [ -f "$cfg" ] || { printf 'workshop'; return; }
     local s
-    s="$("$OPS_DIR/lib/yaml-parse.sh" "$cfg" 2>/dev/null \
+    s="$("$KA_LIB_DIR/yaml-parse.sh" "$cfg" 2>/dev/null \
          | awk -F'\t' '$1=="session"{print $2; exit}')"
     [ -n "$s" ] && printf '%s' "$s" || printf 'workshop'
 }

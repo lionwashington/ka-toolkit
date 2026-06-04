@@ -5,9 +5,8 @@
 # no per-command kind override — to switch kinds, edit config.yaml (or re-run
 # ./install.sh --channel-kind=…) and restart.
 set -euo pipefail
-THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
-source "$THIS_DIR/common.sh"
+KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/bin/ka" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
+source "$KA_REPO_ROOT/ops/cli/common.sh"
 
 KIND="$(ka_channel_kind)" || exit 2
 DIR="$(ka_daemon_dir)"

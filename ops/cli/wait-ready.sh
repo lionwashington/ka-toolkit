@@ -35,13 +35,12 @@
 #   --verbose | -v      log each poll iteration
 set -euo pipefail
 
-THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
-source "$THIS_DIR/common.sh"
+KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/bin/ka" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
+source "$KA_REPO_ROOT/ops/cli/common.sh"
 # shellcheck source=../lib/tmux-helpers.sh
-source "$OPS_DIR/lib/tmux-helpers.sh"
+source "$KA_LIB_DIR/tmux-helpers.sh"
 # shellcheck source=../lib/runtimes/dispatch.sh
-source "$OPS_DIR/lib/runtimes/dispatch.sh"
+source "$KA_RUNTIMES_DIR/dispatch.sh"
 
 SESSION=""
 TARGET_OVERRIDE=""

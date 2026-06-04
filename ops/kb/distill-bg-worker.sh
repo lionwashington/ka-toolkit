@@ -20,8 +20,7 @@
 # packages/skill/src/kb.md for the main-side read contract.
 
 set -uo pipefail
-THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KA_REPO_ROOT="${KA_REPO_ROOT:-$(cd "$THIS_DIR/../.." && pwd)}"
+KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/bin/ka" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
 
 JSONL=""
 SESSION_ID=""
