@@ -460,8 +460,8 @@ seed_config() {          # seed config/data directories (never overwrites existi
   if [ -f "$REPO_ROOT/config/workshop.example.yaml" ] && [ ! -f "$KA_HOME/config/workshop.yaml" ]; then
     cp "$REPO_ROOT/config/workshop.example.yaml" "$KA_HOME/config/workshop.yaml"; seeded=$((seeded + 1))
   fi
-  if [ -f "$REPO_ROOT/config/default.yaml" ] && [ ! -f "$CONFIG_YAML" ]; then
-    cp "$REPO_ROOT/config/default.yaml" "$CONFIG_YAML"; seeded=$((seeded + 1))
+  if [ -f "$REPO_ROOT/config/config.example.yaml" ] && [ ! -f "$CONFIG_YAML" ]; then
+    cp "$REPO_ROOT/config/config.example.yaml" "$CONFIG_YAML"; seeded=$((seeded + 1))
   fi
   # Persist the active channel daemon kind (single source of truth). Upsert the
   # top-level `channel_kind:` line in config.yaml, touching nothing else.
