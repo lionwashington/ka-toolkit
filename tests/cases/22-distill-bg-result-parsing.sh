@@ -43,7 +43,7 @@ restore_state() {
 # Drive one spawn → wait → return "status|tier".
 run_and_collect() {
     local case_name="$1"
-    KA_REPO_ROOT="$REPO" WORKSPACE_CWD="$WORKSPACE" \
+    KA_ROOT="$REPO" WORKSPACE_CWD="$WORKSPACE" \
         bash "$REPO/kb/ops/distill-bg.sh" --jsonl "$JSONL" --session-id "fake-${case_name}" \
         > /dev/null
     local state="$HOME/.knowledge-assistant/state/distill-current.json"

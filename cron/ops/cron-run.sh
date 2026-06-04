@@ -29,11 +29,11 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/.ka-root" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
-export KA_REPO_ROOT
+KA_ROOT="${KA_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/.ka-root" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
+export KA_ROOT
 # shellcheck source=../cli/common.sh
-source "$KA_REPO_ROOT/shared/ops/common.sh"
-REPO_ROOT="$KA_REPO_ROOT"   # back-compat alias used below
+source "$KA_ROOT/shared/ops/common.sh"
+REPO_ROOT="$KA_ROOT"   # back-compat alias used below
 
 CRON_YAML="${KA_CRON_CONFIG:-$HOME/.knowledge-assistant/cron.yaml}"
 if [ ! -f "$CRON_YAML" ]; then
@@ -121,7 +121,7 @@ run_cmd() {
             [ "$injected" = 1 ] || echo "inject-prompt: no pane resolved for channels.inject — nothing injected" >&2
             ;;
         ka-cli)
-            local ka="$KA_REPO_ROOT/shared/bin/ka"
+            local ka="$KA_ROOT/shared/bin/ka"
             [ -x "$ka" ] || { echo "missing $ka" >&2; return 127; }
             # shellcheck disable=SC2086
             "$ka" $command_str

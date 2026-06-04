@@ -12,9 +12,9 @@ REPO="${REPO:-/repo}"
 COMMON="$REPO/shared/ops/common.sh"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
-# Run a common.sh helper with controlled env (KA_CONFIG / HOME / KA_REPO_ROOT).
+# Run a common.sh helper with controlled env (KA_CONFIG / HOME / KA_ROOT).
 runh() {  # $1=helper expr  $2=config.yaml path  $3=HOME
-    KA_REPO_ROOT="$REPO" KA_CONFIG="$2" HOME="$3" bash -c "source '$COMMON' 2>/dev/null; $1"
+    KA_ROOT="$REPO" KA_CONFIG="$2" HOME="$3" bash -c "source '$COMMON' 2>/dev/null; $1"
 }
 
 echo "[1/6] no config → telegram / telegram-daemon / 9877 (fallback)"
@@ -45,14 +45,14 @@ echo "    ok"
 
 echo "[5/6] install --channel-kind=lark --only config persists channel_kind (isolated)"
 rt="$TMP/rt5"
-KA_RUNTIME_ROOT="$rt" bash "$REPO/install.sh" --channel-kind=lark --only config >/dev/null 2>&1 || true
+KA_HOME="$rt" bash "$REPO/install.sh" --channel-kind=lark --only config >/dev/null 2>&1 || true
 grep -qE '^channel_kind:[[:space:]]*lark$' "$rt/config.yaml" \
     || { echo "FAIL: install did not persist channel_kind=lark"; cat "$rt/config.yaml" 2>/dev/null; exit 1; }
 echo "    ok"
 
 echo "[6/6] install --channel-kind=bogus is rejected (non-zero)"
 rt="$TMP/rt6"
-if KA_RUNTIME_ROOT="$rt" bash "$REPO/install.sh" --channel-kind=bogus --only config >/dev/null 2>&1; then
+if KA_HOME="$rt" bash "$REPO/install.sh" --channel-kind=bogus --only config >/dev/null 2>&1; then
     echo "FAIL: bogus channel-kind was accepted"; exit 1
 fi
 echo "    ok"

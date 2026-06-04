@@ -21,9 +21,9 @@ done
 BIN_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
 _root="$BIN_DIR"
 while [ "$_root" != / ] && [ ! -e "$_root/.ka-root" ]; do _root="$(dirname "$_root")"; done
-export KA_REPO_ROOT="$_root"
+export KA_ROOT="$_root"
 # shellcheck source=../ops/common.sh
-source "$KA_REPO_ROOT/shared/ops/common.sh"
+source "$KA_ROOT/shared/ops/common.sh"
 
 CMD="${1:-help}"
 [ $# -gt 0 ] && shift || true

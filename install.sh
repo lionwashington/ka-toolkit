@@ -6,7 +6,7 @@
 # deployed copy, not the repo; re-run `ka deploy` to pick up dev changes.
 #
 # 🔴 Top red line (must not affect existing usage):
-#   - Operates on ~/.knowledge-assistant by default, but offers a KA_RUNTIME_ROOT
+#   - Operates on ~/.knowledge-assistant by default, but offers a KA_HOME
 #     override for isolated tests (point it at a temp dir).
 #   - The steps that actually "switch what's running" (register_mcp editing
 #     ~/.claude.json, moving the daemon) default to **SKIP**; they require an
@@ -16,14 +16,14 @@
 #
 # Usage:
 #   ./install.sh [--dry-run] [--only ka|node-mcp|python-mcp|daemon|hooks|core-cli|skills|config] [--switch]
-#   KA_RUNTIME_ROOT=/tmp/ka-itest ./install.sh --dry-run    # isolated test, doesn't touch the real runtime
+#   KA_HOME=/tmp/ka-itest ./install.sh --dry-run    # isolated test, doesn't touch the real runtime
 #
 # Status: P1.1 skeleton — each component's deploy function is filled in over P1.2–P1.5.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KA_RUNTIME_ROOT="${KA_RUNTIME_ROOT:-$HOME/.knowledge-assistant}"
-RUNTIME="$KA_RUNTIME_ROOT/runtime"          # root of KA deploy artifacts (ka / ops / mcp / daemon / hooks)
+KA_HOME="${KA_HOME:-$HOME/.knowledge-assistant}"
+RUNTIME="$KA_HOME/runtime"          # root of KA deploy artifacts (ka / ops / mcp / daemon / hooks)
 
 # ── Switch-target overrides (point at a temp fake-home in isolated tests; never touch real files) ──
 # The --switch steps edit these "pointer" files; in tests, override them all to a temp dir for zero-risk verification.
@@ -65,7 +65,7 @@ want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 #   --channel-kind arg  >  existing config.yaml  >  interactive prompt  >  telegram
 # (The legacy KA_CHANNEL selector is retired — KA_CHANNEL now means only a
 # workshop channel NAME, never the daemon selector.)
-CONFIG_YAML="$KA_RUNTIME_ROOT/config.yaml"
+CONFIG_YAML="$KA_HOME/config.yaml"
 _cfg_channel_kind() {
   [ -f "$CONFIG_YAML" ] || return 0
   sed -n 's/^[[:space:]]*channel_kind[[:space:]]*:[[:space:]]*//p' "$CONFIG_YAML" \
@@ -105,7 +105,7 @@ resolve_active_kind
 #     ~/.claude/skills/<name>/SKILL.md  → runtime/skills/<name>/SKILL.md (created by switch_skills)
 #     ~/.claude.json           MCP registration (cc's turf; register_mcp points it at runtime/mcp)
 #     ~/Library/LaunchAgents/  launchd plist (platform-mandated)
-#   Runtime data (already lives in KA_RUNTIME_ROOT; install leaves it alone):
+#   Runtime data (already lives in KA_HOME; install leaves it alone):
 #     config.yaml / secrets.yaml / cron.yaml / workshop.yaml / state/ / raw/ / *-venv/
 
 # ── Component deploy functions (P1.1 skeleton; TODOs filled in over later steps) ──
@@ -129,7 +129,7 @@ deploy_ka() {            # ka CLI + the by-part sh trees copied to runtime (D1, 
   done
   rm -rf "$RUNTIME/config"; cp -R "$REPO_ROOT/config" "$RUNTIME/config"
   # The runtime MIRRORS the repo's by-part layout: bin/ka walks up to ${RUNTIME}/.ka-root
-  # → KA_REPO_ROOT=runtime, common.sh's map points at runtime/<part>/ops. Self-consistent,
+  # → KA_ROOT=runtime, common.sh's map points at runtime/<part>/ops. Self-consistent,
   # never points at the repo. (tests/ is top-level in the repo and is not deployed.)
   log "  OK ${RUNTIME}/{bin/ka,.ka-root,shared/ops,workshop/ops,channels/ops,cron/ops,kb/ops,config}"
 }
@@ -209,7 +209,7 @@ deploy_python_mcp() {    # P1.3
   local UV; UV="$(command -v uv 2>/dev/null || echo "$HOME/.local/bin/uv")"
   for spec in "ibkr=kb/tools/ibkr-mcp" "hkprop=kb/tools/hkprop-mcp"; do
     local name="${spec%%=*}" pkg="${spec#*=}"
-    local venv="$KA_RUNTIME_ROOT/${name}-venv"
+    local venv="$KA_HOME/${name}-venv"
     log "python MCP [$name]: uv build wheel + install into ${venv} (non-editable)"
     if [ "$DRY_RUN" = 1 ]; then
       echo "  [dry-run] uv build --wheel $pkg; uv venv $venv; uv pip install --force-reinstall <wheel>"
@@ -443,15 +443,15 @@ deploy_skills() {        # skills → runtime/skills/<name>/SKILL.md (design→r
 
 seed_config() {          # seed config/data directories (never overwrites existing user data)
   want config || return 0
-  log "seed config/data directories → ${KA_RUNTIME_ROOT} (does not overwrite existing)"
+  log "seed config/data directories → ${KA_HOME} (does not overwrite existing)"
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  [dry-run] mkdir -p ${KA_RUNTIME_ROOT}/{state,raw,pending-topics}; seed workshop.yaml + config.yaml from examples (if missing); upsert config.yaml channel_kind=${ACTIVE_KIND}"
+    echo "  [dry-run] mkdir -p ${KA_HOME}/{state,raw,pending-topics}; seed workshop.yaml + config.yaml from examples (if missing); upsert config.yaml channel_kind=${ACTIVE_KIND}"
     return 0
   fi
-  mkdir -p "$KA_RUNTIME_ROOT"/state "$KA_RUNTIME_ROOT"/raw "$KA_RUNTIME_ROOT"/pending-topics
+  mkdir -p "$KA_HOME"/state "$KA_HOME"/raw "$KA_HOME"/pending-topics
   local seeded=0
-  if [ -f "$REPO_ROOT/config/workshop.example.yaml" ] && [ ! -f "$KA_RUNTIME_ROOT/workshop.yaml" ]; then
-    cp "$REPO_ROOT/config/workshop.example.yaml" "$KA_RUNTIME_ROOT/workshop.yaml"; seeded=$((seeded + 1))
+  if [ -f "$REPO_ROOT/config/workshop.example.yaml" ] && [ ! -f "$KA_HOME/workshop.yaml" ]; then
+    cp "$REPO_ROOT/config/workshop.example.yaml" "$KA_HOME/workshop.yaml"; seeded=$((seeded + 1))
   fi
   if [ -f "$REPO_ROOT/config/default.yaml" ] && [ ! -f "$CONFIG_YAML" ]; then
     cp "$REPO_ROOT/config/default.yaml" "$CONFIG_YAML"; seeded=$((seeded + 1))
@@ -611,7 +611,7 @@ switch_daemon() {        # switch ⑤: migrate secrets + (re)start the telegram 
 
   # 2) Restart to load the freshly-deployed bundle. Test-safety: only touch the real
   #    daemon when operating on the REAL runtime root — isolated tests override
-  #    KA_RUNTIME_ROOT, so dest != real → skip, never touching the live daemon.
+  #    KA_HOME, so dest != real → skip, never touching the live daemon.
   if [ "$dest" != "$HOME/.knowledge-assistant/runtime/telegram-daemon" ]; then
     log "  (override runtime root — skipping daemon restart; not touching the real daemon)"
     return 0
@@ -713,7 +713,7 @@ precheck_deps() {        # dependency precheck (fail-closed style: clear warning
 
 main() {
   log "REPO        = $REPO_ROOT"
-  log "RUNTIME_ROOT= $KA_RUNTIME_ROOT"
+  log "RUNTIME_ROOT= $KA_HOME"
   log "RUNTIME     = $RUNTIME"
   [ "$DRY_RUN" = 1 ] && log "mode: DRY-RUN (print only, no changes)"
   [ -n "$ONLY" ] && log "deploy only: $ONLY"

@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Build context is the REPO ROOT. /repo mirrors the by-part monorepo layout so
-# the ka scripts' bootstrap (walk up to .ka-root → KA_REPO_ROOT → shared/ops/
+# the ka scripts' bootstrap (walk up to .ka-root → KA_ROOT → shared/ops/
 # common.sh map) resolves exactly as it does in the repo and the deployed runtime.
 WORKDIR /repo
 
@@ -48,7 +48,7 @@ COPY kb/core/dist/distill-result-parser-cli.js /repo/core-cli/distill-result-par
 # node treats the .js as ESM instead of CommonJS.
 RUN printf '{"type":"module"}\n' > /repo/core-cli/package.json
 
-ENV KA_REPO_ROOT=/repo \
+ENV KA_ROOT=/repo \
     TMUX_TMPDIR=/tmp/tmux-test \
     HOME=/root
 

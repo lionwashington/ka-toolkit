@@ -101,7 +101,7 @@ PY
                 local name="$1"   # $2 (plist tmpfile) intentionally ignored
                 local expr; expr="$(_ka_crontab_expr "${KA_CRON_SCHEDULE:-}")" \
                     || { echo "ka cron: cannot map schedule '${KA_CRON_SCHEDULE:-}' to crontab" >&2; return 1; }
-                local runner="${KA_REPO_ROOT:?KA_REPO_ROOT required}/cron/ops/cron-run.sh"
+                local runner="${KA_ROOT:?KA_ROOT required}/cron/ops/cron-run.sh"
                 local logf="${KA_CRON_LOG:-/tmp/ka-cron-${name}.log}"
                 local line="${expr} /bin/bash ${runner} ${name} >> ${logf} 2>&1 # ka-cron:${name}"
                 local cur; cur="$(crontab -l 2>/dev/null | grep -vE "# ka-cron:${name}\$" || true)"

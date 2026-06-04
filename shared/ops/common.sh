@@ -3,32 +3,32 @@
 # Bash 3.2 compatible (macOS default).
 
 # ── location anchor + directory map (single source of truth for code paths) ─────
-# Every ka script resolves sibling scripts/dirs from KA_REPO_ROOT, never from its
+# Every ka script resolves sibling scripts/dirs from KA_ROOT, never from its
 # own location, so a script keeps working no matter where it (or common.sh) is
-# moved. KA_REPO_ROOT is exported by bin/ka; a standalone run (e.g. the test
+# moved. KA_ROOT is exported by bin/ka; a standalone run (e.g. the test
 # suite) finds it by walking up to the dir that contains the .ka-root marker
 # (a marker, so the bootstrap is independent of where bin/ka itself lives).
 # shellcheck disable=SC2034
-if [ -z "${KA_REPO_ROOT:-}" ]; then
+if [ -z "${KA_ROOT:-}" ]; then
     _ka_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     while [ "$_ka_d" != / ] && [ ! -e "$_ka_d/.ka-root" ]; do _ka_d="$(dirname "$_ka_d")"; done
-    KA_REPO_ROOT="$_ka_d"
+    KA_ROOT="$_ka_d"
     unset _ka_d
 fi
-export KA_REPO_ROOT
+export KA_ROOT
 
-# Code-location map — a strict two-level tree rooted at KA_REPO_ROOT. The repo
+# Code-location map — a strict two-level tree rooted at KA_ROOT. The repo
 # (and the runtime that mirrors it) is organized by the four functional parts;
 # when the layout changes, edit ONLY these lines. The whole script tree
 # references these vars, never relative paths. Exported so a child process (an
 # exec'd helper) inherits the map without re-sourcing.
-#   level 1 — the parts (each = $KA_REPO_ROOT/<part>/ops; plus the config dir)
-KA_SHARED_DIR="$KA_REPO_ROOT/shared/ops"            # common/doctor/status/help
-KA_WORKSHOP_DIR="$KA_REPO_ROOT/workshop/ops"        # workshop.sh/wait-ready + start-pane/tmux-helpers/yaml-parse/inject-prompt/upsert
-KA_CHANNELS_DIR="$KA_REPO_ROOT/channels/ops"        # daemon.sh
-KA_CRON_OPS_DIR="$KA_REPO_ROOT/cron/ops"            # cron.sh + cron-run.sh + maintenance/
-KA_KB_DIR="$KA_REPO_ROOT/kb/ops"                    # distill-bg/status/worker
-KA_CONFIG_DIR="$KA_REPO_ROOT/config"                # bundled config templates
+#   level 1 — the parts (each = $KA_ROOT/<part>/ops; plus the config dir)
+KA_SHARED_DIR="$KA_ROOT/shared/ops"            # common/doctor/status/help
+KA_WORKSHOP_DIR="$KA_ROOT/workshop/ops"        # workshop.sh/wait-ready + start-pane/tmux-helpers/yaml-parse/inject-prompt/upsert
+KA_CHANNELS_DIR="$KA_ROOT/channels/ops"        # daemon.sh
+KA_CRON_OPS_DIR="$KA_ROOT/cron/ops"            # cron.sh + cron-run.sh + maintenance/
+KA_KB_DIR="$KA_ROOT/kb/ops"                    # distill-bg/status/worker
+KA_CONFIG_DIR="$KA_ROOT/config"                # bundled config templates
 #   level 2 — sub-dirs of a part (each derives from its level-1 parent above)
 KA_RUNTIMES_DIR="$KA_WORKSHOP_DIR/runtimes"         # runtime adapters (cc/…)
 KA_PANES_DIR="$KA_WORKSHOP_DIR/panes"               # per-pane *.env
@@ -117,13 +117,13 @@ ka_channel_kind() {
 }
 
 # ka_daemon_dir → runtime dir of the active daemon: <kind>-daemon. Prefers the
-# repo/runtime-layout sibling of ops/ (KA_REPO_ROOT), else ~/.knowledge-assistant/runtime.
+# repo/runtime-layout sibling of ops/ (KA_ROOT), else ~/.knowledge-assistant/runtime.
 ka_daemon_dir() {
     local kind sub
     kind="$(ka_channel_kind)" || return 2
     sub="${kind}-daemon"
-    if [ -d "$KA_REPO_ROOT/$sub" ]; then
-        printf '%s' "$KA_REPO_ROOT/$sub"
+    if [ -d "$KA_ROOT/$sub" ]; then
+        printf '%s' "$KA_ROOT/$sub"
     else
         printf '%s' "$HOME/.knowledge-assistant/runtime/$sub"
     fi

@@ -61,7 +61,7 @@ export PATH="$FAKE_BIN:$PATH"
 
 echo "[1/3] spawn distill with a tiny chunk size → multi-pass"
 export KA_DISTILL_CHUNK_BYTES=100   # 100 bytes/pass → a few-hundred-byte snapshot splits
-spawn="$(KA_REPO_ROOT="$REPO" WORKSPACE_CWD="$WORKSPACE" \
+spawn="$(KA_ROOT="$REPO" WORKSPACE_CWD="$WORKSPACE" \
     bash "$REPO/kb/ops/distill-bg.sh" --jsonl "$JSONL" --session-id "fake-chunk")"
 echo "$spawn" | grep -q "distill-bg: pid=" || { echo "FAIL: spawn"; echo "$spawn"; exit 1; }
 LOG_PATH="$(printf '%s' "$spawn" | awk -F'log=' '{print $2}' | awk '{print $1}')"

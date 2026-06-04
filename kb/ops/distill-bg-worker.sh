@@ -20,7 +20,7 @@
 # kb/skill/src/kb.md for the main-side read contract.
 
 set -uo pipefail
-KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/.ka-root" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
+KA_ROOT="${KA_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/.ka-root" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
 
 JSONL=""
 SESSION_ID=""
@@ -63,8 +63,8 @@ done
 [ -n "$STATUS_FILE" ]      || { echo "worker: --status-file required" >&2; exit 1; }
 [ -n "$WORKSPACE_CWD" ]    || { echo "worker: --workspace-cwd required" >&2; exit 1; }
 
-PARSER_CLI="$KA_REPO_ROOT/core-cli/distill-result-parser-cli.js"                       # runtime layout
-[ -f "$PARSER_CLI" ] || PARSER_CLI="$KA_REPO_ROOT/kb/core/dist/distill-result-parser-cli.js"  # repo layout
+PARSER_CLI="$KA_ROOT/core-cli/distill-result-parser-cli.js"                       # runtime layout
+[ -f "$PARSER_CLI" ] || PARSER_CLI="$KA_ROOT/kb/core/dist/distill-result-parser-cli.js"  # repo layout
 
 # Stats file the distill agent Writes its result JSON to — the parser's tier-0
 # (most reliable) source. Cleared up-front so we never read a previous run's file.
@@ -159,8 +159,8 @@ process.exit(isErr && is400 && thinking ? 0 : 1);
 # ---------- prompt construction ----------
 # The distill agent runs in the workspace cwd, so the prompt must give it an
 # ABSOLUTE path to the CLI (runtime/core-cli or repo/kb/core/dist).
-JSONL_READER_ABS="$KA_REPO_ROOT/core-cli/jsonl-reader-cli.js"                       # runtime layout
-[ -f "$JSONL_READER_ABS" ] || JSONL_READER_ABS="$KA_REPO_ROOT/kb/core/dist/jsonl-reader-cli.js"  # repo layout
+JSONL_READER_ABS="$KA_ROOT/core-cli/jsonl-reader-cli.js"                       # runtime layout
+[ -f "$JSONL_READER_ABS" ] || JSONL_READER_ABS="$KA_ROOT/kb/core/dist/jsonl-reader-cli.js"  # repo layout
 
 # build_prompt <pass-upper-offset> → echoes the headless distill prompt for ONE
 # pass whose upper bound is the given offset (= the full snapshot for a single
