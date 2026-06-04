@@ -12,7 +12,7 @@ set -u
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
-THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # packages/lark-channel
+THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # channels/lark
 REPO="$(cd "$THIS_DIR/../.." && pwd)"
 
 export KA_DAEMON_DATA_DIR="${KA_DAEMON_DATA_DIR:-$HOME/.lark-channel}"
@@ -29,4 +29,4 @@ fi
 
 echo "lark daemon (LarkPlatform, source mode) — data=$KA_DAEMON_DATA_DIR"
 echo "  kernel: channel-core/main.ts | platform: lark-platform.ts | port: from config.json (default 9876)"
-exec node --experimental-strip-types "$REPO/packages/channel-core/src/main.ts"
+exec node --experimental-strip-types "$REPO/channels/core/src/main.ts"

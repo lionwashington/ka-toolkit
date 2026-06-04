@@ -1,6 +1,7 @@
 packages:
   - "packages/*"
   - "packages/adapters/*"
+  - "channels/*"
 # pnpm 11 gates native build scripts; approve the ones this repo needs.
 # (pnpm writes an `allowBuilds:` prompt here when it meets an un-approved native
 # dep — set each to true. This is the pnpm-11 home for the old package.json

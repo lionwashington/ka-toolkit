@@ -21,7 +21,7 @@ daemon ── ④ bot.api.sendMessage(owner, "**[<name>]** "+text) ──▶ Own
 
 ## Directory
 
-- **Source (source-of-truth, committed to git)**: `packages/telegram-channel/`
+- **Source (source-of-truth, committed to git)**: `channels/telegram/`
 - **Runtime directory (not in git)**: `~/.knowledge-assistant/runtime/daemon/` — copied from source by `install.sh --only daemon` (never hand-edited, per the design/runtime separation rule), plus `.env`/`config.json`/`state.json` and other runtime/secret files.
   > The old location `~/.telegram-channel/` is deprecated (migrated to runtime/daemon in D2/P1.4); if an old daemon is still running, `install.sh --switch` migrates the secrets over.
 
@@ -86,9 +86,9 @@ curl -s 127.0.0.1:9877/api/status | python3 -m json.tool   # detailed status
 ## Launch a CC bound to a channel: `tg-ch`
 
 ```bash
-packages/telegram-channel/tg-ch ka                 # launch an interactive CC bound to channel "ka"
-packages/telegram-channel/tg-ch audit --model opus # extra args pass through to claude
-TG_CHANNEL_PORT=9999 packages/telegram-channel/tg-ch main   # change daemon port (default 9877)
+channels/telegram/tg-ch ka                 # launch an interactive CC bound to channel "ka"
+channels/telegram/tg-ch audit --model opus # extra args pass through to claude
+TG_CHANNEL_PORT=9999 channels/telegram/tg-ch main   # change daemon port (default 9877)
 ```
 
 - The first time, a dev-channels security confirmation pops up; choose `1. I am using this for local development` to allow.

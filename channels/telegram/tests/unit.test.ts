@@ -8,7 +8,7 @@
 // Run: node --experimental-strip-types --test tests/unit.test.ts
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseRoutingPrefix, sanitizeChannelName, resolveTargetList } from '../../channel-core/src/routing.ts'
+import { parseRoutingPrefix, sanitizeChannelName, resolveTargetList } from '../../core/src/routing.ts'
 import { chunk, extractAttachment, attachmentPlaceholder } from '../telegram-platform.ts'
 
 // NEW CONTRACT (multi-target): parseRoutingPrefix returns `rawTargets: string[]`

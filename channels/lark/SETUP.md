@@ -46,7 +46,7 @@ Lark group <──webhook POST── lark daemon       <──reply tool── C
 
 ```bash
 mkdir -p ~/.lark-channel
-cp packages/lark-channel/config.example.json ~/.lark-channel/config.json
+cp channels/lark/config.example.json ~/.lark-channel/config.json
 $EDITOR ~/.lark-channel/config.json
 ```
 
@@ -69,14 +69,14 @@ How to fill it (schema in `config.example.json`):
 
 - `lark_cli_bin`: if lark-cli is on PATH, set `"lark-cli"`; otherwise an absolute path.
 - `poll_interval_seconds`: global poll interval; each group can override it individually.
-- 🔴 `config.json` contains the webhook token; **never commit to git** (`packages/lark-channel/.gitignore` already ignores `config.json`).
+- 🔴 `config.json` contains the webhook token; **never commit to git** (`channels/lark/.gitignore` already ignores `config.json`).
 
 ---
 
 ## 4. Start the daemon
 
 ```bash
-bash packages/lark-channel/run-dev.sh
+bash channels/lark/run-dev.sh
 # Runs in foreground, logs to stderr + ~/.lark-channel/channel.log; Ctrl-C to stop.
 ```
 
@@ -139,7 +139,7 @@ claude --dangerously-skip-permissions --dangerously-load-development-channels "s
 ## 8. Running Tests (no real Lark needed)
 
 ```bash
-cd packages/lark-channel && pnpm test     # 19 tests: pure-function unit tests + e2e (fake lark-cli + mock webhook + real MCP client)
+cd channels/lark && pnpm test     # 19 tests: pure-function unit tests + e2e (fake lark-cli + mock webhook + real MCP client)
 ```
 
 The e2e uses a fake lark-cli (script) + mock webhook + the real channel-core daemon, with zero dependency on real Lark, verifying the full send/receive/filter/dedup/routing.

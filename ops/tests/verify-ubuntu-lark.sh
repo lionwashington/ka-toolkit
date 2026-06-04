@@ -37,7 +37,7 @@ st="$(node -e 'fetch("http://127.0.0.1:9876/api/status").then(r=>r.json()).then(
 [ "$st" = "true" ] && ok "/api/status ok=true on Linux" || { bad "/api/status failed"; tail -5 /tmp/ld/out.log; }
 
 echo "[4] lark tests (unit + e2e) on Linux"
-if (cd packages/lark-channel && node --experimental-strip-types --test tests/unit.test.ts tests/e2e.test.ts >/tmp/larktest.log 2>&1); then
+if (cd channels/lark && node --experimental-strip-types --test tests/unit.test.ts tests/e2e.test.ts >/tmp/larktest.log 2>&1); then
   ok "lark tests passed: $(grep -E '^# pass|pass [0-9]' /tmp/larktest.log | tail -1 | tr -d '#')"
 else
   bad "lark tests failed"; grep -E "fail|not ok|Error" /tmp/larktest.log | head -8

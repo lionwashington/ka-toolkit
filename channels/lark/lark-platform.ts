@@ -21,9 +21,9 @@ import { spawn } from 'child_process'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
-import { parseRoutingPrefix } from '../channel-core/src/routing.ts'
-import { byName, sessionsById, resolveTargetToName } from '../channel-core/src/sessions.ts'
-import type { Platform, InboundDispatch } from '../channel-core/src/platform.ts'
+import { parseRoutingPrefix } from '../core/src/routing.ts'
+import { byName, sessionsById, resolveTargetToName } from '../core/src/sessions.ts'
+import type { Platform, InboundDispatch } from '../core/src/platform.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 // Data dir holds config.json / state.json / channel.log / daemon.pid.

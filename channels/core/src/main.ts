@@ -12,7 +12,7 @@
  *                                            construct clients, return daemon opts)
  *
  * start.sh: KA_PLATFORM_MODULE=<abs path to telegram-platform.ts|lark-platform.ts> \
- *           node --experimental-strip-types channel-core/src/main.ts
+ *           node --experimental-strip-types channels/core/src/main.ts
  */
 import { pathToFileURL } from 'url'
 import { runChannelDaemon } from './daemon.ts'
