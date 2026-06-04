@@ -1,8 +1,8 @@
 # KA Cron Design v2 (full proposal)
 
-> **✅ as-built (closed out 2026-05-31)**: the CLI is implemented — `ops/cli/cron/` (list/add/remove/enable/disable/run/install/uninstall/import/status) + `ops/lib/cron/` (parse-yaml/schedule-parser/plist-gen/backend-adapter) + `ka cron`. **Closed out**: `~/.knowledge-assistant/cron.yaml` is the single source of truth, and `ka cron install` generates the `com.knowledge-assistant.ka.cron.*` launchd plists from it (currently three jobs: kb-distill / daily-brief / workspace-backup); the old dual-track `scheduled-tasks/` has been ended. The rest of this document is the design proposal for reference; the running reality is governed by `ka cron` + `cron.yaml`.
+> **✅ as-built (closed out 2026-05-31)**: the CLI is implemented — `cron/ops/cmd/` (list/add/remove/enable/disable/run/install/uninstall/import/status) + `cron/ops/internals/` (parse-yaml/schedule-parser/plist-gen/backend-adapter) + `ka cron`. **Closed out**: `~/.knowledge-assistant/config/cron.yaml` is the single source of truth, and `ka cron install` generates the `com.knowledge-assistant.ka.cron.*` launchd plists from it (currently three jobs: kb-distill / daily-brief / workspace-backup); the old dual-track `scheduled-tasks/` has been ended. The rest of this document is the design proposal for reference; the running reality is governed by `ka cron` + `config/cron.yaml`.
 >
-> **⚠️ Incremental update (2026-06)**: the `target_pane` field is retired. The target pane of an `inject-prompt` job is no longer specified per-job; instead it is uniformly determined by the `channels.inject` array in `~/.knowledge-assistant/config.yaml` — cron-run reads `channels.inject` and, for each channel name, resolves the corresponding tmux pane (`@ka_channel`) to inject into; empty/unconfigured → no injection (fail-closed). The `target_pane` left in the examples below is historical reference only and is in fact no longer effective.
+> **⚠️ Incremental update (2026-06)**: the `target_pane` field is retired. The target pane of an `inject-prompt` job is no longer specified per-job; instead it is uniformly determined by the `channels.inject` array in `~/.knowledge-assistant/config/config.yaml` — cron-run reads `channels.inject` and, for each channel name, resolves the corresponding tmux pane (`@ka_channel`) to inject into; empty/unconfigured → no injection (fail-closed). The `target_pane` left in the examples below is historical reference only and is in fact no longer effective.
 
 > Related: `docs/ARCHITECTURE.md` §8 (cron as a first-class citizen)
 > Date: 2026-04-15 (proposal); 2026-05-31 closed out
@@ -15,7 +15,7 @@
 ## 0. Three-sentence summary
 
 1. `ka cron` abstracts KA's scheduled tasks from **scattered launchd plists** into a **first-class-citizen CLI + declarative yaml**; data and scheduling are all local, conforming to KA design principles §1-5
-2. The user edits `~/.knowledge-assistant/cron.yaml` (or uses `ka cron add/remove`), and a backend adapter translates it into native launchd/systemd units, auto-installed to the OS
+2. The user edits `~/.knowledge-assistant/config/cron.yaml` (or uses `ka cron add/remove`), and a backend adapter translates it into native launchd/systemd units, auto-installed to the OS
 3. The two existing hardcoded plists (kb-distill / daily-brief) are auto-imported into yaml entries on the first `ka cron install`, and the old scripts `scheduled-tasks/scripts/*.sh` can be deleted
 
 ---
@@ -66,26 +66,26 @@ KA currently has two hardcoded launchd jobs:
 ┌──────────────────────────────────────────────────────────────┐
 │  user                                                         │
 │  $ ka cron add --name foo --schedule "daily 07:00" ...        │
-│  $ vim ~/.knowledge-assistant/cron.yaml                       │
+│  $ vim ~/.knowledge-assistant/config/cron.yaml                │
 └────────────────────┬─────────────────────────────────────────┘
                      │
                      ▼
 ┌──────────────────────────────────────────────────────────────┐
-│  ka cron CLI  (ops/cli/cron.sh)                              │
+│  ka cron CLI  (cron/ops/cron.sh)                             │
 │    list / add / remove / enable / disable / run              │
 │    install / uninstall / status / import                     │
 └────────────────────┬─────────────────────────────────────────┘
                      │ reads/writes
                      ▼
 ┌──────────────────────────────────────────────────────────────┐
-│  cron.yaml   (~/.knowledge-assistant/cron.yaml)              │
+│  cron.yaml   (~/.knowledge-assistant/config/cron.yaml)       │
 │  declarative, source of truth, git-friendly                  │
 └────────────────────┬─────────────────────────────────────────┘
                      │ parsed by
                      ▼
 ┌──────────────────────────────────────────────────────────────┐
-│  cron-parse.sh + backend dispatcher                          │
-│  (ops/lib/cron-parse.sh, ops/lib/cron-backends/dispatch.sh) │
+│  parse-yaml.sh + backend dispatcher                          │
+│  (cron/ops/internals/parse-yaml.sh, backend-adapter.sh)      │
 │                                                              │
 │  three syntaxes for the schedule field:                      │
 │    "every 2h" / "daily 07:00"  → natural language            │
@@ -109,7 +109,7 @@ KA currently has two hardcoded launchd jobs:
                     │ triggers at scheduled time
                     ▼
 ┌──────────────────────────────────────────────────────────────┐
-│  job wrapper   (ops/lib/cron-run.sh <name>)                  │
+│  job wrapper   (cron/ops/cron-run.sh <name>)                 │
 │    flock per-name, log to ~/Library/Logs/knowledge-assistant/│
 │    cron/<name>.log                                           │
 └────────────────────┬─────────────────────────────────────────┘
@@ -117,8 +117,8 @@ KA currently has two hardcoded launchd jobs:
      ┌───────────────┼───────────────┐
      ▼               ▼               ▼
  kind: shell    inject-prompt     ka-cli
- bash -c "$cmd" ops/lib/inject-   ka $cmd
-                prompt.sh "$cmd"
+ bash -c "$cmd" workshop/ops/      ka $cmd
+                inject-prompt.sh "$cmd"
 ```
 
 ---
@@ -127,12 +127,12 @@ KA currently has two hardcoded launchd jobs:
 
 ### 3.1 Location
 
-**`~/.knowledge-assistant/cron.yaml`** (a peer of the existing `workshop.yaml`; the user approved Q1=A on 2026-04-15)
+**`~/.knowledge-assistant/config/cron.yaml`** (a peer of the existing `config/workshop.yaml`; the user approved Q1=A on 2026-04-15)
 
 ### 3.2 Full schema
 
 ```yaml
-# ~/.knowledge-assistant/cron.yaml
+# ~/.knowledge-assistant/config/cron.yaml
 # Declarative cron task list. Source of truth — the plists/units in the OS are generated by ka from this file.
 
 version: 1                          # schema version, bump on future incompatible changes
@@ -222,7 +222,7 @@ jobs:
 
 ### Parser
 
-`ops/lib/cron-parse.sh` (bash 3.2 compatible):
+`cron/ops/internals/parse-yaml.sh` (bash 3.2 compatible):
 - input: a schedule string → output: the canonical structure the backend needs
 - launchd: translate into a `StartCalendarInterval` array (`every 2h` → 12 dicts)
 - systemd: translate into an `OnCalendar=...` string
@@ -251,7 +251,7 @@ $ ka cron add \
     --kind shell \
     --command "tar -czf ~/backups/ka-memory-\$(date +%F).tgz ~/workspace/your-workspace/memory/"
 
-Added 'memory-backup' to ~/.knowledge-assistant/cron.yaml
+Added 'memory-backup' to ~/.knowledge-assistant/config/cron.yaml
 Installed: ~/Library/LaunchAgents/com.knowledge-assistant.ka.cron.memory-backup.plist
 Next run: 2026-04-16 03:00
 ```
@@ -305,7 +305,7 @@ cron: 4 jobs (3 enabled, 1 disabled)
 
 **The user runs** `ka cron add --name foo --schedule "daily 07:00" --kind inject-prompt --command "/kb distill"`
 
-1. `ops/cli/cron.sh add` parses the args and appends the entry to `cron.yaml`
+1. `cron/ops/cron.sh add` parses the args and appends the entry to `cron.yaml`
 2. calls `cron-parse.sh foo` to produce the canonical schedule
 3. the backend dispatcher selects launchd (macOS)
 4. generates the plist `~/Library/LaunchAgents/com.knowledge-assistant.ka.cron.foo.plist`:
@@ -313,7 +313,7 @@ cron: 4 jobs (3 enabled, 1 disabled)
    <key>Label</key><string>com.knowledge-assistant.ka.cron.foo</string>
    <key>ProgramArguments</key>
    <array>
-     <string>$HOME/.knowledge-assistant/runtime/ops/lib/cron-run.sh</string>
+     <string>$HOME/.knowledge-assistant/cron/ops/cron-run.sh</string>
      <string>foo</string>
    </array>
    <key>StartCalendarInterval</key>
@@ -329,13 +329,13 @@ cron: 4 jobs (3 enabled, 1 disabled)
 
 **At trigger time** (07:00 daily):
 
-1. launchd starts `ops/lib/cron-run.sh foo`
+1. launchd starts `cron/ops/cron-run.sh foo`
 2. cron-run reads `cron.yaml` and finds `foo`'s entry
 3. acquires the flock (per-name, to prevent concurrency)
 4. dispatches by `kind`:
    - `shell`: `bash -c "$command"` (with the `env` field added to the environment)
-   - `inject-prompt`: cron-run reads config.yaml's `channels.inject` → for each channel name resolves the corresponding pane (`@ka_channel`) → `ops/lib/inject-prompt.sh <pane> "$command"`
-   - `ka-cli`: `ops/bin/ka $command`
+   - `inject-prompt`: cron-run reads config.yaml's `channels.inject` → for each channel name resolves the corresponding pane (`@ka_channel`) → `workshop/ops/inject-prompt.sh <pane> "$command"`
+   - `ka-cli`: `shared/bin/ka $command`
 5. write the log header `=== 2026-04-16 07:00:00 start ===`
 6. execute the command, appending both stdout/stderr to the log
 7. write the log footer `=== 2026-04-16 07:00:12 exit=0 ===`
@@ -433,14 +433,14 @@ All three drifts prompt the user to run `ka cron install` to sync (idempotent).
 | R5 | the manual `ka cron run` trigger races with the scheduled trigger | per-name flock (enabled by default) |
 | R6 | new/old plist Label collision | new Label prefix `com.knowledge-assistant.ka.cron.*`, old `com.knowledge-assistant.ka.*`, physically non-colliding |
 | R7 | the user writes a broken yaml (illegal schedule / unknown kind) | `ka cron add` validates; `ka cron install` validates the whole thing and fails fast, **without breaking already-installed units** |
-| R8 | the ka repo path changes / home changes, the absolute path in the plist breaks | the plist's ProgramArguments points at `$KA_REPO/ops/lib/cron-run.sh`, and KA_REPO is validated during yaml `version` migration |
+| R8 | the deployed path / home changes, the absolute path in the plist breaks | the plist's ProgramArguments points at `$KA_HOME/cron/ops/cron-run.sh`, and KA_HOME is validated during yaml `version` migration |
 
 ### Rollback paths
 
 **Full rollback to hardcoded plists** (worst case):
 
 1. `ka cron uninstall` (clear OS units)
-2. `rm ~/.knowledge-assistant/cron.yaml`
+2. `rm ~/.knowledge-assistant/config/cron.yaml`
 3. restore `scheduled-tasks/scripts/*.sh` from git (if deleted)
 4. manually install the old plists
 
@@ -518,7 +518,7 @@ Cost: 10 minutes. **Extremely low destructiveness.**
 
 | # | Question | Status | Value |
 |---|---|---|---|
-| Q1 | cron.yaml location | ✅ approved | A = `~/.knowledge-assistant/cron.yaml` |
+| Q1 | cron.yaml location | ✅ approved | A = `~/.knowledge-assistant/config/cron.yaml` |
 | Q2 | whether to uninstall cron when the session closes | pending | recommend A = don't uninstall (cron is independent of the session) |
 | Q3 | whether to build systemd in v1 | pending | recommend A = v1 launchd only |
 | Q4 | `on-event:*` in v1 | pending | recommend A = schema reserved only (explanation in §10) |

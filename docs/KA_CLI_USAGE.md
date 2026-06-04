@@ -1,7 +1,7 @@
 # KA CLI User Manual
 
-> This document is for **users** and is the single as-built manual for the `ka` command. Source of truth = `bin/ka` +
-> `ops/cli/*.sh`; `ka help` is authoritative, and this doc is maintained in sync with it.
+> This document is for **users** and is the single as-built manual for the `ka` command. Source of truth = `shared/bin/ka` +
+> the by-part `*/ops/*.sh`; `ka help` is authoritative, and this doc is maintained in sync with it.
 
 `ka` is the command-line entry point of Knowledge Assistant, used to:
 
@@ -21,12 +21,12 @@
 ## Installation
 
 `ka` is a standalone bash script — no compilation, no npm needed. Runtime deployment is handled by the top-level `install.sh`;
-after deployment `ka` runs from `~/.knowledge-assistant/runtime/bin/ka`. In development you can symlink the
-`bin/ka` from the repo directly:
+after deployment `ka` runs from `~/.knowledge-assistant/shared/bin/ka`. In development you can symlink the
+`shared/bin/ka` from the repo directly:
 
 ```bash
 # symlink into ~/.local/bin
-ln -sf <repo>/bin/ka ~/.local/bin/ka
+ln -sf <repo>/shared/bin/ka ~/.local/bin/ka
 
 # confirm ~/.local/bin is on PATH
 echo "$PATH" | tr ':' '\n' | grep -q "$HOME/.local/bin" \
@@ -157,10 +157,10 @@ To restart the **whole** workshop use `ka workshop restart` (no name) — run it
 ## `ka daemon` — the active channel daemon
 
 All channel-daemon operations live here (they used to be `ka workshop --restart-daemon`).
-`ka daemon` always acts on the **active** daemon — the kind comes from `config.yaml`
-`channel_kind` (telegram | lark) and the port from that daemon's
-`runtime/<kind>-daemon/config.json` `http_port`. There is no per-command kind override;
-to switch kinds, run `./install.sh --channel-kind=telegram|lark` (or edit `config.yaml`)
+`ka daemon` always acts on the **active** daemon — the kind comes from `config/config.yaml`
+`channel_kind` (telegram | lark) and the port from that file's
+`channels.<kind>.port`. There is no per-command kind override;
+to switch kinds, run `./install.sh --channel-kind=telegram|lark` (or edit `config/config.yaml`)
 and restart.
 
 | Verb | Effect |
@@ -169,7 +169,7 @@ and restart.
 | `ka daemon stop` | stop it |
 | `ka daemon restart` | restart it — every CC **re-adopts automatically** (~2s blip, no relaunch needed) |
 | `ka daemon status` | health check; prints kind + port |
-| `ka daemon config` | open the daemon's `config.json` in `$EDITOR` (bot token / webhook / port); apply with `ka daemon restart` |
+| `ka daemon config` | open `config/config.yaml` + `config/secrets.yaml` in `$EDITOR` (bot token / webhook in secrets, port in config); apply with `ka daemon restart` |
 
 ```bash
 ka daemon status          # is the active daemon up?
@@ -221,7 +221,7 @@ ka status
 
 ```
 ── ka status ──
-  ✔ config:    ~/.knowledge-assistant/workshop.yaml
+  ✔ config:    ~/.knowledge-assistant/config/workshop.yaml
   ✔ runtime:   cc
   ✔ session:   workshop (4 panes)
   ✔ mates:     3 running (declared default: 3)
@@ -276,7 +276,7 @@ Checks:
 
 ## `ka cron` — declarative scheduled jobs
 
-Declare scheduled jobs in `~/.knowledge-assistant/cron.yaml`, synced to the OS (macOS launchd).
+Declare scheduled jobs in `~/.knowledge-assistant/config/cron.yaml`, synced to the OS (macOS launchd).
 
 ```
 ka cron <subcommand> [args]
@@ -336,7 +336,7 @@ If a worker is already running, it refuses to start another.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `OPS_CONFIG` | `~/.knowledge-assistant/workshop.yaml` | override the workshop config path |
+| `OPS_CONFIG` | `~/.knowledge-assistant/config/workshop.yaml` | override the workshop config path |
 | `KA_CHANNEL_PORT` | `9877` | telegram-channel daemon port |
 | `TMUX_BIN` | `$(command -v tmux)` | specify the tmux binary (when multiple versions coexist) |
 | `NO_COLOR` | unset | set to non-empty to disable ANSI colors |
@@ -378,13 +378,13 @@ mates:
 | `default` | – | `true` | when `false`, `ka workshop` skips it unless `--all` / `--only` / `start <name>` |
 
 > Legacy `panes:` + `telegram: true` configs migrate with
-> `ops/lib/migrate-workshop-yaml.py` (folds `panes:` into `mates:`, rewrites
+> `workshop/ops/migrate-workshop-yaml.py` (folds `panes:` into `mates:`, rewrites
 > `telegram: true` → `main: true`).
 
-The repo only ships the template `ops/workshop.example.yaml`; your personal layout goes in `~/.knowledge-assistant/workshop.yaml`
+The repo only ships the template `config/workshop.example.yaml`; your personal layout goes in `~/.knowledge-assistant/config/workshop.yaml`
 (naturally per-machine). `ka workshop spawn-mates <name> <workdir>` upserts a new mate into the
 yaml (default=false) and then starts it; an already-running mate is not modified — to change its workdir, `stop` it first, then spawn.
 
 ---
 
-_Maintained by ka-dev2; kept in sync when `bin/ka` / `ops/cli/*.sh` change._
+_Maintained by ka-dev2; kept in sync when `shared/bin/ka` / the by-part `*/ops/*.sh` change._

@@ -4,7 +4,6 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "node --experimental-strip-types server.ts",
     "test": "node --experimental-strip-types --test tests/unit.test.ts tests/e2e.test.ts"
   },
   "dependencies": {

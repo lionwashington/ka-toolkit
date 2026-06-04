@@ -1,14 +1,17 @@
-# Knowledge Assistant Architecture Overview (v3.0 · ka-gen2 as-built)
+# Knowledge Assistant Architecture Overview (v3.1 · ka-gen3 as-built)
 
-> **This document is KA's canonical architecture overview**, describing the **actual shape after ka-gen2 landed (2026-05-31)**.
+> **This document is KA's canonical architecture overview.** The four-layer model, the daemon + workshop
+> pillars, and the five design principles are unchanged since ka-gen2 (2026-05-31); the paths and the
+> deployed runtime layout below reflect the **ka-gen3 reorganization** (source organized by the four
+> functional parts; runtime is a single root with no `runtime/` wrapper — see `docs/ARCHITECTURE_GEN3.md`).
 > It no longer describes any retired legacy paths. If it conflicts with the code, the code wins (ground truth: top-level `install.sh`,
-> `ops/cli/workshop.sh`, `bin/ka`, `docs/telegram-channel-design.md`).
+> `workshop/ops/workshop.sh`, `shared/bin/ka`, `docs/telegram-channel-design.md`).
 >
 > **The two pillars of ka-gen2**:
 > - **Startup converges onto `ka workshop` + the telegram-channel daemon**: a mate = its own independent CC process
 >   (independent tmux pane + independent cwd + independent channel), and it **does not use CC's team-mate mechanism**.
 > - **Thorough design / runtime separation**: the repo is pure design-time source; `install.sh` copies the build products into
->   `~/.knowledge-assistant/runtime/`, and at runtime everything runs the deployed copy — **never pointing back at the repo**.
+>   `~/.knowledge-assistant/` (the single runtime root, `KA_HOME`), and at runtime everything runs the deployed copy — **never pointing back at the repo**.
 >
 > **Retired (no longer covered here)**: the CC team-mate spawn five-condition check / `--teammate-mode` /
 > `~/.claude/teams/`, the telegram CC plugin + flock patch + `ops/patches/` + `ops/bootstrap.sh`,
@@ -113,12 +116,12 @@ deposits → queries** them into an Obsidian-compatible Markdown knowledge base 
 
 | Subsystem | Source | Responsibility |
 |---|---|---|
-| **capture** | `packages/core/src/` + the CC capture-hook | Write the session transcript into `~/.knowledge-assistant/raw/` |
-| **distiller** | `packages/core/src/` | Distill `raw/` into `memory/topics/*.md` (user memory / skills / log / topic suggestions) |
-| **knowledge-store** | `packages/core/src/` | KB read/write + Obsidian-compatible markdown + INDEX routing |
-| **retrieval / watermark** | `packages/core/src/` | CJK-tokenized retrieval + incremental watermark (never reprocesses already-distilled raw) |
-| **kb MCP server** | `packages/mcp-server/` | Expose `kb_search / kb_read_topic / kb_list_topics / kb_status` to any MCP client |
-| **/kb skill** | `packages/skill/src/kb.md` | Skill entry point for browsing / searching / triggering distillation / reviewing topic suggestions |
+| **capture** | `kb/core/src/` + the CC capture-hook | Write the session transcript into `~/.knowledge-assistant/raw/` |
+| **distiller** | `kb/core/src/` | Distill `raw/` into `memory/topics/*.md` (user memory / skills / log / topic suggestions) |
+| **knowledge-store** | `kb/core/src/` | KB read/write + Obsidian-compatible markdown + INDEX routing |
+| **retrieval / watermark** | `kb/core/src/` | CJK-tokenized retrieval + incremental watermark (never reprocesses already-distilled raw) |
+| **kb MCP server** | `kb/mcp-server/` | Expose `kb_search / kb_read_topic / kb_list_topics / kb_status` to any MCP client |
+| **/kb skill** | `kb/skill/src/kb.md` | Skill entry point for browsing / searching / triggering distillation / reviewing topic suggestions |
 
 **Distillation triggers**: ① `/kb distill` (foreground, inside the skill) ② `ka distill` (background)
 ③ `ka cron` scheduled (every 2h by default). All three share the same distiller pipeline.
@@ -156,7 +159,7 @@ For implementation-level details see `docs/telegram-channel-design.md`. Key poin
 ### §3.2 ka workshop (orchestrating independent CC processes)
 
 `ka workshop` is the **only** startup/orchestration entry point (`ka start` / `ka stop` / `ka spawn-mates` all
-forward to it). Ground truth: `ops/cli/workshop.sh`.
+forward to it). Ground truth: `workshop/ops/workshop.sh`.
 
 ```
 workshop.yaml ──read──▶ ka workshop ──ensure──▶ telegram-channel daemon (:9877)
@@ -178,7 +181,7 @@ Core abstractions:
 - **The dev-channels safety gate passes automatically, condition-based**: after a pane starts, poll `capture-pane`, and only send Enter once
   the gate's text `Enter to confirm` is detected (not a timed blind send; skipped after a ~18s timeout).
 
-workshop verbs (`ops/cli/workshop.sh`):
+workshop verbs (`workshop/ops/workshop.sh`):
 
 | Verb | Behavior |
 |---|---|
@@ -188,13 +191,13 @@ workshop verbs (`ops/cli/workshop.sh`):
 | `ka workshop restart <name>` | restart a single mate's pane (⚠️ loses that CC's runtime context; don't use it merely to reconnect a dropped channel — triggering one tool call is enough to re-init) |
 | `ka workshop spawn-mates <name> [<workdir>]` | with a workdir = registrar (write/replace yaml + start); without = alias for `start <name>` |
 
-**workshop.yaml** (declarative layout; `ops/workshop.example.yaml` is the template, seeded on install to
-`~/.knowledge-assistant/workshop.yaml`): each pane declares `name` / `cwd` / `runtime` (default `cc`) /
+**workshop.yaml** (declarative layout; `config/workshop.example.yaml` is the template, seeded on install to
+`~/.knowledge-assistant/config/workshop.yaml`): each pane declares `name` / `cwd` / `runtime` (default `cc`) /
 whether it is `default`.
 
 ### §3.3 The ka CLI command surface (the ones that actually exist)
 
-`bin/ka` forwards to `ops/cli/*.sh`. The commands that **actually exist**:
+`shared/bin/ka` forwards to each part's `*/ops/*.sh`. The commands that **actually exist**:
 
 | Command | Description |
 |---|---|
@@ -227,8 +230,10 @@ whether it is `default`.
 
 The runtime isn't one lump; it's **two big blocks belonging to different owners**:
 
-- **ka's runtime** = `~/.knowledge-assistant/` — **owned by ka**: config / state / credentials + the
-  ka products deployed in (`runtime/{bin,ops,mcp,daemon,hooks,core-cli,skills}`). This is ka's unified runtime root.
+- **ka's runtime** = `~/.knowledge-assistant/` (= `KA_HOME`, the single runtime root) — **owned by ka**: the ka
+  products deployed by-part directly under it (`shared/bin/ka`, `shared/ops`, `kb/{core/dist,mcp,hooks,skills,venvs}`,
+  `channels/<kind>-daemon`, `workshop/ops`, `cron/ops`) + the two data buckets `config/` and `state/`. There is **no
+  `runtime/` wrapper** — `KA_HOME` *is* the by-part tree (mirrors the repo layout; leaves are compiled bundles / venvs).
 - **cc's runtime** = `~/.claude/` — **owned by Claude Code**: `settings.json` / `skills/` /
   `.claude.json`, etc. ka **never mixes its own things into cc's root**; it only "follows the host's lead" and places what belongs there per the CC interface
   (symlink skills into `~/.claude/skills/`, write MCP registrations into `~/.claude.json`).
@@ -237,22 +242,22 @@ The runtime isn't one lump; it's **two big blocks belonging to different owners*
 
 ### §4.3 Design → runtime mapping (what install.sh lands)
 
-| Component | Design-time (repo) | Runtime (deployed product) | Deploy method |
+| Component | Design-time (repo) | Runtime (deployed product, under `$KA_HOME`) | Deploy method |
 |---|---|---|---|
-| `ka` CLI + ops | `bin/ka` + `ops/` | `runtime/bin/ka` + `runtime/ops/` (copy, **not symlink**) | copy |
-| node MCP (kb / market) | `packages/*/src` | `runtime/mcp/<name>/index.mjs` (self-contained esbuild bundle) | esbuild |
-| node MCP (opennutrition) | `packages/mcp-opennutrition` | `runtime/mcp/opennutrition/` (native sqlite, copied whole) | build + copy |
-| python MCP (ibkr / hkprop) | `packages/*` | `~/.knowledge-assistant/<name>-venv` (**wheel install, not editable**) | build wheel + pip |
-| CC hooks (capture / compact) | `packages/adapters/claude-code/dist/hooks` | `runtime/hooks/` (esbuild bundle, @ka/core folded in self-contained) | esbuild |
-| core CLI (called by the kb skill) | `packages/core/dist/*-cli.js` | `runtime/core-cli/` (tsup already self-contained, pure copy) | copy |
-| skills (5 + kb) | `packages/skills/*.md` + `packages/skill/src/kb.md` | `runtime/skills/<name>/SKILL.md`; `~/.claude/skills/<name>` symlink pointing at runtime | copy + symlink |
-| telegram daemon | `packages/telegram-channel` | `runtime/telegram-daemon/` (code+scripts+deps; no secrets) | copy + npm ci |
-| config / state / credentials | repo ships `*.example` templates | `~/.knowledge-assistant/{config,secrets,cron,workshop}.yaml + state/ + raw/` | install seed (no overwrite) |
-| cron plist | `ops/lib/cron` generator | `~/Library/LaunchAgents/com.knowledge-assistant.ka.cron.*.plist` (platform-mandated) | ka cron install |
+| `ka` CLI + ops | `shared/bin/ka` + `*/ops/` | `shared/bin/ka` + `{shared,workshop,channels,cron,kb}/ops/` (copy, **not symlink**) | copy |
+| node MCP (kb / market) | `kb/mcp-server`, `kb/tools/market-mcp` | `kb/mcp/<name>/index.mjs` (self-contained esbuild bundle) | esbuild |
+| node MCP (opennutrition) | `kb/tools/mcp-opennutrition` | `kb/mcp/opennutrition/` (native sqlite, copied whole) | build + copy |
+| python MCP (ibkr / hkprop) | `kb/tools/*` | `kb/venvs/<name>` (**wheel install, not editable**) | build wheel + pip |
+| CC hooks (capture / compact) | `kb/adapter-cc/dist/hooks` | `kb/hooks/` (esbuild bundle, @ka/core folded in self-contained) | esbuild |
+| core CLI (called by the kb skill) | `kb/core/dist/*-cli.js` | `kb/core/dist/` (tsup already self-contained, pure copy) | copy |
+| skills (5 + kb) | `kb/skills/*.md` + `kb/skill/src/kb.md` | `kb/skills/<name>/SKILL.md`; `~/.claude/skills/<name>` symlink pointing at runtime | copy + symlink |
+| telegram daemon | `channels/telegram` | `channels/telegram-daemon/` (esbuild bundle + scripts; no secrets) | esbuild + copy |
+| config / state / credentials | repo ships `config/*.example.{yaml,…}` templates | `$KA_HOME/config/{config,secrets,workshop,cron}.yaml` + `$KA_HOME/state/` + `$KA_HOME/raw/` | install seed (no overwrite) |
+| cron plist | `cron/ops/cron` generator | `~/Library/LaunchAgents/com.knowledge-assistant.ka.cron.*.plist` (platform-mandated) | ka cron install |
 
 ### §4.4 install.sh safety red lines
 
-- By default it operates on `~/.knowledge-assistant`, but provides a `KA_RUNTIME_ROOT` override (pointing at a temp dir) for isolated testing.
+- By default it operates on `~/.knowledge-assistant`, but provides a `KA_HOME` override (pointing at a temp dir) for isolated testing.
 - The steps that actually "switch the live runtime" (rewriting `~/.claude.json` MCP registrations, moving the daemon, changing hook paths, creating skill
   symlinks) are **SKIPPED by default**; they require an explicit `--switch` and must be run by the user — a plain install **never touches** the running
   `~/.claude.json` / daemon.
@@ -262,7 +267,7 @@ The runtime isn't one lump; it's **two big blocks belonging to different owners*
   running `--dry-run` first to confirm it only touches the target component.
 
 > **Hard rule (learned the hard way)**: runtime products **can only be produced by `install.sh`**, never hand-built (no manual esbuild / cp /
-> directly editing `~/.knowledge-assistant/runtime/**`). Fixing runtime behavior is always two steps: ① change `install.sh`
+> directly editing `$KA_HOME/**`). Fixing runtime behavior is always two steps: ① change `install.sh`
 > or the source it bundles (the design side) → ② run `./install.sh --only <component>`. Skipping the second step lets
 > design/runtime quietly drift apart.
 
@@ -292,18 +297,18 @@ the capability is provided by the runtime; `planned` = not yet delivered.
 
 | Capability | status | Path | Description |
 |---|---|---|---|
-| **kb core** | shipped | `packages/core/` + `packages/mcp-server/` + `packages/skill/` | capture / distill / store / retrieve + MCP + /kb skill (§2) |
-| **workshop** | shipped | `ops/cli/workshop.sh` + `ops/lib/` + `ops/workshop.example.yaml` | orchestrate independent CC processes (§3.2) |
-| **telegram channel** | shipped | `packages/telegram-channel/` | MCP-over-HTTP daemon, multi-channel routing + M6 self-healing (§3.1) |
-| **distill scheduling** | shipped | `ka cron` + `packages/core/` | OS-level persistent scheduling (distill every 2h by default) |
-| **daily brief** | shipped | `packages/skills/daily-brief.md` | daily briefing (triggered by cron at 7:00, delivered to a channel) |
-| **shopping** | shipped | `packages/skills/taobao-native/` + `packages/skills/jd.md` | Taobao / JD.com shopping skills |
-| **mail** | shipped | `packages/skills/mail.md` | send/receive email (gogcli backend), archive → KB |
-| **calendar** | shipped | `packages/skills/calendar.md` | Google Calendar scheduling skill (gogcli backend) |
-| **market-data** | shipped | `packages/market-mcp/` | quotes MCP (stock / crypto) |
-| **hkprop** | shipped | `packages/hkprop-mcp/` | Hong Kong property MCP (28Hse + Centanet) |
-| **ibkr** | shipped | `packages/ibkr-mcp/` | IBKR position / quote query MCP |
-| **nutrition** | shipped (experimental) | `packages/mcp-opennutrition/` | OpenNutrition nutrition-database MCP |
+| **kb core** | shipped | `kb/core/` + `kb/mcp-server/` + `kb/skill/` | capture / distill / store / retrieve + MCP + /kb skill (§2) |
+| **workshop** | shipped | `workshop/ops/workshop.sh` + `workshop/ops/` + `config/workshop.example.yaml` | orchestrate independent CC processes (§3.2) |
+| **telegram channel** | shipped | `channels/telegram/` (on `channels/core/`) | MCP-over-HTTP daemon, multi-channel routing + M6 self-healing (§3.1) |
+| **distill scheduling** | shipped | `ka cron` + `kb/core/` | OS-level persistent scheduling (distill every 2h by default) |
+| **daily brief** | shipped | `kb/skills/daily-brief.md` | daily briefing (triggered by cron at 7:00, delivered to a channel) |
+| **shopping** | shipped | `kb/skills/taobao-native/` + `kb/skills/jd.md` | Taobao / JD.com shopping skills |
+| **mail** | shipped | `kb/skills/mail.md` | send/receive email (gogcli backend), archive → KB |
+| **calendar** | shipped | `kb/skills/calendar.md` | Google Calendar scheduling skill (gogcli backend) |
+| **market-data** | shipped | `kb/tools/market-mcp/` | quotes MCP (stock / crypto) |
+| **hkprop** | shipped | `kb/tools/hkprop-mcp/` | Hong Kong property MCP (28Hse + Centanet) |
+| **ibkr** | shipped | `kb/tools/ibkr-mcp/` | IBKR position / quote query MCP |
+| **nutrition** | shipped (experimental) | `kb/tools/mcp-opennutrition/` | OpenNutrition nutrition-database MCP |
 
 Skill-form capabilities are currently delivered as CC skills (markdown / frontmatter); porting them to another runtime requires re-packaging.
 
@@ -324,12 +329,12 @@ Three big categories: **the Agent itself** / **KA products (design)** / **per-ma
 
 | Path | Content |
 |---|---|
-| `packages/core/` | distiller / config / tokenizer / core CLI |
-| `packages/mcp-server/` `market-mcp/` `mcp-opennutrition/` `hkprop-mcp/` `ibkr-mcp/` | MCP servers |
-| `packages/skills/` + `packages/skill/src/kb.md` | skill sources |
-| `packages/telegram-channel/` | channel daemon source |
-| `packages/adapters/claude-code/` | CC capture/compact hook source |
-| `bin/ka` + `ops/` | CLI + orchestration + cron generator |
+| `kb/core/` | distiller / config / tokenizer / core CLI |
+| `kb/mcp-server/` + `kb/tools/{market-mcp,mcp-opennutrition,hkprop-mcp,ibkr-mcp}` | MCP servers |
+| `kb/skills/` + `kb/skill/src/kb.md` | skill sources |
+| `channels/core/` + `channels/{telegram,lark}/` | channel daemon kernel + platform adapters |
+| `kb/adapter-cc/` | CC capture/compact hook source |
+| `shared/bin/ka` + `{shared,workshop,channels,cron,kb}/ops/` | CLI + orchestration + cron generator |
 | `install.sh` | unified deployment entry point |
 | `docs/` | this document + telegram-channel-design + KA_CLI_USAGE + INSTALL |
 
@@ -337,20 +342,21 @@ Three big categories: **the Agent itself** / **KA products (design)** / **per-ma
 
 | Path | Content | Owner |
 |---|---|---|
-| `~/.knowledge-assistant/runtime/{bin,ops,mcp,daemon,hooks,core-cli,skills}` | KA products deployed by install | **KA** |
-| `~/.knowledge-assistant/{config,secrets,cron,workshop}.yaml` | config / credentials / cron / layout | **KA (user config)** |
-| `~/.knowledge-assistant/{state,raw,pending-topics}/` + `<name>-venv/` | runtime state + python venv | **KA (runtime state)** |
+| `$KA_HOME/{shared/bin/ka,*/ops,kb/{core/dist,mcp,hooks,skills,venvs},channels/<kind>-daemon}` | KA products deployed by install (by-part, no `runtime/` wrapper) | **KA** |
+| `$KA_HOME/config/{config,secrets,cron,workshop}.yaml` | config / credentials / cron / layout (the `config/` data bucket) | **KA (user config)** |
+| `$KA_HOME/state/` + `$KA_HOME/{raw,pending-topics}/` | runtime state (the `state/` bucket) + capture/distill data | **KA (runtime state)** |
 | `~/Library/LaunchAgents/com.knowledge-assistant.ka.cron.*.plist` | cron (KA generates + loads, launchd executes) | **per-machine config (platform-mandated)** |
 | `~/.claude/settings.json` / `.claude.json` / `skills/<name>` | CC harness config / MCP registration / skills symlink | **CC backend; KA only places via the interface** |
 
-> Credentials go in `~/.knowledge-assistant/secrets.yaml` (KA's native capability); CC's / the daemon's own tokens
-> go through their own mechanisms (the daemon's bot token is in `runtime/telegram-daemon/.env`, which CC processes never touch).
+> Credentials go in `$KA_HOME/config/secrets.yaml` (KA's native capability) — including the channel daemon's own token
+> (`channels.<kind>.token`, which the daemon reads directly; there is no per-daemon `.env` or `config.json` any more).
+> CC processes never touch the token.
 
 ---
 
 ## §8 cron: OS-level persistent scheduling
 
-`ka cron` (`ops/cli/cron.sh`) declares scheduled jobs in `~/.knowledge-assistant/cron.yaml`, and
+`ka cron` (`cron/ops/cron.sh`) declares scheduled jobs in `~/.knowledge-assistant/config/cron.yaml`, and
 `ka cron install` syncs them into launchd units `com.knowledge-assistant.ka.cron.*`.
 
 - **Positioning**: **OS-level persistent scheduling** — runs as long as the machine is on, and **does not depend on any claude session being online**
@@ -365,9 +371,9 @@ Three big categories: **the Agent itself** / **KA products (design)** / **per-ma
 
 | Swap out | Need to change | No need to change |
 |---|---|---|
-| CC → Gemini CLI | the workshop's runtime adapter, the MCP host protocol, re-packaging skills; runtime credentials belong to each | KB + PA (zero change); distill / brief logic; the KA config under `~/.knowledge-assistant/`; the runtime-agnostic `packages/core/`, etc. |
-| tmux → another pane manager | the tmux calls in `ops/cli/workshop.sh` + `ops/lib/` | the Agent; ka's outward CLI; cron |
-| launchd → systemd / cron | the `ops/lib/cron` generator | everything else |
+| CC → Gemini CLI | the workshop's runtime adapter, the MCP host protocol, re-packaging skills; runtime credentials belong to each | KB + PA (zero change); distill / brief logic; the KA config under `~/.knowledge-assistant/`; the runtime-agnostic `kb/core/`, etc. |
+| tmux → another pane manager | the tmux calls in `workshop/ops/workshop.sh` + `workshop/ops/` | the Agent; ka's outward CLI; cron |
+| launchd → systemd / cron | the `cron/ops/cron` generator | everything else |
 | telegram → slack | rewrite the channel daemon (credentials go through that backend's own mechanism) | the Agent; workshop; ka CLI |
 | **Replace the entire KA with a different tool set** | rewrite every capability | **the Agent is fully preserved** |
 

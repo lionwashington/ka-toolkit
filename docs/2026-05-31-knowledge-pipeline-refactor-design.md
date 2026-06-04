@@ -47,7 +47,7 @@ channels:
 - helper `isCaptureChannelAllowed(channel, config)`: true only if the whitelist is non-empty and matches; empty/missing/malformed → false (fail-closed). Add `injectTargets(config): string[]` to read `channels.inject`.
 
 ### 2. Cut the compact-hook
-- Delete `packages/adapters/claude-code/src/hooks/compact-hook.ts` + its dist artifact.
+- Delete `kb/adapter-cc/src/hooks/compact-hook.ts` + its dist artifact.
 - `deploy_hooks` naturally no longer bundles it (the source is gone).
 - **Delete the `PostCompact` block in `~/.claude/settings.json`** (this item only; Stop→capture is kept).
   ⚠️ settings.json is the owner's territory — before implementing this step, confirm the deletion method with the owner (manual delete / install takes over hook registration).

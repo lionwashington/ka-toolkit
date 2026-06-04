@@ -1,9 +1,10 @@
-// Unit characterization tests for telegram-channel/server.ts pure helpers.
+// Unit characterization tests for the telegram channel's pure helpers.
 //
-// These import the REAL functions from server.ts (now side-effect-free thanks to
-// the T0 entrypoint guard), replacing the old attach.logic.test.mjs which mirror-
-// copied the functions and could silently drift. They lock observable behavior so
-// the channel-core extraction (R0+) can be proven behavior-preserving.
+// These import the REAL functions from channel-core (`core/src/routing.ts`) and
+// the telegram platform adapter (`telegram-platform.ts`), replacing the old
+// attach.logic.test.mjs which mirror-copied the functions and could silently
+// drift. They lock observable behavior so the channel-core extraction stays
+// behavior-preserving.
 //
 // Run: node --experimental-strip-types --test tests/unit.test.ts
 import { test, describe } from 'node:test'

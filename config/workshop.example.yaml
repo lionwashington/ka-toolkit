@@ -1,6 +1,6 @@
-# ops/workshop.example.yaml — copy to ~/.knowledge-assistant/workshop.yaml and edit.
+# config/workshop.example.yaml — copy to ~/.knowledge-assistant/config/workshop.yaml and edit.
 #
-# Declares the workshop agents. `ka start` (ops/cli/start.sh) reads this file:
+# Declares the workshop agents. `ka start` (forwards to `ka workshop`, workshop/ops/workshop.sh) reads this file:
 # it bootstraps the lead pane, then `ka spawn-mates` asks the lead to spawn the
 # rest (each in its own tmux pane via the Agent tool).
 #

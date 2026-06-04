@@ -30,13 +30,13 @@ From v0.2 onward it became a **standalone HTTP daemon** (listening on `127.0.0.1
 Lark group (user sends a message)
    │  lark-cli im +chat-messages-list polls per group (per-group interval: message group 1s / alert group 5s)
    ▼
-server.ts (daemon @ 127.0.0.1:9876)
+channel-core daemon + lark-platform (@ 127.0.0.1:9876)
    │  parse routing prefix → find all sessions for that name → MCP notification (meta all-string)
    ▼  notifications/claude/channel  (over SSE stream)
 Claude Code MCP client (some session)
    │  Claude calls mcp__lark-channel__reply
    ▼  POST /mcp
-server.ts  ──webhook POST──▶  Lark group (reply, auto-prefixed with [channel name])
+daemon  ──webhook POST──▶  Lark group (reply, auto-prefixed with [channel name])
 ```
 
 ## 4. Multi-session / Named Routing Model (v0.4.0 core)

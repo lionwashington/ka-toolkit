@@ -8,15 +8,20 @@ Telegram workshop. This is the single canonical, as-built install guide.
 ## How install works (design ↔ runtime)
 
 KA keeps a hard boundary between **design** (this repo) and **runtime**
-(`~/.knowledge-assistant/runtime/`). You build in the repo, then `./install.sh`
-copies/bundles the build products into the runtime tree. **The runtime never
-depends on the repo** — once deployed, the running `ka`, MCP servers, hooks, and
-daemon are self-contained copies, not symlinks back into your checkout.
+(`~/.knowledge-assistant`, i.e. `KA_HOME`). You build in the repo, then
+`./install.sh` copies/bundles the build products into the runtime tree. **The
+runtime never depends on the repo** — once deployed, the running `ka`, MCP
+servers, hooks, and daemon are self-contained copies, not symlinks back into your
+checkout. `KA_HOME` *is* the by-part tree (no `runtime/` wrapper); your live
+config + state sit alongside the code in the `config/` and `state/` buckets.
 
 ```
-clone + build  ──►  ./install.sh  ──►  ~/.knowledge-assistant/runtime/
-   (design)          (deploy)            bin/ka, ops/, mcp/, daemon/,
-                                         hooks/, core-cli/, skills/
+clone + build  ──►  ./install.sh  ──►  ~/.knowledge-assistant/   (= KA_HOME)
+   (design)          (deploy)            shared/bin/ka, {shared,workshop,
+                                         channels,cron,kb}/ops, kb/{core/dist,
+                                         mcp,hooks,skills,venvs},
+                                         channels/<kind>-daemon
+                                         + config/ + state/ (your data)
 ```
 
 ## Prerequisites
@@ -46,7 +51,7 @@ run build` the first time, so the first deploy of that component is slower.
 
 ```bash
 ./install.sh --dry-run     # preview: prints every action, changes nothing
-./install.sh               # deploy all components into ~/.knowledge-assistant/runtime/
+./install.sh               # deploy all components into ~/.knowledge-assistant/ (KA_HOME)
 ```
 
 Always run `--dry-run` first. A plain `./install.sh` only **deploys** copies
@@ -58,17 +63,19 @@ step (see Step 6).
 
 ### What lands in the runtime
 
+All paths below are relative to `KA_HOME` (`~/.knowledge-assistant`).
+
 | Component | Runtime path | How it's built |
 |-----------|--------------|----------------|
-| `ka` CLI + ops scripts | `runtime/bin/ka`, `runtime/ops/` | plain copy (self-locating; no repo dep) |
-| Node MCP: kb, market | `runtime/mcp/{kb,market}/index.mjs` | esbuild `--bundle` single file |
-| Node MCP: opennutrition | `runtime/mcp/opennutrition/` | build + copy (native sqlite + dataset) |
-| Python MCP: ibkr, hkprop | `~/.knowledge-assistant/{ibkr,hkprop}-venv/` | `uv build` wheel → install into venv |
-| Telegram daemon | `runtime/telegram-daemon/` | copy code + `npm ci` (no secrets) |
-| CC hooks (capture/compact) | `runtime/hooks/` | esbuild `--bundle` (folds in `@ka/core`) |
-| core CLIs (used by `/kb`) | `runtime/core-cli/` | plain copy (tsup self-contained) |
-| skills (kb, daily-brief, …) | `runtime/skills/<name>/SKILL.md` | plain copy |
-| config/data dirs | `~/.knowledge-assistant/{state,raw,pending-topics}` | seeded, never overwritten |
+| `ka` CLI + ops scripts | `shared/bin/ka`, `{shared,workshop,channels,cron,kb}/ops/` | plain copy (self-locating; no repo dep) |
+| Node MCP: kb, market | `kb/mcp/{kb,market}/index.mjs` | esbuild `--bundle` single file |
+| Node MCP: opennutrition | `kb/mcp/opennutrition/` | build + copy (native sqlite + dataset) |
+| Python MCP: ibkr, hkprop | `kb/venvs/{ibkr,hkprop}/` | `uv build` wheel → install into venv |
+| Channel daemons (telegram + lark) | `channels/{telegram,lark}-daemon/` | esbuild `--bundle` + scripts (no secrets) |
+| CC hooks (capture/compact) | `kb/hooks/` | esbuild `--bundle` (folds in `@ka/core`) |
+| core CLIs (used by `/kb`) | `kb/core/dist/` | plain copy (tsup self-contained) |
+| skills (kb, daily-brief, …) | `kb/skills/<name>/SKILL.md` | plain copy |
+| config templates + data dirs | `config/` (`*.example.*` templates) + `state/` + `raw/` + `pending-topics/` | seeded, never overwritten |
 
 ### Single-component deploys and other flags
 
@@ -85,20 +92,20 @@ step (see Step 6).
 | `--rollback` | Restore the `.pre-switch` backups taken by `--switch`. |
 | `--cleanup-old` | After a verified switch, remove the old standalone daemon dir and `.pre-switch` backups (irreversible). |
 
-`KA_RUNTIME_ROOT=/tmp/ka-itest ./install.sh --dry-run` runs an isolated test
-against a temp root, never touching your real runtime.
+`KA_HOME=/tmp/ka-itest ./install.sh --dry-run` runs an isolated test against a
+temp root, never touching your real runtime.
 
 ## Step 3: Put `ka` on your PATH
 
-The deployed CLI is `~/.knowledge-assistant/runtime/bin/ka`. Either add its
+The deployed CLI is `~/.knowledge-assistant/shared/bin/ka`. Either add its
 directory to PATH or symlink it:
 
 ```bash
 # Option A: symlink into a dir already on PATH
-ln -sf ~/.knowledge-assistant/runtime/bin/ka ~/.local/bin/ka
+ln -sf ~/.knowledge-assistant/shared/bin/ka ~/.local/bin/ka
 
 # Option B: add to PATH (append to ~/.zshrc or ~/.bashrc)
-export PATH="$HOME/.knowledge-assistant/runtime/bin:$PATH"
+export PATH="$HOME/.knowledge-assistant/shared/bin:$PATH"
 ```
 
 (During a `--switch`, `install.sh` also manages the `~/.local/bin/ka` symlink
@@ -116,44 +123,47 @@ point — **CC processes never touch the token**. (This replaces the retired
 Claude Code Telegram *plugin*; do not use `/plugin install telegram` or
 `/telegram:configure`.)
 
-The runtime daemon lives at `~/.knowledge-assistant/runtime/telegram-daemon/`. Its
-config + secrets (not in git) live alongside it: `~/.knowledge-assistant/runtime/telegram-daemon/.env`
-and `~/.knowledge-assistant/runtime/telegram-daemon/config.json`. `install.sh`'s
-`deploy_daemon` seeds a placeholder `config.json` but never overwrites these
-user files.
+The deployed daemon code lives at `~/.knowledge-assistant/channels/telegram-daemon/`,
+but it holds **no config or secrets of its own** — it reads them from the shared
+`config/` bucket: the port (and polling tuning) from `config/config.yaml`
+(`channels.telegram.port`, default `9877`) and the token + owner id from
+`config/secrets.yaml` (`channels.telegram.{token,owner_chat_id}`). `install.sh`
+never touches those files.
 
 1. Create a bot via [@BotFather](https://t.me/BotFather) and note the token.
 
 2. Find your numeric Telegram user id (e.g. DM [@userinfobot](https://t.me/userinfobot)).
 
-3. Configure secrets. Put both the token and owner id in `.env` (single secret
-   source), `chmod 600`:
+3. Configure secrets. Add the `channels.telegram` block to
+   `~/.knowledge-assistant/config/secrets.yaml` (create it from the template if it
+   doesn't exist — see [Service credentials](#service-credentials-optional)),
+   `chmod 600`:
 
-```bash
-mkdir -p ~/.knowledge-assistant/runtime/telegram-daemon
-cat > ~/.knowledge-assistant/runtime/telegram-daemon/.env <<'EOF'
-TELEGRAM_BOT_TOKEN=<your bot token>
-OWNER_CHAT_ID=<your numeric telegram user id>
-EOF
-chmod 600 ~/.knowledge-assistant/runtime/telegram-daemon/.env
+```yaml
+# ~/.knowledge-assistant/config/secrets.yaml
+channels:
+  telegram:
+    token: "<your bot token>"               # from @BotFather
+    owner_chat_id: "<your numeric telegram user id>"   # only this user may reach the daemon
 ```
 
-   `config.json` (seeded from `config.example.json`) carries `port` (default
-   `9877`) and an `owner_chat_id` fallback used only when `.env` has no
-   `OWNER_CHAT_ID`. Edit it only to change the port.
+   The port is non-secret and lives in `config/config.yaml` under
+   `channels.telegram.port` (default `9877`); edit it there only to change the
+   port. The daemon **fails closed** — an empty/missing token or owner id means it
+   will not start (run `ka doctor` to surface a misconfiguration).
 
 4. The daemon is normally started for you by `ka workshop` (Step 5). To run it
    standalone:
 
 ```bash
-~/.knowledge-assistant/runtime/telegram-daemon/start.sh    # idempotent
-~/.knowledge-assistant/runtime/telegram-daemon/status.sh   # health check
+~/.knowledge-assistant/channels/telegram-daemon/start.sh    # idempotent
+~/.knowledge-assistant/channels/telegram-daemon/status.sh   # health check
 curl -s 127.0.0.1:9877/api/status | python3 -m json.tool
 ```
 
 **Security:** only messages from `owner_chat_id` are processed; the `reply` tool
-always sends back to the owner (a compromised CC can't redirect it); `.env` is
-`chmod 600` and gitignored.
+always sends back to the owner (a compromised CC can't redirect it); `secrets.yaml`
+should be `chmod 600` and is gitignored. CC processes never see the token.
 
 ## Step 5: First launch — `ka workshop`
 
@@ -164,8 +174,9 @@ ka workshop --dry-run       # preview the layout without launching
 ```
 
 `ka workshop` starts every mate declared with `default: true` in
-`~/.knowledge-assistant/workshop.yaml` (seeded from `ops/workshop.example.yaml`
-on first install — edit it to declare your panes/cwds), each as an independent
+`~/.knowledge-assistant/config/workshop.yaml` (seeded from
+`config/workshop.example.yaml` on first install — edit it to declare your
+panes/cwds), each as an independent
 `claude` process in its own tmux pane + cwd, and ensures the telegram daemon is
 running. Route to a mate from Telegram with `to <name>: <message>`.
 
@@ -189,11 +200,13 @@ to the newly deployed runtime, backing up each target first:
 ./install.sh --switch              # rewire MCP / ka link / cron / hooks / daemon / skills
 ```
 
-`--switch` rewires `~/.claude.json` MCP entries to `runtime/mcp/*`, points the
-`ka` symlink at `runtime/bin/ka`, repoints cron plists and CC hook paths at the
-runtime, migrates daemon secrets into `runtime/telegram-daemon/` and restarts it, and
-symlinks `~/.claude/skills/<name>/SKILL.md` at the runtime copies. Each step
-leaves a `.pre-switch` backup. If anything looks wrong:
+`--switch` rewires `~/.claude.json` MCP entries to `$KA_HOME/kb/mcp/*`, points the
+`ka` symlink at `$KA_HOME/shared/bin/ka`, repoints cron plists and CC hook paths at
+the runtime, migrates any legacy daemon `state.json` into
+`$KA_HOME/channels/<kind>-daemon/` and restarts the active daemon, and symlinks
+`~/.claude/skills/<name>/SKILL.md` at the runtime copies. (Daemon **secrets** are
+not migrated automatically — populate `config/secrets.yaml channels.<kind>` first.)
+Each step leaves a `.pre-switch` backup. If anything looks wrong:
 
 ```bash
 ./install.sh --rollback            # restore the backups
@@ -208,8 +221,8 @@ After verifying the switch is healthy, optionally reclaim the old layout:
 ## Step 7: Scheduled jobs — `ka cron install`
 
 KA's cron jobs (e.g. `kb-distill`, `daily-brief`) are declared in
-`~/.knowledge-assistant/cron.yaml` and materialized into OS-level launchd/cron
-units. After editing the yaml (or to fix drift), sync them:
+`~/.knowledge-assistant/config/cron.yaml` and materialized into OS-level
+launchd/cron units. After editing the yaml (or to fix drift), sync them:
 
 ```bash
 ka cron install --dry-run     # preview the OS units that will be created
@@ -265,10 +278,10 @@ mail vs calendar in `memory/topics/tools.md`.
 ## Service credentials (optional)
 
 Some MCPs need keys/credentials. They live in
-`~/.knowledge-assistant/secrets.yaml` (gitignored — never commit):
+`~/.knowledge-assistant/config/secrets.yaml` (gitignored — never commit):
 
 ```bash
-cp config/secrets.example.yaml ~/.knowledge-assistant/secrets.yaml
+cp config/secrets.example.yaml ~/.knowledge-assistant/config/secrets.yaml
 ```
 
 ```yaml
@@ -312,7 +325,7 @@ Triggers feeding the pipeline:
 |---------|--------------|
 | `/kb distill` (manual) | Capture current session to `raw/`, then process unprocessed `raw/` into `conversations/` + `topics/` + `INDEX.md` + RAG index |
 | `kb-distill` cron | Same as manual — runs on schedule if there's unprocessed content |
-| Stop hook (session end) | `runtime/hooks` script writes the raw transcript to `raw/`, deduped by `session_id` |
+| Stop hook (session end) | `kb/hooks` script writes the raw transcript to `raw/`, deduped by `session_id` |
 | PostCompact hook | Writes raw transcript to `raw/`, then triggers distill |
 
 The LLM is the distillation engine — no external API calls. The knowledge base
@@ -339,7 +352,7 @@ All settings have defaults — you do **not** need a config file to start. To
 customize, copy and edit:
 
 ```bash
-cp config/default.yaml ~/.knowledge-assistant/config.yaml
+cp config/config.example.yaml ~/.knowledge-assistant/config/config.yaml
 ```
 
 | Setting | Default |
@@ -347,7 +360,7 @@ cp config/default.yaml ~/.knowledge-assistant/config.yaml
 | `knowledge_base_path` | `~/knowledge-base/` |
 | `workspace_path` | parent of `knowledge_base_path` |
 | State directory | `~/.knowledge-assistant/state` |
-| Secrets file | `~/.knowledge-assistant/secrets.yaml` |
+| Secrets file | `~/.knowledge-assistant/config/secrets.yaml` |
 | Distill interval | `2h` |
 | Max search results / min score | 5 / 0.7 |
 
@@ -357,9 +370,8 @@ cp config/default.yaml ~/.knowledge-assistant/config.yaml
 2. `./install.sh --dry-run` then `./install.sh`
 3. Put `ka` on PATH (Step 3)
 4. Bring these from the old machine:
-   - `~/.knowledge-assistant/secrets.yaml` (API keys)
-   - `~/.knowledge-assistant/runtime/telegram-daemon/.env` + `config.json` (bot token + owner)
-   - `~/.knowledge-assistant/cron.yaml` and `workshop.yaml`
+   - `~/.knowledge-assistant/config/secrets.yaml` (API keys + `channels.<kind>` daemon token/owner)
+   - `~/.knowledge-assistant/config/cron.yaml` and `config/workshop.yaml`
    - Knowledge base repo (`git clone`)
    - Google OAuth credentials (`~/Library/Application Support/gogcli/`)
 5. `ka workshop` → `ka cron install` → `ka doctor`
@@ -369,5 +381,5 @@ cp config/default.yaml ~/.knowledge-assistant/config.yaml
 
 ```bash
 pnpm test                                   # unit tests across all packages
-cd packages/hkprop-mcp && uv run pytest      # hkprop MCP tests
+cd kb/tools/hkprop-mcp && uv run pytest      # hkprop MCP tests
 ```

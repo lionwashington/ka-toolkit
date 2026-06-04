@@ -1,8 +1,11 @@
 # Proposal A (v2): Unifying the channel core abstraction + telegram/lark dual adapters
 
-> Status: **draft pending review, v2** (2026-06-01, drafted by ka-dev2)
-> Supersedes v1's "A1 coexistence" framing — pivoting per the lead's feedback toward "unify the abstraction, only the connection layer differs"
-> Related source: `packages/telegram-channel/server.ts` (975 lines, latest), `packages/lark-channel/server.ts` (780 lines, the reference source)
+> Status: **implemented** (gen3) — the unified channel-core kernel (`channels/core`) + telegram/lark
+> platform adapters (`channels/telegram`, `channels/lark`) shipped. This proposal is kept as the design
+> rationale; the source references below describe the **pre-extraction** standalone daemons it analyzed.
+> Supersedes v1's "A1 coexistence" framing — pivoting toward "unify the abstraction, only the connection layer differs".
+> Pre-extraction source (the analysis basis): the standalone `server.ts` daemons that were unified into
+> `channels/core` + per-platform adapters (`telegram-platform.ts` / `lark-platform.ts`).
 
 ## 0. The lead's hypothesis, conclusion first
 
@@ -94,13 +97,13 @@ This logic differs, but it **belongs cleanly to the adapter**: the core only exp
 ### 3.3 Package structure
 
 ```
-packages/
-  channel-core/          # new: the single source of truth for the core (extracted from tc, since tc is latest)
+channels/
+  core/                  # new: the single source of truth for the core (extracted from tc, since tc is latest)
     src/core.ts          #   session store / routing / MCP factory / HTTP / dispatch / probe-M6 / cc2cc / state
     src/probe.ts         #   probe-M6 (the ping-request two-stage)
     src/cc2cc.ts         #   send_to_channel + ccLoopGuard + fanout
-  telegram-channel/      # slimmed down: only the TelegramPlatform implementation + entrypoint
-  lark-channel/          # slimmed down: only the LarkPlatform implementation + entrypoint
+  telegram/              # slimmed down: only the TelegramPlatform implementation + entrypoint
+  lark/                  # slimmed down: only the LarkPlatform implementation + entrypoint
 ```
 
 ## 4. Process Model: U1 (decided)
@@ -134,12 +137,12 @@ tc is currently **nearly untestable**:
 | Phase | Content | Guardrail |
 |---|---|---|
 | **T0** | tc testability seam (gate startup + export functions), zero behavior change | `--check` + manual smoke: daemon starts as usual, telegram sends/receives as usual |
-| **T1** | backfill tc with three layers of characterization tests (vitest, aligned with packages/core), all green. **Replace** the mirror-style attach.logic with a real-import test | see the three-layer checklist in §5.2; assertions target only **observable behavior**, not bound to internal structure (so they survive the refactor) |
-| **R0** | extract `packages/channel-core` from tc, change tc to `import core` | **the full T1 suite must still be all green** (the proof of zero behavior change) |
+| **T1** | backfill tc with three layers of characterization tests (vitest, aligned with kb/core), all green. **Replace** the mirror-style attach.logic with a real-import test | see the three-layer checklist in §5.2; assertions target only **observable behavior**, not bound to internal structure (so they survive the refactor) |
+| **R0** | extract `channels/core` from tc, change tc to `import core` | **the full T1 suite must still be all green** (the proof of zero behavior change) |
 | **R1** | define the Platform interface, gather tc's B1-B4 + attachments into `TelegramPlatform` | T1 still all green |
 | **R2** | write `LarkPlatform` (port B1-B4 from lc + self_open_id filter + minute-level dedup + backfill attachments) | the lark side is brand new, doesn't touch tc; verify attachment capability first (§6.7) |
 | **R3** | lark automatically gains probe-M6 / cc2cc / 404 self-heal (from the core); write isomorphic characterization tests for lark (reusing the T1 contract/e2e skeleton, swapping in a fake LarkPlatform) | core improvements take effect on both platforms at once |
-| **D0** | add `deploy_lark_daemon` to install.sh (runtime/lark-daemon/), workshop pane selects the daemon, lark-ch wrapper, supervision | same invariants as telegram: don't copy secrets, don't touch registration (no --switch) |
+| **D0** | add `deploy_lark_daemon` to install.sh (channels/lark-daemon/), workshop pane selects the daemon, lark-ch wrapper, supervision | same invariants as telegram: don't copy secrets, don't touch registration (no --switch) |
 | **D1** | end-to-end verification | tc regression (you use it daily) + a real lark group (credentials tested only on your side) |
 
 ### 5.2 Three-layer characterization test checklist (T1)
@@ -154,7 +157,7 @@ tc is currently **nearly untestable**:
 ## 6. Risks and Invariants That Must Be Preserved
 
 1. 🔴 Extracting the core is a **pure refactor**, and **the objective proof of zero behavior change for production telegram = the T1 characterization test net still all green after R0/R1** (you use it daily, it can't regress). Tests precede the refactor; assertions bind only observable behavior (§5.2).
-2. 🔴 The real lark config.json (self_open_id / webhook tokens) **never goes into git**; install does not copy secrets.
+2. 🔴 The real lark secrets (self_open_id / webhook tokens, in `config/secrets.yaml` under channels.lark) **never go into git**; install does not copy secrets.
 3. 🔴 meta all-strings — lark's historical culprit was exactly the numeric `channel_number` field.
 4. 🔴 **After the probe uses a ping-request, a failure must not directly evict**: it must closeStandaloneSSEStream to keep the session + a 60s grace (otherwise it repeats lark v0.5.2's "request-ping kills the one-way consumer by mistake → doesn't surface"). The old lark invariant "never use a request-style ping" is overturned by M6; after unification both docs must be updated.
 5. Only deliver the user's own messages (owner_chat_id / self_open_id) — to prevent prompt injection.
@@ -167,7 +170,7 @@ tc is currently **nearly untestable**:
 1. ✅ Process model = **U1** (share channel-core at the source, two independent processes at deploy)
 2. ✅ cc2cc = **within the same daemon, not cross-platform** (no cross-daemon bridge added)
 3. ✅ Attachments = **backfill the lark side** (lark-cli/Lark API fetch, P3 prerequisite verification of fetch capability, see §6.7)
-4. ✅ `channel-core` = goes in **`packages/channel-core/`**
+4. ✅ `channel-core` = goes in **`channels/core/`**
 
 **The one final go awaiting your review of the whole proposal:**
 5. The process has been re-sequenced per your "tests first" rule (§5): first T0 testability seam + T1 three-layer characterization tests all green, **then** refactor, and after the refactor the same suite must still be all green. After you finish reviewing, just give the go signal — I will **make the T1 test net green and hand it to you first**, and only touch the R0 refactor after you confirm.

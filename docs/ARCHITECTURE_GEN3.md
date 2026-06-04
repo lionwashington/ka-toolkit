@@ -1,11 +1,16 @@
 # KA Architecture — gen3: the four functional parts
 
-> Status: **ka-gen3 design contract** (draft for review). Complements
-> `ARCHITECTURE.md` (the vertical layer model: Agent → KA → runtime → host).
-> This doc decomposes **the KA layer itself** into four functional parts and
-> defines the design-side package reorganization. It changes **no runtime
-> behavior** — gen3 reorganizes source only; the runtime deploy layout is
-> unchanged (runtime restructuring is deferred to gen4).
+> Status: **ka-gen3 as-built**. Complements `ARCHITECTURE.md` (the vertical
+> layer model: Agent → KA → runtime → host). This doc decomposes **the KA layer
+> itself** into four functional parts and records the reorganization that shipped
+> on the `ka-gen3` branch. gen3 reorganized **both** sides onto the four-part
+> axis: the repo source (`packages/` + `ops/` → `kb/ workshop/ channels/ cron/` +
+> `shared/ config/ tests/`) **and** the deployed runtime — which became a **single
+> root** (`KA_HOME`, default `~/.knowledge-assistant`) with **no `runtime/`
+> wrapper**, the by-part tree mirrored directly under it and data split into two
+> buckets (`config/` + `state/`). (The original contract draft scoped runtime
+> restructuring to a later "gen4"; in the end it landed within gen3 — this doc
+> reflects what was actually built.)
 
 ## 1. Why four parts
 
@@ -32,16 +37,16 @@ Everything that makes **one** agent runtime more capable. Runtime-agnostic where
 possible; the agent calls these as tools/skills.
 
 - **kb core**: capture → distill → deposit → query of LLM conversations into an
-  Obsidian-compatible Markdown KB (`packages/core`). Includes the headless
-  background distiller (`ops/kb/distill-bg.sh` + `ops/kb/distill-bg-worker.sh`)
+  Obsidian-compatible Markdown KB (`kb/core`). Includes the headless
+  background distiller (`kb/ops/distill-bg.sh` + `kb/ops/distill-bg-worker.sh`)
   and the capture hook.
 - **kb MCP server**: `kb_search` / `kb_read_topic` / `kb_list_topics` /
-  `kb_status` (`packages/mcp-server`).
+  `kb_status` (`kb/mcp-server`).
 - **skills**: `/kb`, daily-brief, mail, calendar, jd, taobao-native, …
-  (`packages/skill`, `packages/skills`).
+  (`kb/skill`, `kb/skills`).
 - **MCP tool servers**: hkprop, ibkr, market-data, opennutrition — domain tools
-  the agent calls (`packages/hkprop-mcp`, `ibkr-mcp`, `market-mcp`,
-  `mcp-opennutrition`).
+  the agent calls (`kb/tools/{hkprop-mcp, ibkr-mcp, market-mcp,
+  mcp-opennutrition}`).
 
 Boundary: part 1 is *consumed by* a runtime; it does not orchestrate runtimes,
 move messages, or schedule. (distill is part 1; the cron job that *triggers*
@@ -54,8 +59,8 @@ pane + cwd, and gives them a *direct* collaboration mechanism.
 
 - **lifecycle / management**: `ka workshop [start|stop|restart|spawn-mates]`,
   `workshop.yaml` (the merged `mates:` schema), pane/window layout, cwd
-  guarantee, the dev-channels gate (`ops/cli/workshop.sh`, `ops/lib/start-pane.sh`,
-  `ops/lib/yaml-parse.sh`, `tmux-helpers.sh`, `inject-prompt.sh`, `wait-ready.sh`).
+  guarantee, the dev-channels gate (`workshop/ops/workshop.sh`, `start-pane.sh`,
+  `yaml-parse.sh`, `tmux-helpers.sh`, `inject-prompt.sh`, `wait-ready.sh`).
 - **tmux-native collaboration** (one of two collab modes, see Part 3): a CC
   reads another pane's screen (`capture-pane`) and injects keystrokes
   (`send-keys`) — used by `inject-prompt` / `wait-ready`.
@@ -75,11 +80,13 @@ lark) speaks MCP-over-HTTP and provides two things:
   mode (structured, named/numbered message passing; complements Part 2's tmux
   mode).
 
-Code: `packages/channel-core` (platform-independent kernel: routing / dispatch /
-sessions / http) + `packages/telegram-channel`, `packages/lark-channel`
-(platform adapters). Managed by `ka daemon [start|stop|restart|status|config]`.
-The active kind + port come from `config.yaml channel_kind` +
-`runtime/<kind>-daemon/config.json` (gen2.x single-source-of-truth).
+Code: `channels/core` (platform-independent kernel: routing / dispatch /
+sessions / http) + `channels/telegram`, `channels/lark` (platform adapters).
+Managed by `ka daemon [start|stop|restart|status|config]`. The active kind comes
+from `config.yaml channel_kind`; each daemon reads its port from
+`config.yaml channels.<kind>.port` and its secrets (token / owner / app creds)
+from `secrets.yaml channels.<kind>.*` directly — there is no per-daemon
+`config.json` or `.env` any more (the gen3 "full-B" change).
 
 Boundary: channels owns *message transport*. It does not spawn/manage runtimes
 (Part 2) or schedule (Part 4).
@@ -87,8 +94,8 @@ Boundary: channels owns *message transport*. It does not spawn/manage runtimes
 ### Part 4 — cron (scheduling)
 
 Declarative OS-level scheduling — `ka cron` + `cron.yaml`, deployed to launchd
-(macOS) / crontab (Linux) (`ops/cli/cron`, `ops/lib/cron`,
-`ops/scripts/cron-run.sh`).
+(macOS) / crontab (Linux) (`cron/ops/cron.sh`, `cron/ops/<internals>`,
+`cron/ops/cron-run.sh`).
 
 Boundary: cron is **cross-cutting** — it owns *when*, not *what*. The jobs it
 fires belong to other parts (kb-distill → Part 1, daily-brief → Part 1 skill,
@@ -114,19 +121,21 @@ The acyclic shape (4 → {1,3}; 2 → 3; 1,3 leaves) is what makes the split cle
 
 ## 4. Cross-cutting
 
-- **`ka` CLI** (`bin/ka`): the single management entry. Its verbs already map to
-  the parts — `ka workshop` (2), `ka daemon` (3), `ka cron` (4), `ka distill`
-  (1). It is cross-cutting, not a fifth part.
-- **config**: `config.yaml` (KB paths, channel_kind, capture/inject) +
-  `workshop.yaml` (Part 2) + `cron.yaml` (Part 4) + per-daemon `config.json`
-  (Part 3).
+- **`ka` CLI** (`shared/bin/ka`): the single management entry. Its verbs already
+  map to the parts — `ka workshop` (2), `ka daemon` (3), `ka cron` (4),
+  `ka distill` (1). It is cross-cutting, not a fifth part.
+- **config**: all live config sits in the `config/` data bucket — `config.yaml`
+  (KB paths, channel_kind, capture/inject, `channels.<kind>.port`) +
+  `secrets.yaml` (credentials, incl. `channels.<kind>.*` for Part 3) +
+  `workshop.yaml` (Part 2) + `cron.yaml` (Part 4). No per-daemon `config.json`.
 - **design / runtime separation** (`ARCHITECTURE.md §4`, non-negotiable): source
-  lives in this repo; `install.sh` produces the runtime under
-  `~/.knowledge-assistant/runtime/`. gen3 changes only the source organization.
+  lives in this repo; `install.sh` produces the runtime under `KA_HOME`
+  (`~/.knowledge-assistant`), by-part with no `runtime/` wrapper. gen3 reorganized
+  both the source and the deployed runtime onto the four-part axis.
 
-## 5. The standard (one axis) and why today is inconsistent
+## 5. The standard (one axis) and the inconsistency it replaced
 
-Today the repo mixes **four different axes** with no single rule:
+Before gen3 the repo mixed **four different axes** with no single rule:
 
 - by **artifact type**: `packages/` (TS) vs `ops/` (sh) vs `tests/`
 - by **role**: `ops/cli/` (entries) vs `ops/lib/` (libraries) vs `ops/scripts/`
@@ -167,10 +176,8 @@ ka-toolkit/
 ├── shared/         cross-cutting (spans all parts — not a part itself)
 │   ├── bin/ka            the dispatcher (routes `ka workshop|daemon|cron|distill|…`)
 │   └── ops/             common.sh · doctor.sh · status.sh · help.sh
-├── config/         ALL config templates, centralized
-│   ├── config.example.yaml · secrets.example.yaml
-│   ├── workshop.example.yaml · cron.example.yaml
-│   └── telegram-daemon.example.json · lark-daemon.example.json
+├── config/         ALL config templates, centralized (yaml only — full-B dropped per-daemon json)
+│   └── config.example.yaml · secrets.example.yaml · workshop.example.yaml
 ├── tests/          cross-cutting test infrastructure (the Docker harness + cases)
 ├── docs/  ·  install.sh  ·  pnpm-workspace.yaml  ·  package.json  ·  tsconfig.base.json
 ```
@@ -198,39 +205,39 @@ ka-toolkit/
 - **workshop & cron have no TS** — they're pure sh, so they're just
   `workshop/ops/` and `cron/ops/`. That's expected, not a gap.
 
-### Migration implications (all design-side; runtime untouched)
+### What the reorg touched
 
 - `pnpm-workspace.yaml` globs + every cross-package TS import path (e.g.
-  `mcp-server` → `core`, `telegram` → `channel-core`) get rewritten to the new
-  locations.
-- `install.sh` source paths get rewritten — but it deploys into the **same**
-  runtime layout (`runtime/ops`, `runtime/core-cli`, `runtime/<kind>-daemon`, …),
-  so the running system is unaffected (gen3 rule).
-- `tsup`/`esbuild` entry paths + `tests/` references updated accordingly.
+  `mcp-server` → `core`, `telegram` → `channel-core`) were rewritten to the new
+  locations (globs went from `packages/*` to the part dirs `kb/*`, `channels/*`).
+- `install.sh` source paths were rewritten **and** its deploy layout changed: it
+  now lays the by-part tree directly under `KA_HOME` (`shared/bin/ka`,
+  `{shared,workshop,channels,cron,kb}/ops`, `kb/{core/dist,mcp,hooks,skills,venvs}`,
+  `channels/<kind>-daemon`) with no `runtime/` wrapper, and seeds the two data
+  buckets `config/` + `state/`. The daemon dropped `config.json`/`.env` and reads
+  `config.yaml` + `secrets.yaml` from `$KA_HOME/config` (full-B).
+- `tsup`/`esbuild` entry paths + `tests/` references updated accordingly. Every
+  script resolves paths through `shared/ops/common.sh` (the single directory map)
+  off `KA_HOME` — so a test sets `export KA_HOME=<fixture>` and exercises the real
+  resolution path.
 
-## 7. Execution plan
+## 7. How it was rolled out
 
-**gen3 (this branch) — design reorg, runtime layout UNCHANGED:**
+gen3 reorganized **both** the source and the deployed runtime onto the four-part
+axis. The rollout was incremental — repo green after every step (build all
+packages + ops Docker suite + channel e2e with telegram/lark fakes + each MCP
+smoke), nothing big-bang:
 
-1. This doc (the contract) → owner approves the final structure **first**.
-2. Then move **one part at a time**, Docker-green after each (repo always green;
-   nothing big-bang). (The earlier lone `ops/kb/` move is folded into this — it
-   gets re-aligned to the agreed structure.)
-3. `install.sh` maps new source paths → the **existing** runtime layout.
-4. Full verification = build all packages + ops Docker suite + channel e2e
-   (telegram/lark fakes) + each MCP smoke, all green.
-5. `install.sh` → runtime on this Mac → tests pass.
-6. `install.sh` → runtime on the Ubuntu machine → tests pass.
+1. Land this contract → agree the final structure.
+2. Move **one part at a time**, Docker-green after each.
+3. Single-root model: drop the `runtime/` wrapper + the `KA_ROOT`/`.ka-root`
+   marker; every script resolves via `KA_HOME` + `shared/ops/common.sh`.
+4. Split data into `config/` + `state/`; daemon goes full-B (`config.yaml` +
+   `secrets.yaml`, no `config.json`).
+5. Verify on fake-home (`KA_HOME=/tmp/x ./install.sh …`, then run the deployed
+   `bin/ka`) + Docker (17/17).
+6. **Live `--switch` migration on the Mac, then the Ubuntu machine** — the
+   owner-present step that moves the running runtime from the old `runtime/`
+   wrapper layout to the new by-part `KA_HOME` layout.
 
-Because the running runtime keeps the old deployed code until step 5, **the
-production system has zero risk through the entire design reorg.**
-
-**gen4 (later)** — restructure the **runtime** layout to mirror the four parts
-(changes `install.sh` deploy paths). Deferred; out of scope for gen3.
-
-> Decision needed from the owner: confirm this final structure. The one judgment
-> call is **§6's "no top-level packages/ vs ops/"** — fully by-part (recommended,
-> answers all four problems, but rewrites pnpm-workspace + TS imports) vs a
-> lighter variant that keeps `packages/` and `ops/` at the top but sub-groups
-> each by part (less churn, but retains the artifact-type split the owner
-> flagged). Recommendation: the fully by-part structure above.
+Steps 1–5 ship on the `ka-gen3` branch; step 6 is the remaining live cutover.

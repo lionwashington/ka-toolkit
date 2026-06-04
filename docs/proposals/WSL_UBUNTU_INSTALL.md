@@ -28,7 +28,7 @@ Non-goals: native Windows (non-WSL); macOS-exclusive capabilities (such as the `
 
 ### 3.1 Current state
 
-`ops/lib/cron/backend-adapter.sh`'s backend abstraction is in place, but:
+`cron/ops/internals/backend-adapter.sh`'s backend abstraction is in place, but:
 - **launchd** (macOS): fully implemented.
 - **systemd** (Linux): a **stub** — `backend::install/uninstall` simply `return 1` reporting "not implemented in Phase 1".
 
@@ -55,7 +55,7 @@ Implement `backend::*` using systemd user units (the stub already defines `plist
 - `install`: write the unit → `systemctl --user daemon-reload` → `enable --now <name>.timer`
 - `uninstall`: `disable --now` + rm + reload
 - `list_installed` / `is_loaded`: `systemctl --user list-timers` / `is-active`
-- needs a new systemd unit generator (the counterpart to the existing `plist-gen.sh`)
+- needs a new systemd unit generator (the counterpart to the existing `cron/ops/internals/plist-gen.sh`)
 
 - ✅ most symmetric with the launchd model (declarative, OS-managed, observable via `list-timers`)
 - ✅ `OnCalendar` is expressive enough (daily HH:MM / every Nh)
@@ -68,7 +68,7 @@ Implement `backend::*` using systemd user units (the stub already defines `plist
 ## 4. daemon supervision (also part of the cron layer)
 
 The telegram-channel daemon's "every-minute start.sh patrol" self-heal mechanism (README §self-heal) relies on crontab/launchd on macOS. WSL reuses the same backend from §3:
-- crontab route: `* * * * * runtime/daemon/start.sh`
+- crontab route: `* * * * * channels/<kind>-daemon/start.sh`
 - systemd route: a single `ka-daemon-supervisor.timer` (every minute) or just make the daemon a `Restart=always` `.service` (better, eliminates the patrol)
 
 > Optional optimization: under WSL/systemd, make the daemon a `Restart=always` long-running service directly — cleaner than "every-minute patrol" — but to stay aligned with macOS, start with the patrol model.
@@ -96,7 +96,7 @@ The telegram-channel daemon's "every-minute start.sh patrol" self-heal mechanism
 
 ## 7. Verification
 
-- The existing `ops/tests/cases/19-cron-linux-crontab.sh` is an e2e skeleton for Linux crontab and can be extended into a backend-level test
+- The existing `tests/cases/19-cron-linux-crontab.sh` is an e2e skeleton for Linux crontab and can be extended into a backend-level test
 - Run install.sh dry-run + cron backend unit tests in a Docker Ubuntu (CI-friendly, can also be verified locally on mac via docker)
 - True WSL end-to-end (tmux + daemon + telegram) to be accepted by you on a Windows machine
 

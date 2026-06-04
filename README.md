@@ -44,7 +44,7 @@ orchestration / communication / scheduling) plus shared / config / tests:
 - **`ka workshop`** brings up multiple agent sessions, each in its own tmux pane / cwd /
   channel, all bound to the daemon.
 - **Design / runtime separation.** This repo is pure design-time source. `install.sh`
-  builds and copies the artifacts into `~/.knowledge-assistant/runtime/`; at runtime
+  builds and copies the artifacts into `~/.knowledge-assistant/`; at runtime
   everything runs the deployed copy and never points back at the repo.
 
 ## Getting started

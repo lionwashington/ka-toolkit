@@ -62,23 +62,24 @@ pnpm build            # produces dist for hooks/core/opennutrition etc. (needed 
 ## 4. Install (channel = lark)
 
 ```bash
-# --channel-kind=lark: make lark the ACTIVE daemon (persisted to config.yaml).
+# --channel-kind=lark: make lark the ACTIVE daemon (persisted to config/config.yaml).
 # Both daemons (telegram + lark) are always deployed; only the active one starts.
 # --switch: point ka's symlink/cron/hooks/skills at runtime and start the daemon.
 ./install.sh --channel-kind=lark --switch
 ```
 
 install will: deploy ka+ops / the various MCPs / hooks / skills / **both channel daemons**;
-write `channel_kind: lark` into `~/.knowledge-assistant/config.yaml`; start **only** the lark daemon.
+write `channel_kind: lark` into `~/.knowledge-assistant/config/config.yaml`; start **only** the lark daemon.
 (On Linux the cron switch goes through the crontab backend and doesn't touch launchd.)
 
-Then **fill in the real Lark credentials** (install only seeds a placeholder config):
+Then **fill in the real Lark credentials** (the daemon fails closed until they are set):
 
 ```bash
-$EDITOR ~/.knowledge-assistant/runtime/lark-daemon/config.json
-# fill in self_open_id, groups{ "oc_groupid": { "name":"…", "webhook_url":"…" } }
-~/.knowledge-assistant/runtime/lark-daemon/stop.sh
-~/.knowledge-assistant/runtime/lark-daemon/start.sh
+$EDITOR ~/.knowledge-assistant/config/secrets.yaml
+# under channels.lark: self_open_id, groups{ "oc_groupid": { "name":"…", "webhook_url":"…" } }
+# (non-secret port/tuning live in ~/.knowledge-assistant/config/config.yaml under channels.lark)
+~/.knowledge-assistant/channels/lark-daemon/stop.sh
+~/.knowledge-assistant/channels/lark-daemon/start.sh
 curl -s http://127.0.0.1:9876/api/status | python3 -m json.tool   # ok:true + lark statusFields
 ```
 
@@ -87,14 +88,14 @@ curl -s http://127.0.0.1:9876/api/status | python3 -m json.tool   # ok:true + la
 ## 5. Start workshop (mates on lark)
 
 ```bash
-ka workshop          # each mate pane connects to the active daemon (lark, from config.yaml)
+ka workshop          # each mate pane connects to the active daemon (lark, from config/config.yaml)
 ```
 
-The active daemon comes from `config.yaml channel_kind` (set above) — **no env var needed,
+The active daemon comes from `config/config.yaml channel_kind` (set above) — **no env var needed,
 on any command**. In the group, use `to <channel name>: …` to target, no prefix → `main`.
 
 > To switch the active daemon later: `./install.sh --channel-kind=telegram` (rewrites
-> `config.yaml`), then restart the workshop. Both daemons are already deployed, so no
+> `config/config.yaml`), then restart the workshop. Both daemons are already deployed, so no
 > redeploy is required.
 
 > To manually attach just one CC (without workshop):
@@ -108,7 +109,7 @@ on any command**. In the group, use `to <channel name>: …` to target, no prefi
 ## 6. Scheduled Tasks (crontab backend)
 
 ```bash
-# edit cron.yaml (daily-brief/distill etc.), then:
+# edit config/cron.yaml (daily-brief/distill etc.), then:
 ka cron install        # on Linux it automatically uses the crontab backend (detect_backend → crontab)
 ka cron list           # see installed jobs (marked # ka-cron:<name> in crontab)
 crontab -l             # view the crontab lines directly
@@ -119,13 +120,13 @@ Make sure the cron daemon is running (see §1's WSL note).
 ### Lark daemon self-heal (recommended)
 
 The lark daemon needs a supervisor so it auto-revives if it ever dies (the old
-standalone `~/.lark-channel` had a `* * * * * start.sh` cron; the runtime daemon
+standalone setup had a `* * * * * start.sh` cron; the deployed daemon
 needs the equivalent). Add it as a `ka cron` job — its `start.sh` is idempotent
 (no-op when already up):
 
 ```bash
 ka cron add --name lark-daemon --schedule "every 1m" --kind shell \
-  --command "$HOME/.knowledge-assistant/runtime/lark-daemon/start.sh >> $HOME/.knowledge-assistant/runtime/lark-daemon/supervisor.log 2>&1" \
+  --command "$HOME/.knowledge-assistant/channels/lark-daemon/start.sh >> $HOME/.knowledge-assistant/channels/lark-daemon/supervisor.log 2>&1" \
   --description "lark-channel daemon self-heal: idempotent start every 1 min"
 ka cron install            # materializes to crontab (Linux) — `crontab -l` shows the # ka-cron:lark-daemon line
 ka cron run lark-daemon    # foreground test (should report the daemon already up)
@@ -146,7 +147,7 @@ ka cron run lark-daemon    # foreground test (should report the daemon already u
 4. Restart the lark daemon (stop/start) → the CC **needs no restart and no touch**; the receive line reconnects automatically via re-adopt
    (see docs/telegram-channel-design.md §6c/§6d; when downtime is < ~2.5s).
 
-To run the tests without a real Lark: `cd packages/lark-channel && pnpm test` (19 of them).
+To run the tests without a real Lark: `cd channels/lark && pnpm test` (19 of them).
 
 ---
 
@@ -154,7 +155,7 @@ To run the tests without a real Lark: `cd packages/lark-channel && pnpm test` (1
 
 | Symptom | What to check |
 |---|---|
-| `/api/status` unreachable | the daemon didn't start; look at `~/.knowledge-assistant/runtime/lark-daemon/channel.log` |
+| `/api/status` unreachable | the daemon didn't start; look at `~/.knowledge-assistant/channels/lark-daemon/channel.log` |
 | `poll_errors_total` rising | lark-cli calls are failing: auth? `lark_cli_bin` path? chat_id? run that lark-cli command manually and read the error |
 | CC not receiving | ① was it sent from your own account (self_open_id) ② does config have that group's chat_id ③ does the daemon log show a dispatch ④ is the CC actually connected (does /api/status's channels_online list that name) |
 | Can receive but can't reply | is the webhook_url correct, is the custom bot still in the group; check the daemon log for `reply failed` |
@@ -168,6 +169,6 @@ To run the tests without a real Lark: `cd packages/lark-channel && pnpm test` (1
 | Item | macOS | Ubuntu |
 |---|---|---|
 | cron backend | launchd plist | **crontab** (`ka cron install` selects automatically) |
-| channel daemon | telegram@9877 (default) | lark@9876 (`./install.sh --channel-kind=lark`; the active kind is persisted to `config.yaml channel_kind`, no env needed afterwards) |
+| channel daemon | telegram@9877 (default) | lark@9876 (`./install.sh --channel-kind=lark`; the active kind is persisted to `config/config.yaml channel_kind`, no env needed afterwards) |
 | `macos-automator` MCP | present | skipped (not installed on Linux) |
 | install launchctl section | runs | auto-skipped (Darwin only) |

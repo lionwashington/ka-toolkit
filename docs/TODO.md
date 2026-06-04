@@ -34,7 +34,7 @@ a caller that takes the displayed title and calls `kb_read_topic("Todo list")` g
 `ENOENT` — the displayed name is not the callable name. This is systemic: most topics
 use an English kebab-case filename with a longer/localized title.
 
-Root cause is in `packages/core/src/knowledge-store/store.ts`:
+Root cause is in `kb/core/src/knowledge-store/store.ts`:
 - `listTopics()` returns `{ name: data.title ?? stem }` → exposes the **title**.
 - `readTopic(name)` opens `topics/${name}.md` → resolves by **filename**.
 
@@ -58,7 +58,7 @@ _Deferred by request 2026-06-03 — fix later._
 
 ## distill OOM on very large snapshots — ✅ RESOLVED 2026-06-04
 
-**Fixed** in `ops/kb/distill-bg-worker.sh`: the worker now splits a snapshot
+**Fixed** in `kb/ops/distill-bg-worker.sh`: the worker now splits a snapshot
 larger than `KA_DISTILL_CHUNK_BYTES` (default 8 MiB) into multiple passes, each a
 **fresh `claude -p`** over `[cur_offset, cur_offset+CHUNK]`, so peak memory stays
 bounded. It reads the persisted `last_parsed_offset` from the raw frontmatter to

@@ -1,7 +1,7 @@
 # telegram-channel daemon — Architecture Design
 
-> **Status**: as-built (implemented and deployed, aligned with the actual code in `packages/telegram-channel/server.ts`).
-> **Ground truth**: `packages/telegram-channel/server.ts` (the code is authoritative for mechanism); process/start-stop helpers in `daemon.sh` / `start.sh` / `tg-ch` / `config.example.json`.
+> **Status**: as-built (implemented and deployed, aligned with the actual code: the channel-core kernel `channels/core/src/` + the telegram platform adapter `channels/telegram/telegram-platform.ts`).
+> **Ground truth**: `channels/core/src/` (kernel: `daemon.ts` / `http.ts` / `dispatch.ts` / `sessions.ts` / `probe.ts` / `routing.ts`) + `channels/telegram/telegram-platform.ts` (telegram polling/send/identity) — the code is authoritative for mechanism; process/start-stop helpers in `daemon.sh` / `start.sh` / `tg-ch`.
 > **This document is the single authoritative reference for the telegram-channel architecture**, including CC↔CC (cc2cc) internal communication (see §5 CC↔CC cc2cc communication).
 
 ---
@@ -40,17 +40,16 @@ The terminal transcript never reaches the user; the user only sees what the CC p
 
 - **A single long-running daemon**: a node + express process listening on **MCP-over-HTTP @ `127.0.0.1:9877`** (loopback-only).
 - **Independent of any CC**: the daemon's `getUpdates` polling loop and its MCP client connections are independent of each other — even when no CC is connected, the daemon keeps polling Telegram (offset advancement rules in §4).
-- **Singleton = port binding**: `daemon.sh` uses `flock` on Linux; macOS has no `flock`, so it `exec node` directly and relies on the **port-binding singleton** in server.ts as a fallback — a second daemon hits `EADDRINUSE` and cleanly exits with `process.exit(0)`, no crash (see server.ts `httpServer.on('error')`).
-- **Deployment location**: runtime directory `~/.knowledge-assistant/runtime/telegram-daemon/` (per what install.sh actually lays down). Source lives in the repo at `packages/telegram-channel/`, copied to the runtime directory via the install/deploy flow; secrets/runtime files (`.env` / `state.json` / `daemon.pid` / logs / `node_modules/`) live only in the runtime directory and are not committed to git.
+- **Singleton = port binding**: `daemon.sh` uses `flock` on Linux; macOS has no `flock`, so it `exec node` directly and relies on the **port-binding singleton** in the channel-core kernel as a fallback — a second daemon hits `EADDRINUSE` and cleanly exits with `process.exit(0)`, no crash (see `channels/core/src/daemon.ts` `httpServer.on('error')`).
+- **Deployment location**: the deployed daemon directory `~/.knowledge-assistant/channels/telegram-daemon/` (per what install.sh actually lays down). Source lives in the repo at `channels/telegram/`, copied to the daemon directory via the install/deploy flow; runtime files (`state.json` / `daemon.pid` / logs / `node_modules/`) live only in the daemon directory and are not committed to git. Secrets live in `~/.knowledge-assistant/config/secrets.yaml` (not in the daemon directory, not in git).
 - **HTTP endpoints**:
   - `POST/GET/DELETE /mcp` — MCP Streamable HTTP transport (CC connects as an MCP client).
   - `GET /api/status` — JSON health status (uptime, sessions, counters, channel_alive, offset).
   - `POST /api/shutdown` — graceful shutdown (loopback only).
 - **Supervision**: `cron` (`* * * * * start.sh`) provides idempotent self-healing — if the daemon dies it is relaunched within ≤60s by `start.sh` (`start.sh` first probes `/api/status`; if already up it just returns).
-- **Configuration sources**:
-  - `.env` (runtime directory, `chmod 600`, the daemon sources it itself): `TELEGRAM_BOT_TOKEN`, `OWNER_CHAT_ID`.
-  - `config.json`: `{ bot_token_env, http_host, http_port, poll_timeout, owner_chat_id }`.
-  - Owner resolution: **env takes priority** (`OWNER_CHAT_ID`), with `config.json owner_chat_id` as fallback; the token is taken from `.env $bot_token_env`.
+- **Configuration sources** (the daemon reads `~/.knowledge-assistant/config/` directly; no per-daemon `config.json` / `.env`):
+  - `config/secrets.yaml` → `channels.telegram.{token, owner_chat_id}` — the bot token and the single allowed owner. The daemon **fails closed** on an empty token or owner (no fallback, no default).
+  - `config/config.yaml` → `channels.telegram.{port, ...}` — non-secret host/port/poll tuning.
 
 > Note that the grammy `Bot` is used only for raw API calls (`getUpdates` / `sendMessage`) and **never calls `bot.start()`** — otherwise grammy would spin up its own long-polling loop and compete with this daemon for "the single allowed getUpdates consumer". The offset cursor is advanced manually by the daemon.
 
@@ -226,7 +225,7 @@ Historical lesson: the old version (which from c017006 copied lark's "404 any un
 
 ## 8. Security
 
-- 🔴 **The bot token lives only in the daemon process**: read from `process.env[bot_token_env]` (injected by `daemon.sh` sourcing `~/.../.env`). **No CC session (including any mate) ever touches the token** — they only send/receive via MCP. Credentials have a single egress. The attachment download URL is also assembled and consumed inside the daemon; the token never leaves it.
+- 🔴 **The bot token lives only in the daemon process**: read by the daemon from `config/secrets.yaml channels.telegram.token`. **No CC session (including any mate) ever touches the token** — they only send/receive via MCP. Credentials have a single egress. The attachment download URL is also assembled and consumed inside the daemon; the token never leaves it.
 - **owner-only filter** (§4 step 1): only messages with `from.id === OWNER_ID` are deliverable, preventing prompt injection.
 - **reply forced to the owner** (§5a): the daemon does not trust the `chat_id` the CC passes; it only sends to the owner DM.
 - **`from_channel` injected by the daemon** (§5b): based on the session's true name, not trusting the CC's self-report, preventing forgery.
@@ -234,7 +233,7 @@ Historical lesson: the old version (which from c017006 copied lark's "404 any un
 
 ---
 
-## Appendix A — Key Constants (server.ts ground truth)
+## Appendix A — Key Constants (`channels/telegram/telegram-platform.ts` + `channels/core/src/` ground truth)
 
 | Constant | Value | Use |
 |---|---|---|
