@@ -585,15 +585,21 @@ switch_hooks() {         # switch ④: CLAUDE_SETTINGS hook paths → runtime/ho
   if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] cp settings.json .pre-switch; change hook paths repo→runtime/hooks"; return 0; fi
   [ -f "$CLAUDE_SETTINGS" ] || { log "  WARN ${CLAUDE_SETTINGS} does not exist, skipping"; return 0; }
   cp "$CLAUDE_SETTINGS" "${CLAUDE_SETTINGS}.pre-switch-$(date +%Y%m%d%H%M%S)"
-  # Match any prefix of .../kb/adapter-cc/dist/hooks (prefix unpredictable) → runtime/hooks.
+  # Re-point the hooks dir to the new $KA_HOME/kb/hooks, whatever the settings.json
+  # currently points at. Match ALL three known prior locations, not just the gen3
+  # repo path — otherwise a machine migrating from an OLD DEPLOYED runtime (hooks at
+  # `runtime/hooks`) or an OLD repo layout (`packages/adapters/claude-code/dist/hooks`)
+  # is left with stale hook paths that break once the old runtime/ is removed.
   RT="$RUNTIME" python3 - "$CLAUDE_SETTINGS" <<'PY'
 import os, re, sys
 rt = os.environ["RT"]; p = sys.argv[1]
 raw = open(p).read()
-# Same as switch_cron: use /[^<>"\s]* instead of \S* to avoid greedily swallowing the leading
-# quote/tag (settings.json is JSON, and the hook command has a space between node and the path
-# so it wasn't broken, but tightening is safer).
-raw2 = re.sub(r'/[^<>"\s]*/kb/adapter-cc/dist/hooks', rt + "/kb/hooks", raw)
+# Use /[^<>"\s]* (not \S*) for the prefix to avoid greedily swallowing the leading
+# quote/tag. Alternation covers: gen3 repo path, pre-gen3 repo path, and the old
+# DEPLOYED runtime/hooks location — all collapse to the new runtime kb/hooks.
+raw2 = re.sub(
+    r'/[^<>"\s]*/(?:kb/adapter-cc/dist/hooks|packages/adapters/claude-code/dist/hooks|runtime/hooks)',
+    rt + "/kb/hooks", raw)
 open(p, "w").write(raw2)
 print("  hook paths rewired" if raw2 != raw else "  no hook path matched")
 PY
