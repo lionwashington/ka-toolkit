@@ -33,8 +33,8 @@ COPY config /repo/config
 # @ka/core CLI bundles the distill-bg tests need, placed at the runtime layout
 # path (core-cli/) that distill-bg.sh + distill-bg-worker.sh probe first.
 # Built on the host by run.sh (tsup → standalone node bundles).
-COPY packages/core/dist/jsonl-reader-cli.js /repo/core-cli/jsonl-reader-cli.js
-COPY packages/core/dist/distill-result-parser-cli.js /repo/core-cli/distill-result-parser-cli.js
+COPY kb/core/dist/jsonl-reader-cli.js /repo/core-cli/jsonl-reader-cli.js
+COPY kb/core/dist/distill-result-parser-cli.js /repo/core-cli/distill-result-parser-cli.js
 # The bundles are ES modules (@ka/core is "type":"module"); mark this dir so
 # node treats the .js as ESM instead of CommonJS.
 RUN printf '{"type":"module"}\n' > /repo/core-cli/package.json

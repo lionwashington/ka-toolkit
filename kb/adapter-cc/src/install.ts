@@ -214,7 +214,7 @@ function setupMcpServers(config: ReturnType<typeof loadConfig>, secrets: ReturnT
     claudeJson.mcpServers['opennutrition'] = { type: 'stdio', command: 'node', args: [opennutritionPath] }
     printOk('opennutrition (300K+ food database)')
   } else {
-    printSkip('opennutrition (not built — run: cd packages/mcp-opennutrition && npm install && npm run build)')
+    printSkip('opennutrition (not built — run: cd kb/tools/mcp-opennutrition && npm install && npm run build)')
   }
 
   // Healthcare

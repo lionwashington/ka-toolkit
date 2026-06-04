@@ -132,18 +132,18 @@ deploy_node_mcp() {      # P1.2
   # packs all dependencies (including the workspace package @ka/core) into a single
   # file → self-contained, bypasses the pnpm symlink farm, never points at repo.
   local ESB; ESB="$(find "$REPO_ROOT/node_modules/.pnpm" -path '*esbuild@*/node_modules/esbuild/bin/esbuild' -type f 2>/dev/null | head -1 || true)"
-  for spec in "kb=mcp-server" "market=market-mcp"; do
+  for spec in "kb=kb/mcp-server" "market=kb/tools/market-mcp"; do
     local name="${spec%%=*}" pkg="${spec#*=}" dest="$RUNTIME/mcp/${spec%%=*}"
     log "node MCP [$name]: esbuild bundle -> $dest/index.mjs"
     if [ "$DRY_RUN" = 1 ]; then
-      echo "  [dry-run] mkdir -p $dest; esbuild packages/$pkg/src/index.ts --bundle -> $dest/index.mjs"
+      echo "  [dry-run] mkdir -p $dest; esbuild $pkg/src/index.ts --bundle -> $dest/index.mjs"
     else
       [ -n "$ESB" ] || { log "  WARN esbuild not found, skipping"; return 0; }
       mkdir -p "$dest"
       # --banner injects createRequire: when the bundle contains CJS dependencies (e.g.
       # yaml), the ESM output's dynamic require needs a real require, otherwise it fails
       # at runtime with "Dynamic require of X not supported".
-      if "$ESB" "$REPO_ROOT/packages/$pkg/src/index.ts" --bundle --platform=node --format=esm --banner:js="import{createRequire}from'module';const require=createRequire(import.meta.url);" --outfile="$dest/index.mjs" >/dev/null 2>&1; then
+      if "$ESB" "$REPO_ROOT/$pkg/src/index.ts" --bundle --platform=node --format=esm --banner:js="import{createRequire}from'module';const require=createRequire(import.meta.url);" --outfile="$dest/index.mjs" >/dev/null 2>&1; then
         log "  OK $dest/index.mjs ($(wc -c < "$dest/index.mjs" | tr -d ' ')B, self-contained)"
       else
         log "  FAIL bundle"
@@ -159,7 +159,7 @@ deploy_opennutrition() { # P1.4: node MCP special case (native better-sqlite3 + 
   # Single-machine copy model (D4): build once in the repo to produce build/ +
   # data_local/db + compiled node_modules, then copy the whole thing to runtime —
   # same machine, same platform, zero recompile, zero network.
-  local src="$REPO_ROOT/packages/mcp-opennutrition" dest="$RUNTIME/mcp/opennutrition"
+  local src="$REPO_ROOT/kb/tools/mcp-opennutrition" dest="$RUNTIME/mcp/opennutrition"
   log "node MCP [opennutrition]: special case (native sqlite + dataset) -> $dest"
   if [ "$DRY_RUN" = 1 ]; then
     echo "  [dry-run] ensure $src is built (build/index.js + data_local/*.db)"
@@ -199,16 +199,16 @@ deploy_python_mcp() {    # P1.3
   # What's installed is a real copy of the code from the wheel (not an editable .pth),
   # so the venv no longer points at the repo.
   local UV; UV="$(command -v uv 2>/dev/null || echo "$HOME/.local/bin/uv")"
-  for spec in "ibkr=ibkr-mcp" "hkprop=hkprop-mcp"; do
+  for spec in "ibkr=kb/tools/ibkr-mcp" "hkprop=kb/tools/hkprop-mcp"; do
     local name="${spec%%=*}" pkg="${spec#*=}"
     local venv="$KA_RUNTIME_ROOT/${name}-venv"
     log "python MCP [$name]: uv build wheel + install into ${venv} (non-editable)"
     if [ "$DRY_RUN" = 1 ]; then
-      echo "  [dry-run] uv build --wheel packages/$pkg; uv venv $venv; uv pip install --force-reinstall <wheel>"
+      echo "  [dry-run] uv build --wheel $pkg; uv venv $venv; uv pip install --force-reinstall <wheel>"
     else
       [ -x "$UV" ] || { log "  WARN uv not found, skipping"; return 0; }
       local wd; wd="$(mktemp -d)"
-      if "$UV" build --wheel --out-dir "$wd" "$REPO_ROOT/packages/$pkg" >/dev/null 2>&1; then
+      if "$UV" build --wheel --out-dir "$wd" "$REPO_ROOT/$pkg" >/dev/null 2>&1; then
         local whl; whl="$(ls "$wd"/*.whl 2>/dev/null | head -1)"
         [ -d "$venv" ] || "$UV" venv "$venv" >/dev/null 2>&1
         if "$UV" pip install --python "$venv/bin/python" --force-reinstall "$whl" >/dev/null 2>&1; then
@@ -347,7 +347,7 @@ EOF
 
 deploy_hooks() {         # CC hooks (capture-hook) → runtime (esbuild bundle + prune stale; @ka/core bundled in, self-contained)
   want hooks || return 0
-  local src="$REPO_ROOT/packages/adapters/claude-code/dist/hooks" dest="$RUNTIME/hooks"
+  local src="$REPO_ROOT/kb/adapter-cc/dist/hooks" dest="$RUNTIME/hooks"
   log "CC hooks → ${dest} (esbuild bundle; workspace deps like @ka/core bundled in, self-contained)"
   if [ "$DRY_RUN" = 1 ]; then
     echo "  [dry-run] esbuild --bundle ${src}/*.js -> ${dest} (self-contained, no dependence on @ka/core in repo node_modules)"
@@ -392,8 +392,8 @@ deploy_hooks() {         # CC hooks (capture-hook) → runtime (esbuild bundle +
 
 deploy_core_cli() {      # core CLI (called by kb skill) → runtime/core-cli (tsup dist already self-contained, plain copy)
   want core-cli || return 0
-  local src="$REPO_ROOT/packages/core/dist" dest="$RUNTIME/core-cli"
-  log "core CLI → ${dest} (packages/core/dist/*-cli.js, already tsup-bundled self-contained, plain copy)"
+  local src="$REPO_ROOT/kb/core/dist" dest="$RUNTIME/core-cli"
+  log "core CLI → ${dest} (kb/core/dist/*-cli.js, already tsup-bundled self-contained, plain copy)"
   if [ "$DRY_RUN" = 1 ]; then
     echo "  [dry-run] cp ${src}/*-cli.js -> ${dest}/"
     return 0
@@ -414,21 +414,21 @@ deploy_core_cli() {      # core CLI (called by kb skill) → runtime/core-cli (t
 deploy_skills() {        # skills → runtime/skills/<name>/SKILL.md (design→runtime copy; symlink created by switch_skills)
   want skills || return 0
   local dest="$RUNTIME/skills"
-  log "skills → ${dest} (copy packages/skills/*.md + kb; symlink pointed at runtime by switch_skills)"
+  log "skills → ${dest} (copy kb/skills/*.md + kb; symlink pointed at runtime by switch_skills)"
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  [dry-run] cp packages/skills/*.md + packages/skill/src/kb.md -> ${dest}/<name>/SKILL.md"
+    echo "  [dry-run] cp kb/skills/*.md + kb/skill/src/kb.md -> ${dest}/<name>/SKILL.md"
     return 0
   fi
   mkdir -p "$dest"
   local f name cnt=0
-  for f in "$REPO_ROOT"/packages/skills/*.md; do
+  for f in "$REPO_ROOT"/kb/skills/*.md; do
     [ -f "$f" ] || continue
     name="$(basename "$f" .md)"
     mkdir -p "$dest/$name"; cp "$f" "$dest/$name/SKILL.md"; cnt=$((cnt + 1))
   done
-  # The kb entry source path is special (packages/skill/src/kb.md, not under packages/skills/)
-  if [ -f "$REPO_ROOT/packages/skill/src/kb.md" ]; then
-    mkdir -p "$dest/kb"; cp "$REPO_ROOT/packages/skill/src/kb.md" "$dest/kb/SKILL.md"; cnt=$((cnt + 1))
+  # The kb entry source path is special (kb/skill/src/kb.md, not under kb/skills/)
+  if [ -f "$REPO_ROOT/kb/skill/src/kb.md" ]; then
+    mkdir -p "$dest/kb"; cp "$REPO_ROOT/kb/skill/src/kb.md" "$dest/kb/SKILL.md"; cnt=$((cnt + 1))
   fi
   log "  OK ${dest} (${cnt} skill(s) copied into runtime; pure docs, self-contained)"
 }
@@ -562,7 +562,7 @@ switch_hooks() {         # switch ④: CLAUDE_SETTINGS hook paths → runtime/ho
   if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] cp settings.json .pre-switch; change hook paths repo→runtime/hooks"; return 0; fi
   [ -f "$CLAUDE_SETTINGS" ] || { log "  WARN ${CLAUDE_SETTINGS} does not exist, skipping"; return 0; }
   cp "$CLAUDE_SETTINGS" "${CLAUDE_SETTINGS}.pre-switch-$(date +%Y%m%d%H%M%S)"
-  # Match any prefix of .../packages/adapters/claude-code/dist/hooks (prefix unpredictable) → runtime/hooks.
+  # Match any prefix of .../kb/adapter-cc/dist/hooks (prefix unpredictable) → runtime/hooks.
   RT="$RUNTIME" python3 - "$CLAUDE_SETTINGS" <<'PY'
 import os, re, sys
 rt = os.environ["RT"]; p = sys.argv[1]
@@ -570,7 +570,7 @@ raw = open(p).read()
 # Same as switch_cron: use /[^<>"\s]* instead of \S* to avoid greedily swallowing the leading
 # quote/tag (settings.json is JSON, and the hook command has a space between node and the path
 # so it wasn't broken, but tightening is safer).
-raw2 = re.sub(r'/[^<>"\s]*/packages/adapters/claude-code/dist/hooks', rt + '/hooks', raw)
+raw2 = re.sub(r'/[^<>"\s]*/kb/adapter-cc/dist/hooks', rt + '/hooks', raw)
 open(p, "w").write(raw2)
 print("  hook paths rewired" if raw2 != raw else "  no hook path matched")
 PY

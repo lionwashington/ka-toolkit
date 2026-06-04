@@ -6,12 +6,12 @@
 **/dist
 # …but keep the two @ka/core CLI bundles the ops distill tests (21/22/23) need.
 # (re-include the dir so BuildKit walks it, drop its contents, then keep the 2.)
-!packages/core/dist
-packages/core/dist/*
-!packages/core/dist/jsonl-reader-cli.js
-!packages/core/dist/distill-result-parser-cli.js
+!kb/core/dist
+kb/core/dist/*
+!kb/core/dist/jsonl-reader-cli.js
+!kb/core/dist/distill-result-parser-cli.js
 **/build
-packages/mcp-opennutrition/data_local
+kb/tools/mcp-opennutrition/data_local
 runtime
 raw
 state

@@ -107,9 +107,9 @@ if [ -f "$STATUS_FILE" ]; then
 fi
 
 # Locate ka-jsonl-reader CLI bundle. Core CLIs live in runtime/core-cli (deploy
-# layout) or packages/core/dist (repo layout) — try both.
+# layout) or kb/core/dist (repo layout) — try both.
 JSONL_READER="$KA_REPO_ROOT/core-cli/jsonl-reader-cli.js"                       # runtime layout
-[ -f "$JSONL_READER" ] || JSONL_READER="$KA_REPO_ROOT/packages/core/dist/jsonl-reader-cli.js"  # repo layout
+[ -f "$JSONL_READER" ] || JSONL_READER="$KA_REPO_ROOT/kb/core/dist/jsonl-reader-cli.js"  # repo layout
 [ -f "$JSONL_READER" ] || { log_err "jsonl-reader bundle missing — run './install.sh --only core-cli' (or 'pnpm --filter @ka/core build' in repo) ($JSONL_READER)"; exit 2; }
 
 # Capture snapshot via the lightweight --format snapshot path (no message body)

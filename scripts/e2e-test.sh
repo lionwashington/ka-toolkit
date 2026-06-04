@@ -44,10 +44,10 @@ echo ""
 echo "[3] Testing session manager..."
 mkdir -p /root/.knowledge-assistant/state/sessions
 echo '{"sessionId":"test-123","cmdline":"echo hello","cwd":"/tmp","tool":"claude-code","platform":"linux","restart":false,"savedAt":"2026-04-08T00:00:00Z"}' > /root/.knowledge-assistant/state/sessions/test-123.json
-run_test "session get" "node /app/packages/adapters/claude-code/scripts/session-manager.mjs get test-123 | grep test-123"
-run_test "session restart" "node /app/packages/adapters/claude-code/scripts/session-manager.mjs restart test-123"
-run_test "session clear" "node /app/packages/adapters/claude-code/scripts/session-manager.mjs clear test-123"
-run_test "session status" "node /app/packages/adapters/claude-code/scripts/session-manager.mjs status | grep test-123"
+run_test "session get" "node /app/kb/adapter-cc/scripts/session-manager.mjs get test-123 | grep test-123"
+run_test "session restart" "node /app/kb/adapter-cc/scripts/session-manager.mjs restart test-123"
+run_test "session clear" "node /app/kb/adapter-cc/scripts/session-manager.mjs clear test-123"
+run_test "session status" "node /app/kb/adapter-cc/scripts/session-manager.mjs status | grep test-123"
 
 echo ""
 echo "[4] Running unit tests..."

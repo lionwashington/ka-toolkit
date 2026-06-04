@@ -17,7 +17,7 @@
 # Notification: the worker NEVER touches Telegram and holds no token. Telegram
 # has a single egress — the main session. The main session reads the failure
 # sentinel (acked:false) and notifies the user, then sets acked:true. See
-# packages/skill/src/kb.md for the main-side read contract.
+# kb/skill/src/kb.md for the main-side read contract.
 
 set -uo pipefail
 KA_REPO_ROOT="${KA_REPO_ROOT:-$(_d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -e "$_d/bin/ka" ] || [ "$_d" = / ]; do _d="$(dirname "$_d")"; done; printf %s "$_d")}"
@@ -64,7 +64,7 @@ done
 [ -n "$WORKSPACE_CWD" ]    || { echo "worker: --workspace-cwd required" >&2; exit 1; }
 
 PARSER_CLI="$KA_REPO_ROOT/core-cli/distill-result-parser-cli.js"                       # runtime layout
-[ -f "$PARSER_CLI" ] || PARSER_CLI="$KA_REPO_ROOT/packages/core/dist/distill-result-parser-cli.js"  # repo layout
+[ -f "$PARSER_CLI" ] || PARSER_CLI="$KA_REPO_ROOT/kb/core/dist/distill-result-parser-cli.js"  # repo layout
 
 # Stats file the distill agent Writes its result JSON to — the parser's tier-0
 # (most reliable) source. Cleared up-front so we never read a previous run's file.
@@ -158,9 +158,9 @@ process.exit(isErr && is400 && thinking ? 0 : 1);
 
 # ---------- prompt construction ----------
 # The distill agent runs in the workspace cwd, so the prompt must give it an
-# ABSOLUTE path to the CLI (runtime/core-cli or repo/packages/core/dist).
+# ABSOLUTE path to the CLI (runtime/core-cli or repo/kb/core/dist).
 JSONL_READER_ABS="$KA_REPO_ROOT/core-cli/jsonl-reader-cli.js"                       # runtime layout
-[ -f "$JSONL_READER_ABS" ] || JSONL_READER_ABS="$KA_REPO_ROOT/packages/core/dist/jsonl-reader-cli.js"  # repo layout
+[ -f "$JSONL_READER_ABS" ] || JSONL_READER_ABS="$KA_REPO_ROOT/kb/core/dist/jsonl-reader-cli.js"  # repo layout
 
 # build_prompt <pass-upper-offset> → echoes the headless distill prompt for ONE
 # pass whose upper bound is the given offset (= the full snapshot for a single
@@ -171,7 +171,7 @@ build_prompt() {
 You are a background distiller worker. Run mode: headless Opus, no TTY interaction.
 
 [Task]
-Complete one incremental distill following the /kb distill --foreground workflow in packages/skill/src/kb.md.
+Complete one incremental distill following the /kb distill --foreground workflow in kb/skill/src/kb.md.
 
 [Snapshot constraints (race condition guard)]
 - session_id: $SESSION_ID

@@ -102,7 +102,7 @@ run_cmd() {
             # source (config-cli). cron.yaml no longer carries target_pane.
             local node_bin; node_bin="$(command -v node || echo /opt/homebrew/bin/node)"
             local cfgcli="$REPO_ROOT/core-cli/config-cli.js"          # runtime layout
-            [ -f "$cfgcli" ] || cfgcli="$REPO_ROOT/packages/core/dist/config-cli.js"  # repo layout
+            [ -f "$cfgcli" ] || cfgcli="$REPO_ROOT/kb/core/dist/config-cli.js"  # repo layout
             local channels; channels="$("$node_bin" "$cfgcli" inject 2>/dev/null || true)"
             if [ -z "$channels" ]; then
                 echo "inject-prompt: channels.inject empty/unset — nothing injected (fail-closed)" >&2
