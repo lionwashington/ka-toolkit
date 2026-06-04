@@ -56,7 +56,7 @@ export async function dispatch(
     return
   }
 
-  log(`dispatch → "${targetName}" [${targets.length} sess]: ${content.slice(0, 60)}`)
+  log(`dispatch → "${targetName}" [${targets.length} sess] (${content.length} chars)`)
   counters.dispatches++
   await fanout(targets, content, metaBase, targetName)
 
@@ -92,7 +92,7 @@ export async function dispatchTargets(
   if (deliver.length === 1 && deliver[0] === 'all') {
     const targets = allSessions()
     if (targets.length > 0) {
-      log(`dispatch → all [${targets.length} sess]: ${content.slice(0, 60)}`)
+      log(`dispatch → all [${targets.length} sess] (${content.length} chars)`)
       counters.dispatches++
       await fanout(targets, content, metaBase, 'all')
       delivered = targets.length
@@ -101,7 +101,7 @@ export async function dispatchTargets(
     for (const name of deliver) {
       const targets = sessionsOf(name)
       if (targets.length === 0) continue
-      log(`dispatch → "${name}" [${targets.length} sess]: ${content.slice(0, 60)}`)
+      log(`dispatch → "${name}" [${targets.length} sess] (${content.length} chars)`)
       counters.dispatches++
       await fanout(targets, content, metaBase, name)
       delivered += targets.length

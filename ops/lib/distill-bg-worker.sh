@@ -162,7 +162,13 @@ process.exit(isErr && is400 && thinking ? 0 : 1);
 # ABSOLUTE path to the CLI (runtime/core-cli or repo/packages/core/dist).
 JSONL_READER_ABS="$KA_REPO_ROOT/core-cli/jsonl-reader-cli.js"                       # runtime layout
 [ -f "$JSONL_READER_ABS" ] || JSONL_READER_ABS="$KA_REPO_ROOT/packages/core/dist/jsonl-reader-cli.js"  # repo layout
-PROMPT="$(cat <<EOF
+
+# build_prompt <pass-upper-offset> → echoes the headless distill prompt for ONE
+# pass whose upper bound is the given offset (= the full snapshot for a single
+# pass, or a chunk boundary when a huge snapshot is split, see the chunk loop).
+build_prompt() {
+  local PASS_UPPER="$1"
+  cat <<EOF
 You are a background distiller worker. Run mode: headless Opus, no TTY interaction.
 
 [Task]
@@ -171,7 +177,7 @@ Complete one incremental distill following the /kb distill --foreground workflow
 [Snapshot constraints (race condition guard)]
 - session_id: $SESSION_ID
 - jsonl path: $JSONL
-- snapshot upper-offset: $SNAPSHOT_OFFSET bytes (any jsonl content written after this byte MUST be ignored and left for the next distill)
+- snapshot upper-offset: $PASS_UPPER bytes (any jsonl content written after this byte MUST be ignored and left for the next distill)
 - snapshot upper-entry-uuid: $SNAPSHOT_UUID
 - message count known at snapshot time: $SNAPSHOT_COUNT
 
@@ -181,7 +187,7 @@ When calling ka-jsonl-reader you MUST pass:
     [--offset <existing raw frontmatter's last_parsed_offset; omit on first run>] \\
     [--last-entry-uuid <existing last_parsed_message_id>] \\
     [--message-count <existing last_parsed_message_count>] \\
-    --upper-offset $SNAPSHOT_OFFSET \\
+    --upper-offset $PASS_UPPER \\
     --batch <existing batch + 1, or 1 on first run>
 
 [Steps]
@@ -210,9 +216,61 @@ Field meanings:
 
 If you hit an unrecoverable error, raise an exception (do NOT swallow it). The worker wrapper catches the non-zero exit and writes a failure sentinel (distill-last-failure.json), which the main session reads and then notifies the owner.
 EOF
-)"
+}
 
-# ---------- run claude headless ----------
+# run_distill_pass <pass-upper-offset> — one headless claude pass for
+# [current frontmatter offset, pass-upper]. Retries the intermittent
+# thinking-block 400. Sets EXIT_CODE; appends claude output to the run log.
+run_distill_pass() {
+    # NB: `attempt` is intentionally NOT local — mark_failed reports it in the
+    # failure sentinel (attempts), so it must survive after this fn returns.
+    local PASS_UPPER="$1" PROMPT CLAUDE_OUT backoff
+    PROMPT="$(build_prompt "$PASS_UPPER")"
+    EXIT_CODE=0
+    attempt=0
+    CLAUDE_OUT="$(mktemp "${TMPDIR:-/tmp}/distill-claude-out.XXXXXX")"
+    while :; do
+        attempt=$((attempt + 1))
+        : > "$CLAUDE_OUT"
+        set +e
+        claude -p "$PROMPT" \
+            --model "$DISTILL_MODEL" \
+            --permission-mode bypassPermissions \
+            --setting-sources user \
+            --no-session-persistence \
+            --output-format json \
+            > "$CLAUDE_OUT" 2>> "$LOG_PATH"
+        EXIT_CODE=$?
+        set -e
+        cat "$CLAUDE_OUT" >> "$LOG_PATH"
+        if [ "$attempt" -lt "$DISTILL_MAX_ATTEMPTS" ] && is_retriable_thinking_error "$CLAUDE_OUT"; then
+            backoff=$(( DISTILL_RETRY_BASE_SEC * (2 ** (attempt - 1)) ))
+            printf '[distill-worker] attempt %d/%d hit intermittent thinking-block 400 (CC headless bug); retrying in %ds\n' \
+                "$attempt" "$DISTILL_MAX_ATTEMPTS" "$backoff" >> "$LOG_PATH"
+            sleep "$backoff"
+            continue
+        fi
+        break
+    done
+    rm -f "$CLAUDE_OUT"
+}
+
+# read_cur_offset — the session's persisted last_parsed_offset (0 if no raw file
+# yet / first distill). Used to chunk huge snapshots + verify per-pass progress.
+read_cur_offset() {
+    local rawdir="$WORKSPACE_CWD/memory/raw" f off=""
+    f="$(grep -rlE "^session_id:[[:space:]]*$SESSION_ID([[:space:]]|\$)" "$rawdir"/*.md 2>/dev/null | head -1)"
+    [ -n "$f" ] && off="$(sed -n 's/^last_parsed_offset:[[:space:]]*//p' "$f" | head -1 | tr -dc '0-9')"
+    printf '%s' "${off:-0}"
+}
+
+# ---------- run claude headless (chunked) ----------
+# A huge first distill (offset 0 → tens of MB) loads the whole delta at once and
+# gets OOM-killed. Split snapshots larger than CHUNK_BYTES into several passes,
+# each a FRESH claude -p over [cur_offset, cur_offset+CHUNK] so peak memory stays
+# bounded. A snapshot that fits in one chunk runs exactly as before (single pass).
+CHUNK_BYTES="${KA_DISTILL_CHUNK_BYTES:-8388608}"   # 8 MiB per pass
+
 START_TS="$(date -u +%s)"
 START_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf '[distill-worker] start_iso=%s snapshot=%s session=%s\n' \
@@ -220,48 +278,37 @@ printf '[distill-worker] start_iso=%s snapshot=%s session=%s\n' \
 
 cd "$WORKSPACE_CWD" || { mark_failed 99 "chdir failed: $WORKSPACE_CWD"; exit 99; }
 
-# Run claude headless, retrying on the intermittent thinking-block 400. The
-# claude stdout (the result JSON) is captured to a temp file so we can inspect
-# it; it is still appended to the log so the parser tier logic is unchanged.
+CUR_OFFSET="$(read_cur_offset)"
 EXIT_CODE=0
-attempt=0
-CLAUDE_OUT="$(mktemp "${TMPDIR:-/tmp}/distill-claude-out.XXXXXX")"
-while :; do
-    attempt=$((attempt + 1))
-    : > "$CLAUDE_OUT"
-    set +e
-    claude -p "$PROMPT" \
-        --model "$DISTILL_MODEL" \
-        --permission-mode bypassPermissions \
-        --setting-sources user \
-        --no-session-persistence \
-        --output-format json \
-        > "$CLAUDE_OUT" 2>> "$LOG_PATH"
-    EXIT_CODE=$?
-    set -e
-    cat "$CLAUDE_OUT" >> "$LOG_PATH"
-
-    if [ "$attempt" -lt "$DISTILL_MAX_ATTEMPTS" ] && is_retriable_thinking_error "$CLAUDE_OUT"; then
-        backoff=$(( DISTILL_RETRY_BASE_SEC * (2 ** (attempt - 1)) ))
-        printf '[distill-worker] attempt %d/%d hit intermittent thinking-block 400 (CC headless bug); retrying in %ds\n' \
-            "$attempt" "$DISTILL_MAX_ATTEMPTS" "$backoff" >> "$LOG_PATH"
-        sleep "$backoff"
-        continue
-    fi
-    break
-done
-rm -f "$CLAUDE_OUT"
+if [ "$(( SNAPSHOT_OFFSET - CUR_OFFSET ))" -le "$CHUNK_BYTES" ]; then
+    run_distill_pass "$SNAPSHOT_OFFSET"
+    [ "$EXIT_CODE" -ne 0 ] && { mark_failed "$EXIT_CODE" "claude headless exited non-zero"; exit "$EXIT_CODE"; }
+else
+    pass=0
+    while [ "$CUR_OFFSET" -lt "$SNAPSHOT_OFFSET" ]; do
+        PASS_UPPER=$(( CUR_OFFSET + CHUNK_BYTES ))
+        [ "$PASS_UPPER" -gt "$SNAPSHOT_OFFSET" ] && PASS_UPPER="$SNAPSHOT_OFFSET"
+        pass=$(( pass + 1 ))
+        printf '[distill-worker] pass %d: offset %d → %d (chunk≤%d, snapshot %d)\n' \
+            "$pass" "$CUR_OFFSET" "$PASS_UPPER" "$CHUNK_BYTES" "$SNAPSHOT_OFFSET" >> "$LOG_PATH"
+        run_distill_pass "$PASS_UPPER"
+        [ "$EXIT_CODE" -ne 0 ] && { mark_failed "$EXIT_CODE" "claude headless exited non-zero on pass $pass (offset $CUR_OFFSET→$PASS_UPPER)"; exit "$EXIT_CODE"; }
+        NEW_OFFSET="$(read_cur_offset)"
+        if [ "$NEW_OFFSET" -le "$CUR_OFFSET" ]; then
+            mark_failed 7 "distill pass $pass did not advance offset ($CUR_OFFSET → $NEW_OFFSET; expected ~$PASS_UPPER) — aborting to avoid an infinite loop"
+            exit 7
+        fi
+        CUR_OFFSET="$NEW_OFFSET"
+    done
+    printf '[distill-worker] chunked done: %d pass(es), reached offset %d/%d\n' \
+        "$pass" "$CUR_OFFSET" "$SNAPSHOT_OFFSET" >> "$LOG_PATH"
+fi
 
 END_TS="$(date -u +%s)"
 END_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 DURATION=$((END_TS - START_TS))
-printf '[distill-worker] end_iso=%s exit=%d duration_sec=%d attempts=%d\n' \
-    "$END_ISO" "$EXIT_CODE" "$DURATION" "$attempt" >> "$LOG_PATH"
-
-if [ "$EXIT_CODE" -ne 0 ]; then
-    mark_failed "$EXIT_CODE" "claude headless exited non-zero after $attempt attempt(s)"
-    exit "$EXIT_CODE"
-fi
+printf '[distill-worker] end_iso=%s exit=%d duration_sec=%d\n' \
+    "$END_ISO" "$EXIT_CODE" "$DURATION" >> "$LOG_PATH"
 
 # ---------- multi-tier parse ----------
 [ -f "$PARSER_CLI" ] || { mark_failed 5 "parser CLI missing: $PARSER_CLI"; exit 5; }

@@ -33,7 +33,13 @@ case "$VERB" in
         log_info "restarting $KIND daemon (port $PORT) — channels blip ~2s, then re-adopt automatically…"
         [ -x "$DIR/stop.sh" ] && "$DIR/stop.sh" >/dev/null 2>&1 || true
         sleep 1
-        "$DIR/start.sh"
+        if "$DIR/start.sh" >/dev/null 2>&1; then
+            sleep 2   # let the CCs re-adopt before the summary
+            exec bash "$0" status   # show the pretty status summary
+        else
+            log_err "$KIND daemon failed to start — see $DIR/daemon.stdout.log"
+            exit 1
+        fi
         ;;
     status)
         resp="$(curl -sf --max-time 2 "http://$HOST:$PORT/api/status" 2>/dev/null || true)"

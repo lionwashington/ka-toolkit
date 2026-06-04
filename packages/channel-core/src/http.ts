@@ -31,7 +31,12 @@ export function createHttpApp(platform: Platform) {
 
   app.all('/mcp', async (req, res) => {
     const sessionId = (req.headers['mcp-session-id'] as string | undefined) ?? undefined
-    log(`/mcp ${req.method} sess=${sessionId ? sessionId.slice(0, 8) : '(new)'}`)
+    // Per-request heartbeat is pure noise (every CC polls every ~5s) — it was
+    // ~99% of channel.log. Only emit it under KA_CHANNEL_DEBUG; the meaningful
+    // session lifecycle (init / close / re-adopt / 404) is logged below.
+    if (process.env.KA_CHANNEL_DEBUG) {
+      log(`/mcp ${req.method} sess=${sessionId ? sessionId.slice(0, 8) : '(new)'}`)
+    }
     const existing = sessionId ? sessionsById.get(sessionId) : undefined
     if (existing) {
       await existing.transport.handleRequest(req as any, res as any, req.body)

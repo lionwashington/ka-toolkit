@@ -31,7 +31,18 @@ so resolution changes don't double-count.
 
 _Deferred by request 2026-06-03 — fix later._
 
-## distill OOM on very large snapshots
+## distill OOM on very large snapshots — ✅ RESOLVED 2026-06-04
+
+**Fixed** in `ops/lib/distill-bg-worker.sh`: the worker now splits a snapshot
+larger than `KA_DISTILL_CHUNK_BYTES` (default 8 MiB) into multiple passes, each a
+**fresh `claude -p`** over `[cur_offset, cur_offset+CHUNK]`, so peak memory stays
+bounded. It reads the persisted `last_parsed_offset` from the raw frontmatter to
+drive the loop and verifies the offset advances each pass (aborts cleanly if a
+pass makes no progress, rather than looping forever). A snapshot that fits in one
+chunk runs exactly as before (single pass). Covered by test 28-distill-chunk.
+The original report is kept below for context.
+
+---
 
 **Bug (robustness).** A `/kb distill` over a very large snapshot is hard-killed
 (OOM) before it can run — the headless distiller loads the whole input at once.
