@@ -111,17 +111,12 @@ ka_channel_kind() {
     esac
 }
 
-# ka_daemon_dir → runtime dir of the active daemon: <kind>-daemon. Prefers the
-# repo/runtime-layout sibling of ops/ (KA_HOME), else ~/.knowledge-assistant/runtime.
+# ka_daemon_dir → dir of the active channel daemon's deployed bundle:
+# $KA_HOME/channels/<kind>-daemon (the communication part, mirroring design).
 ka_daemon_dir() {
-    local kind sub
+    local kind
     kind="$(ka_channel_kind)" || return 2
-    sub="${kind}-daemon"
-    if [ -d "$KA_HOME/$sub" ]; then
-        printf '%s' "$KA_HOME/$sub"
-    else
-        printf '%s' "$HOME/.knowledge-assistant/runtime/$sub"
-    fi
+    printf '%s' "$KA_HOME/channels/${kind}-daemon"
 }
 
 # ka_channel_port → the port the active daemon binds, read from its config.json

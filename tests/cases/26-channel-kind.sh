@@ -12,9 +12,11 @@ REPO="${REPO:-/repo}"
 COMMON="$REPO/shared/ops/common.sh"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
-# Run a common.sh helper with controlled env (KA_CONFIG / HOME / KA_HOME).
-runh() {  # $1=helper expr  $2=config.yaml path  $3=HOME
-    KA_HOME="$REPO" KA_CONFIG="$2" HOME="$3" bash -c "source '$COMMON' 2>/dev/null; $1"
+# Run a common.sh helper with controlled env. KA_HOME = the fixture home ($3) —
+# the unified single root — so ka_daemon_dir resolves to $KA_HOME/channels/<kind>-daemon
+# exactly as the runtime does. common.sh is sourced via its explicit repo path.
+runh() {  # $1=helper expr  $2=config.yaml path  $3=KA_HOME (fixture home)
+    KA_HOME="$3" KA_CONFIG="$2" HOME="$3" bash -c "source '$COMMON' 2>/dev/null; $1"
 }
 
 echo "[1/6] no config → telegram / telegram-daemon / 9877 (fallback)"
@@ -31,8 +33,8 @@ case "$(runh ka_daemon_dir "$cfg" "$h")" in */lark-daemon) ;; *) echo "FAIL: dir
 echo "    ok"
 
 echo "[3/6] port read from the daemon's config.json http_port (not hardcoded)"
-mkdir -p "$h/.knowledge-assistant/runtime/lark-daemon"
-printf '{\n  "http_port": 9999\n}\n' > "$h/.knowledge-assistant/runtime/lark-daemon/config.json"
+mkdir -p "$h/channels/lark-daemon"
+printf '{\n  "http_port": 9999\n}\n' > "$h/channels/lark-daemon/config.json"
 [ "$(runh ka_channel_port "$cfg" "$h")" = "9999" ] || { echo "FAIL: port not read from config.json"; exit 1; }
 echo "    ok"
 

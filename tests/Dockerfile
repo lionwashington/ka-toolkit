@@ -38,14 +38,14 @@ COPY install.sh /repo/install.sh
 COPY config /repo/config
 # Bootstrap marker — every ka script walks up to find it (= repo/runtime root).
 
-# @ka/core CLI bundles the distill-bg tests need, placed at the runtime layout
-# path (core-cli/) that distill-bg.sh + distill-bg-worker.sh probe first.
+# @ka/core CLI bundles the distill-bg tests need, placed at the kb/core/dist
+# path the distill scripts resolve as $KA_HOME/kb/core/dist.
 # Built on the host by run.sh (tsup → standalone node bundles).
-COPY kb/core/dist/jsonl-reader-cli.js /repo/core-cli/jsonl-reader-cli.js
-COPY kb/core/dist/distill-result-parser-cli.js /repo/core-cli/distill-result-parser-cli.js
+COPY kb/core/dist/jsonl-reader-cli.js /repo/kb/core/dist/jsonl-reader-cli.js
+COPY kb/core/dist/distill-result-parser-cli.js /repo/kb/core/dist/distill-result-parser-cli.js
 # The bundles are ES modules (@ka/core is "type":"module"); mark this dir so
 # node treats the .js as ESM instead of CommonJS.
-RUN printf '{"type":"module"}\n' > /repo/core-cli/package.json
+RUN printf '{"type":"module"}\n' > /repo/kb/core/dist/package.json
 
 ENV KA_HOME=/repo \
     TMUX_TMPDIR=/tmp/tmux-test \
