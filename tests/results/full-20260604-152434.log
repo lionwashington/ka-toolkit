@@ -1,0 +1,268 @@
+==> build ka-ops-tests:latest
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 2.15kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.9s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 667B done
+#3 DONE 0.0s
+
+#4 [ 1/18] FROM docker.io/library/debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb
+#4 resolve docker.io/library/debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb 0.0s done
+#4 DONE 0.0s
+
+#5 [internal] load build context
+#5 transferring context: 68.59kB 0.0s done
+#5 DONE 0.0s
+
+#6 [ 8/18] COPY cron /repo/cron
+#6 CACHED
+
+#7 [ 2/18] RUN apt-get update && apt-get install -y --no-install-recommends         tmux         bash         python3         procps         coreutils         grep         sed         patch         util-linux         cron         nodejs         ca-certificates     && rm -rf /var/lib/apt/lists/*
+#7 CACHED
+
+#8 [ 7/18] COPY workshop /repo/workshop
+#8 CACHED
+
+#9 [ 3/18] WORKDIR /repo
+#9 CACHED
+
+#10 [ 5/18] RUN chmod +x /usr/local/bin/claude
+#10 CACHED
+
+#11 [ 6/18] COPY shared /repo/shared
+#11 CACHED
+
+#12 [ 9/18] COPY channels/ops /repo/channels/ops
+#12 CACHED
+
+#13 [ 4/18] COPY tests/fakes/claude /usr/local/bin/claude
+#13 CACHED
+
+#14 [10/18] COPY kb/ops /repo/kb/ops
+#14 CACHED
+
+#15 [11/18] COPY tests /repo/tests
+#15 DONE 0.0s
+
+#16 [12/18] COPY install.sh /repo/install.sh
+#16 DONE 0.0s
+
+#17 [13/18] COPY config /repo/config
+#17 DONE 0.0s
+
+#18 [14/18] RUN : > /repo/.ka-root
+#18 DONE 0.2s
+
+#19 [15/18] COPY kb/core/dist/jsonl-reader-cli.js /repo/core-cli/jsonl-reader-cli.js
+#19 DONE 0.0s
+
+#20 [16/18] COPY kb/core/dist/distill-result-parser-cli.js /repo/core-cli/distill-result-parser-cli.js
+#20 DONE 0.0s
+
+#21 [17/18] RUN printf '{"type":"module"}\n' > /repo/core-cli/package.json
+#21 DONE 0.1s
+
+#22 [18/18] RUN mkdir -p /tmp/tmux-test && chmod 700 /tmp/tmux-test
+#22 DONE 0.1s
+
+#23 exporting to image
+#23 exporting layers 0.1s done
+#23 exporting manifest sha256:7c4f93c4d3085eb88357efa9fc416993bc507707a54bacda6ae3c9c904df155f 0.0s done
+#23 exporting config sha256:bfce2425ef9fe46b23ee2b516cd1dc1c827bf49705533e24977ffcb0d75e0b56 0.0s done
+#23 exporting attestation manifest sha256:2f8066a8ea0f8f77edb102b6225c6eb3c067c63d34e1dd292667c2050115f629 0.0s done
+#23 exporting manifest list sha256:02660221f444cd2100920ea7b110f9f8e588d1acfdfc9ed3c61ccbfe1a3a8683 done
+#23 naming to docker.io/library/ka-ops-tests:latest done
+#23 unpacking to docker.io/library/ka-ops-tests:latest 0.1s done
+#23 DONE 0.3s
+
+==> run (FAIL_FAST=0 ONLY='')
+==> ops test suite
+    tmux:    tmux 3.3a
+    python3: Python 3.11.2
+
+--- 01-yaml-parse.sh ---
+session	tsess
+runtime_default	cc
+pane	a	/tmp	1	--flag|x
+mate	b	/root		1
+01-yaml-parse OK
+    PASS
+
+--- 03-inject-prompt.sh ---
+2026-06-04 07:24:39 Injecting prompt into testws:0.0: Run /daily-brief....
+2026-06-04 07:24:39 Prompt sent to testws:0.0.
+prompt delivered
+03-inject-prompt OK
+    PASS
+
+--- 10-macos-bash3-compat.sh ---
+[1/3] static scan for bash 4+ only features
+find: '/repo/ops': No such file or directory
+    FAIL
+
+--- 12-ka-cli-p0.sh ---
+[1/5] ka help
+    ok
+[2/5] ka (no args) falls through to help
+    ok
+[3/5] unknown subcommand exits 2
+    ok
+[4/5] ka status does not crash when no workshop running
+    ok (rc=2)
+[5/5] ka workshop --dry-run works (verb dispatcher)
+    ok
+ka-cli-p0 OK
+    PASS
+
+--- 14-ka-wait-ready.sh ---
+[1/3] rc=3 when session does not exist
+    ok
+[2/3] rc=0 when pane already shows a ready-looking prompt
+    ok
+[3/3] rc=1 when pane never idles (timeout)
+    ok
+ka-wait-ready OK
+    PASS
+
+--- 15-wait-ready-signals.sh ---
+[1/2] recognizes new-shape prompt (❯ on own line)
+    ok
+[2/2] recognizes status-line hint even without prompt glyph
+    ok
+wait-ready-signals OK
+    PASS
+
+--- 16-runtime-cc-contract.sh ---
+FAIL: /repo/ops/lib/runtimes/dispatch.sh missing
+    FAIL
+
+--- 17-ka-cron.sh ---
+[1/8] schedule-parser handles all four syntaxes
+    ok
+[2/8] plist-gen byte-stable for fixed input
+    ok
+[3/8] ka cron add initialises yaml + writes record
+    ok
+[4/8] cron yaml is parser-clean
+    ok
+[5/8] ka cron enable/disable toggles flag without duplicating block
+    ok
+[6/8] ka cron remove drops block; second remove is no-op
+    ok
+[7/8] ka cron list detects yaml drift (manual edit reflected)
+    ok
+[8/8] ka cron import: legacy plist scan is bounded, no-op when none
+    ok
+ka-cron OK
+    PASS
+
+--- 19-cron-linux-crontab.sh ---
+[1/3] schedule-parser → crontab expression mapping
+    ok
+[2/3] cron-run.sh direct invocation (simulates what crontab fires)
+    ok
+[3/3] real Linux crontab trigger (if cron daemon available)
+    crontab installed; waiting up to 75s for first trigger...
+    ok: crontab-triggered run produced evidence
+    ka-cron-ran-at-1780557901
+cron-linux-crontab OK
+    PASS
+
+--- 21-distill-bg.sh ---
+OK 21-distill-bg
+    PASS
+
+--- 22-distill-bg-result-parsing.sh ---
+Case A: done|result-json
+Case B: done|log-grep
+Case C: done|mtime-scan
+Case D: done-stats-unknown|unknown
+OK 22-distill-bg-result-parsing
+    PASS
+
+--- 23-distill-bg-retry.sh ---
+Case A: done|result-json (calls=2)
+Case B: failed| (calls=3)
+Case C: failed| (calls=1)
+Case D: failed|
+Case D: sentinel OK (attempts=3, acked=false), no telegram push in log
+PASS 23-distill-bg-retry (retry-success / exhaust / no-retry / sentinel)
+    PASS
+
+--- 24-workshop-merged-schema.sh ---
+[1/4] main: true entry → lead bound to channel 'main'
+    ok
+[2/4] plain entry's per-entry args are plumbed through
+    ok
+[3/4] default: false entry is skipped by a bare run
+    ok
+[4/4] --all includes the default: false entry
+    ok
+24-workshop-merged-schema OK
+    PASS
+
+--- 25-migrate-workshop-yaml.sh ---
+[1/5] legacy file is rejected by the new parser (proves migration is needed)
+    ok
+[2/5] migrate --check: data-preserving + idempotent
+    ok
+[3/5] migrated file parses under the new parser with the expected records
+    ok
+[4/5] telegram: → main: ; panes:/telegram: gone from output
+    ok
+[5/5] idempotent: migrating the merged file yields itself byte-for-byte
+    ok
+25-migrate-workshop-yaml OK
+    PASS
+
+--- 26-channel-kind.sh ---
+[1/6] no config → telegram / telegram-daemon / 9877 (fallback)
+    ok
+[2/6] channel_kind: lark → lark / lark-daemon
+    ok
+[3/6] port read from the daemon's config.json http_port (not hardcoded)
+    ok
+[4/6] invalid channel_kind → fail-closed (non-zero)
+    ok
+[5/6] install --channel-kind=lark --only config persists channel_kind (isolated)
+    ok
+[6/6] install --channel-kind=bogus is rejected (non-zero)
+    ok
+26-channel-kind OK
+    PASS
+
+--- 27-ka-daemon.sh ---
+[1/5] ka daemon help lists the verbs
+    ok
+[2/5] unknown verb → exit 2
+    ok
+[3/5] no config → telegram; status reports down on 9877 + exit 1
+    ok
+[4/5] channel_kind: lark → status targets lark / 9876
+    ok
+[5/5] start when daemon not deployed → graceful error (non-zero)
+    ok
+27-ka-daemon OK
+    PASS
+
+--- 28-distill-chunk.sh ---
+[1/3] spawn distill with a tiny chunk size → multi-pass
+    status=done
+    ok
+[2/3] the run log shows multiple chunk passes that reach the snapshot
+    chunked done: 12 pass(es), reached offset 1158/1158
+    ok
+[3/3] reached offset == snapshot offset (fully processed) + status not failed
+    ok (reached offset 1158/1158)
+28-distill-chunk OK
+    PASS
+
+==> Results: 15 pass, 2 fail
+    failed: 10-macos-bash3-compat.sh
+    failed: 16-runtime-cc-contract.sh

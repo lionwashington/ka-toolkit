@@ -1,0 +1,66 @@
+==> build ka-ops-tests:latest
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 1.74kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 2.9s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 695B done
+#3 DONE 0.0s
+
+#4 [ 1/13] FROM docker.io/library/debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb
+#4 resolve docker.io/library/debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb 0.0s done
+#4 DONE 0.0s
+
+#5 [internal] load build context
+#5 transferring context: 84.31kB 0.0s done
+#5 DONE 0.0s
+
+#6 [ 9/13] COPY config /repo/config
+#6 CACHED
+
+#7 [ 6/13] COPY ops /repo/ops
+#7 CACHED
+
+#8 [ 2/13] RUN apt-get update && apt-get install -y --no-install-recommends         tmux         bash         python3         procps         coreutils         grep         sed         patch         util-linux         cron         nodejs         ca-certificates     && rm -rf /var/lib/apt/lists/*
+#8 CACHED
+
+#9 [ 4/13] COPY ops/tests/fakes/claude /usr/local/bin/claude
+#9 CACHED
+
+#10 [ 7/13] COPY bin /repo/bin
+#10 CACHED
+
+#11 [ 8/13] COPY install.sh /repo/install.sh
+#11 CACHED
+
+#12 [ 3/13] WORKDIR /repo
+#12 CACHED
+
+#13 [ 5/13] RUN chmod +x /usr/local/bin/claude
+#13 CACHED
+
+#14 [11/13] COPY kb/core/dist/distill-result-parser-cli.js /repo/core-cli/distill-result-parser-cli.js
+#14 ERROR: failed to calculate checksum of ref lrve0cyhtzfjfuhg0b2fo6jup::7he31yno273u3kn0qb1v73nd1: "/kb/core/dist/distill-result-parser-cli.js": not found
+
+#15 [10/13] COPY kb/core/dist/jsonl-reader-cli.js /repo/core-cli/jsonl-reader-cli.js
+#15 ERROR: failed to calculate checksum of ref lrve0cyhtzfjfuhg0b2fo6jup::7he31yno273u3kn0qb1v73nd1: "/kb/core/dist/jsonl-reader-cli.js": not found
+------
+ > [10/13] COPY kb/core/dist/jsonl-reader-cli.js /repo/core-cli/jsonl-reader-cli.js:
+------
+------
+ > [11/13] COPY kb/core/dist/distill-result-parser-cli.js /repo/core-cli/distill-result-parser-cli.js:
+------
+Dockerfile:37
+--------------------
+  35 |     # Built on the host by run.sh (tsup → standalone node bundles).
+  36 |     COPY kb/core/dist/jsonl-reader-cli.js /repo/core-cli/jsonl-reader-cli.js
+  37 | >>> COPY kb/core/dist/distill-result-parser-cli.js /repo/core-cli/distill-result-parser-cli.js
+  38 |     # The bundles are ES modules (@ka/core is "type":"module"); mark this dir so
+  39 |     # node treats the .js as ESM instead of CommonJS.
+--------------------
+ERROR: failed to build: failed to solve: failed to compute cache key: failed to calculate checksum of ref lrve0cyhtzfjfuhg0b2fo6jup::7he31yno273u3kn0qb1v73nd1: "/kb/core/dist/distill-result-parser-cli.js": not found

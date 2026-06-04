@@ -1,5 +1,30 @@
 # TODO / Backlog
 
+## channel daemon: sendTelegram drops mid-call + swallows send failures
+
+**Bug (reliability).** Two related issues observed 2026-06-04 while a mate
+session replied over Telegram:
+
+1. **Silent drop.** Several replies never reached the owner, yet the `reply`
+   tool returned success and `ka daemon status` counted `replies N (0 failed)`.
+   `sendToTelegram` (`channels/telegram/telegram-platform.ts`) sends plain text
+   (no parse_mode), chunked at 4096 — so it is NOT a markdown-parse failure. On
+   `bot.api.sendMessage` error it returns an error string, but the MCP `reply`
+   path does not propagate that to the caller → the failure is invisible. Likely
+   trigger: Telegram rate-limiting on rapid-fire sends, or a transient outbound
+   socket error.
+2. **Transport drop mid-call.** Once, the MCP call itself failed with
+   "transport dropped mid-call; response lost" — the daemon HTTP/MCP connection
+   blipped during a send.
+
+**Fix (to design):** make the send path fail-loud — surface `sendToTelegram`'s
+error through the `reply` tool result (and increment the `failed` counter);
+add a bounded retry/backoff on 429 / transient socket errors; investigate why
+the MCP transport drops mid-call (keep-alive / reconnect on the daemon's /mcp
+endpoint). Until fixed, callers must not trust "sent" as proof of delivery.
+
+_Reported by the owner 2026-06-04 — record now, fix later._
+
 ## KB topic name resolution: display name ≠ callable name
 
 **Bug.** `kb_list_topics` displays each topic's frontmatter `title`, but

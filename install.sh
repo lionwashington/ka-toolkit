@@ -110,20 +110,28 @@ resolve_active_kind
 
 # ── Component deploy functions (P1.1 skeleton; TODOs filled in over later steps) ──
 
-deploy_ka() {            # ka CLI + ops copied to runtime (D1, not a symlink)
+deploy_ka() {            # ka CLI + the by-part sh trees copied to runtime (D1, not a symlink)
   want ka || return 0
-  log "ka CLI + ops → ${RUNTIME} (copy, not symlink, D1)"
+  log "ka CLI + by-part ops → ${RUNTIME} (copy, not symlink, D1)"
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  [dry-run] cp repo/bin/ka -> ${RUNTIME}/bin/ka; cp -R repo/ops -> ${RUNTIME}/ops (drop tests/)"
+    echo "  [dry-run] cp repo/shared/bin/ka -> ${RUNTIME}/bin/ka; : > ${RUNTIME}/.ka-root"
+    echo "  [dry-run] cp repo/{shared,workshop,channels,cron,kb}/ops -> ${RUNTIME}/<part>/ops; cp repo/config -> ${RUNTIME}/config"
     return 0
   fi
   mkdir -p "$RUNTIME/bin"
-  cp "$REPO_ROOT/bin/ka" "$RUNTIME/bin/ka"; chmod +x "$RUNTIME/bin/ka"
-  rm -rf "$RUNTIME/ops"; cp -R "$REPO_ROOT/ops" "$RUNTIME/ops"
-  rm -rf "$RUNTIME/ops/tests"   # the runtime doesn't run the test suite
-  # bin/ka uses BASH_SOURCE's ../ to locate the repo root → runtime/bin/ka's ../ = runtime/,
-  # CLI_DIR=runtime/ops/cli, common.sh's OPS_DIR=runtime/ops. Fully self-consistent, never points at repo.
-  log "  OK ${RUNTIME}/bin/ka + ${RUNTIME}/ops (self-consistent: runtime/bin/ka's ../ops is runtime/ops)"
+  cp "$REPO_ROOT/shared/bin/ka" "$RUNTIME/bin/ka"; chmod +x "$RUNTIME/bin/ka"
+  : > "$RUNTIME/.ka-root"          # bootstrap marker — every ka script walks up to find it
+  rm -rf "$RUNTIME/ops"            # drop the pre-gen3 flat layout if a prior install left one
+  local part
+  for part in shared workshop channels cron kb; do
+    rm -rf "$RUNTIME/$part/ops"; mkdir -p "$RUNTIME/$part"
+    cp -R "$REPO_ROOT/$part/ops" "$RUNTIME/$part/ops"
+  done
+  rm -rf "$RUNTIME/config"; cp -R "$REPO_ROOT/config" "$RUNTIME/config"
+  # The runtime MIRRORS the repo's by-part layout: bin/ka walks up to ${RUNTIME}/.ka-root
+  # → KA_REPO_ROOT=runtime, common.sh's map points at runtime/<part>/ops. Self-consistent,
+  # never points at the repo. (tests/ is top-level in the repo and is not deployed.)
+  log "  OK ${RUNTIME}/{bin/ka,.ka-root,shared/ops,workshop/ops,channels/ops,cron/ops,kb/ops,config}"
 }
 
 deploy_node_mcp() {      # P1.2
@@ -442,8 +450,8 @@ seed_config() {          # seed config/data directories (never overwrites existi
   fi
   mkdir -p "$KA_RUNTIME_ROOT"/state "$KA_RUNTIME_ROOT"/raw "$KA_RUNTIME_ROOT"/pending-topics
   local seeded=0
-  if [ -f "$REPO_ROOT/ops/workshop.example.yaml" ] && [ ! -f "$KA_RUNTIME_ROOT/workshop.yaml" ]; then
-    cp "$REPO_ROOT/ops/workshop.example.yaml" "$KA_RUNTIME_ROOT/workshop.yaml"; seeded=$((seeded + 1))
+  if [ -f "$REPO_ROOT/config/workshop.example.yaml" ] && [ ! -f "$KA_RUNTIME_ROOT/workshop.yaml" ]; then
+    cp "$REPO_ROOT/config/workshop.example.yaml" "$KA_RUNTIME_ROOT/workshop.yaml"; seeded=$((seeded + 1))
   fi
   if [ -f "$REPO_ROOT/config/default.yaml" ] && [ ! -f "$CONFIG_YAML" ]; then
     cp "$REPO_ROOT/config/default.yaml" "$CONFIG_YAML"; seeded=$((seeded + 1))
@@ -511,7 +519,7 @@ switch_ka_link() {       # switch ②: ka command symlink → runtime/bin/ka
   log "  OK ${KA_BIN_LINK} -> ${RUNTIME}/bin/ka"
 }
 
-switch_cron() {          # switch ③: re-point cron plist at runtime/ops/scripts/cron-run.sh
+switch_cron() {          # switch ③: re-point cron plist at runtime/cron/ops/cron-run.sh
   want cron || return 0
   [ "$DO_SWITCH" = 1 ] || return 0
   # macOS/launchd only: rewrite the legacy launchd plist's cron-run.sh path to runtime.
@@ -521,7 +529,7 @@ switch_cron() {          # switch ③: re-point cron plist at runtime/ops/script
     log "switch ③ cron → Linux: skip launchd plist rewrite; use \`ka cron install\` (crontab backend) to install scheduled jobs"
     return 0
   fi
-  log "switch ③ cron plist → re-point at ${RUNTIME}/ops/scripts/cron-run.sh (backup + sed)"
+  log "switch ③ cron plist → re-point at ${RUNTIME}/cron/ops/cron-run.sh (backup + sed)"
   if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] backup *.plist; rewrite cron-run.sh path -> runtime; launchctl bootout/bootstrap reload"; return 0; fi
   local changed=0 p
   for p in "$LAUNCHAGENTS_DIR"/com.knowledge-assistant.ka.cron.*.plist; do
@@ -537,7 +545,7 @@ raw = open(p).read()
 # the path with no space, so \S* would greedily swallow the whole "<string>/Users/.../runtime"
 # segment → after substitution the leading <string> is lost and the plist XML is corrupted.
 # Excluding < > makes the match start at the first / after the tag, keeping the tag intact.
-open(p, "w").write(re.sub(r'/[^<>\s]*/ops/scripts/cron-run\.sh', rt + '/ops/scripts/cron-run.sh', raw))
+open(p, "w").write(re.sub(r'/[^<>\s]*cron-run\.sh', rt + '/cron/ops/cron-run.sh', raw))
 PY
     changed=$((changed + 1))
   done

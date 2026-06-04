@@ -1,0 +1,63 @@
+#!/bin/bash
+# ka — Knowledge Assistant CLI.
+#   ka workshop [start|stop|restart|spawn-mates] [name]   tmux panes / CCs
+#   ka daemon   [start|stop|restart|status|config]        the active channel daemon
+#   ka status | doctor | cron … | distill [status] | help
+#
+# Symlink into PATH:
+#   ln -sf "$PWD/shared/bin/ka" ~/.local/bin/ka
+
+set -euo pipefail
+
+# Resolve the real path even when invoked via symlink, then locate the repo/runtime
+# root by walking up to the .ka-root marker (independent of where bin/ka sits), and
+# load the directory map. Each ka verb lives in its functional part (the map vars).
+_src="${BASH_SOURCE[0]}"
+while [ -L "$_src" ]; do
+    _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+    _src="$(readlink "$_src")"
+    [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+BIN_DIR="$(cd -P "$(dirname "$_src")" && pwd)"
+_root="$BIN_DIR"
+while [ "$_root" != / ] && [ ! -e "$_root/.ka-root" ]; do _root="$(dirname "$_root")"; done
+export KA_REPO_ROOT="$_root"
+# shellcheck source=../ops/common.sh
+source "$KA_REPO_ROOT/shared/ops/common.sh"
+
+CMD="${1:-help}"
+[ $# -gt 0 ] && shift || true
+
+case "$CMD" in
+    status|doctor)
+        exec "$KA_SHARED_DIR/${CMD}.sh" "$@"
+        ;;
+    workshop)        # tmux panes / CCs (no daemon ops)
+        exec "$KA_WORKSHOP_DIR/workshop.sh" "$@"
+        ;;
+    daemon)          # the active channel daemon
+        exec "$KA_CHANNELS_DIR/daemon.sh" "$@"
+        ;;
+    cron)
+        exec "$KA_CRON_OPS_DIR/cron.sh" "$@"
+        ;;
+    distill)
+        # Background distill is the only mode (synchronous distill lives inside
+        # /kb distill --foreground). `ka distill status` shows the last run.
+        if [ "${1:-}" = "status" ]; then
+            shift
+            exec "$KA_KB_DIR/distill-status.sh" "$@"
+        fi
+        # Tolerate a legacy --background flag (background is the default now).
+        FILTERED=()
+        for arg in "$@"; do [ "$arg" = "--background" ] && continue; FILTERED+=("$arg"); done
+        exec "$KA_KB_DIR/distill-bg.sh" ${FILTERED[@]+"${FILTERED[@]}"}
+        ;;
+    -h|--help|help|'')
+        exec "$KA_SHARED_DIR/help.sh" "$@"
+        ;;
+    *)
+        echo "ka: unknown command '$CMD' (try 'ka help')" >&2
+        exit 2
+        ;;
+esac

@@ -19,5 +19,5 @@ pending-topics
 **/*.log
 **/.daemon.lock
 **/daemon.pid
-ops/tests/results
+tests/results
 .bundle-entry.tmp.ts
