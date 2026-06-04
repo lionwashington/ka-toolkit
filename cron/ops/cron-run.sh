@@ -35,7 +35,7 @@ export KA_HOME
 source "$KA_HOME/shared/ops/common.sh"
 REPO_ROOT="$KA_HOME"   # back-compat alias used below
 
-CRON_YAML="${KA_CRON_CONFIG:-$HOME/.knowledge-assistant/cron.yaml}"
+CRON_YAML="${KA_CRON_CONFIG:-$KA_CONFIG_DIR/cron.yaml}"
 if [ ! -f "$CRON_YAML" ]; then
     echo "cron-run: cron.yaml not found at $CRON_YAML" >&2
     exit 64
@@ -44,7 +44,7 @@ fi
 LOG_DIR="${KA_CRON_LOG_DIR:-$HOME/Library/Logs/knowledge-assistant/cron}"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/${NAME}.log"
-LOCK_DIR="${KA_CRON_LOCK_DIR:-$HOME/.knowledge-assistant/state/cron-locks}"
+LOCK_DIR="${KA_CRON_LOCK_DIR:-$KA_STATE_DIR/cron-locks}"
 mkdir -p "$LOCK_DIR"
 LOCK_FILE="$LOCK_DIR/${NAME}.lock"
 

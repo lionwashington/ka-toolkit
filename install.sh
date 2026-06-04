@@ -65,7 +65,7 @@ want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 #   --channel-kind arg  >  existing config.yaml  >  interactive prompt  >  telegram
 # (The legacy KA_CHANNEL selector is retired — KA_CHANNEL now means only a
 # workshop channel NAME, never the daemon selector.)
-CONFIG_YAML="$KA_HOME/config.yaml"
+CONFIG_YAML="$KA_HOME/config/config.yaml"
 _cfg_channel_kind() {
   [ -f "$CONFIG_YAML" ] || return 0
   sed -n 's/^[[:space:]]*channel_kind[[:space:]]*:[[:space:]]*//p' "$CONFIG_YAML" \
@@ -449,13 +449,16 @@ seed_config() {          # seed config/data directories (never overwrites existi
   want config || return 0
   log "seed config/data directories → ${KA_HOME} (does not overwrite existing)"
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  [dry-run] mkdir -p ${KA_HOME}/{state,raw,pending-topics}; seed workshop.yaml + config.yaml from examples (if missing); upsert config.yaml channel_kind=${ACTIVE_KIND}"
+    echo "  [dry-run] mkdir -p ${KA_HOME}/{config,state} (the two data buckets); seed config/workshop.yaml + config/config.yaml from examples (if missing); upsert config.yaml channel_kind=${ACTIVE_KIND}"
     return 0
   fi
-  mkdir -p "$KA_HOME"/state "$KA_HOME"/raw "$KA_HOME"/pending-topics
+  # Data lives in exactly two buckets: config/ (declarative) + state/ (mutable).
+  # (The KB store creates its own raw/ + pending-topics under the configured
+  # knowledge_base_path, not here.)
+  mkdir -p "$KA_HOME"/config "$KA_HOME"/state
   local seeded=0
-  if [ -f "$REPO_ROOT/config/workshop.example.yaml" ] && [ ! -f "$KA_HOME/workshop.yaml" ]; then
-    cp "$REPO_ROOT/config/workshop.example.yaml" "$KA_HOME/workshop.yaml"; seeded=$((seeded + 1))
+  if [ -f "$REPO_ROOT/config/workshop.example.yaml" ] && [ ! -f "$KA_HOME/config/workshop.yaml" ]; then
+    cp "$REPO_ROOT/config/workshop.example.yaml" "$KA_HOME/config/workshop.yaml"; seeded=$((seeded + 1))
   fi
   if [ -f "$REPO_ROOT/config/default.yaml" ] && [ ! -f "$CONFIG_YAML" ]; then
     cp "$REPO_ROOT/config/default.yaml" "$CONFIG_YAML"; seeded=$((seeded + 1))

@@ -48,8 +48,8 @@ echo "    ok"
 echo "[5/6] install --channel-kind=lark --only config persists channel_kind (isolated)"
 rt="$TMP/rt5"
 KA_HOME="$rt" bash "$REPO/install.sh" --channel-kind=lark --only config >/dev/null 2>&1 || true
-grep -qE '^channel_kind:[[:space:]]*lark$' "$rt/config.yaml" \
-    || { echo "FAIL: install did not persist channel_kind=lark"; cat "$rt/config.yaml" 2>/dev/null; exit 1; }
+grep -qE '^channel_kind:[[:space:]]*lark$' "$rt/config/config.yaml" \
+    || { echo "FAIL: install did not persist channel_kind=lark"; cat "$rt/config/config.yaml" 2>/dev/null; exit 1; }
 echo "    ok"
 
 echo "[6/6] install --channel-kind=bogus is rejected (non-zero)"

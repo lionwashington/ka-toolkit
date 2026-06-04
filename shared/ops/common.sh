@@ -26,9 +26,9 @@ KA_RUNTIMES_DIR="$KA_WORKSHOP_DIR/runtimes"    # runtime adapters (cc/…)
 KA_PANES_DIR="$KA_WORKSHOP_DIR/panes"          # per-pane *.env
 KA_CRON_CMD_DIR="$KA_CRON_OPS_DIR/cmd"         # cron subcommands (+ _common.sh, install.sh)
 KA_CRON_INTERNALS_DIR="$KA_CRON_OPS_DIR/internals"  # parse-yaml/schedule-parser/plist-gen/backend-adapter
-#   data — two buckets directly under KA_HOME
-KA_CONFIG_DIR="$KA_HOME/config"                # config.yaml/secrets.yaml/cron.yaml/workshop.yaml (+ *.example templates)
-KA_STATE_DIR="$KA_HOME/state"                  # raw/pending-topics/distill/cron-locks
+#   data — two buckets directly under KA_HOME (env-overridable for isolated tests)
+KA_CONFIG_DIR="${KA_CONFIG_DIR:-$KA_HOME/config}"  # config.yaml/secrets.yaml/cron.yaml/workshop.yaml (+ *.example templates)
+KA_STATE_DIR="${KA_STATE_DIR:-$KA_HOME/state}"     # distill state / cron-locks / generated panes-mcp
 export KA_SHARED_DIR KA_WORKSHOP_DIR KA_CHANNELS_DIR KA_CRON_OPS_DIR KA_KB_DIR
 export KA_RUNTIMES_DIR KA_PANES_DIR KA_CRON_CMD_DIR KA_CRON_INTERNALS_DIR KA_CONFIG_DIR KA_STATE_DIR
 
@@ -69,7 +69,7 @@ resolve_workshop_config() {
     if [ -n "${OPS_CONFIG:-}" ] && [ -f "$OPS_CONFIG" ]; then
         printf '%s' "$OPS_CONFIG"; return 0
     fi
-    local user_cfg="$HOME/.knowledge-assistant/workshop.yaml"
+    local user_cfg="$KA_CONFIG_DIR/workshop.yaml"
     if [ -f "$user_cfg" ]; then
         printf '%s' "$user_cfg"; return 0
     fi
@@ -98,7 +98,7 @@ workshop_session_name() {
 # fail-closed: error to stderr + return 2 (empty stdout), no silent default.
 ka_channel_kind() {
     local cfg kind v
-    cfg="${KA_CONFIG:-$HOME/.knowledge-assistant/config.yaml}"
+    cfg="${KA_CONFIG:-$KA_CONFIG_DIR/config.yaml}"
     kind="telegram"
     if [ -f "$cfg" ]; then
         v="$(sed -n 's/^[[:space:]]*channel_kind[[:space:]]*:[[:space:]]*//p' "$cfg" | head -1 | sed 's/[[:space:]]*$//')"

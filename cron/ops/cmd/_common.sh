@@ -9,7 +9,7 @@ source "$KA_HOME/shared/ops/common.sh"
 # shellcheck source=../../lib/cron/backend-adapter.sh
 source "$KA_CRON_INTERNALS_DIR/backend-adapter.sh"
 
-CRON_YAML_DEFAULT="$HOME/.knowledge-assistant/cron.yaml"
+CRON_YAML_DEFAULT="$KA_CONFIG_DIR/cron.yaml"
 CRON_YAML="${KA_CRON_CONFIG:-$CRON_YAML_DEFAULT}"
 
 CRON_LOG_DIR="${KA_CRON_LOG_DIR:-$HOME/Library/Logs/knowledge-assistant/cron}"

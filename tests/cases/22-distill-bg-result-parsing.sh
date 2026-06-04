@@ -30,6 +30,7 @@ reset_state() {
     local case_name="$1"
     HOME_BAK="$HOME"
     export HOME="$TMP/home-${case_name}"
+    export KA_STATE_DIR="$HOME/.knowledge-assistant/state"
     rm -rf "$HOME"
     mkdir -p "$HOME"
     rm -rf "$WORKSPACE/memory"

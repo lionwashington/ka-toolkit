@@ -31,7 +31,7 @@ DRY_RUN=0
 # resolution and keeps NO hardcoded path in the repo (the real value is the user's local
 # config). The literal placeholder is only a last resort when config can't be read.
 # NB: pure sed + shell (no python heredoc inside $() — that breaks macOS' /bin/bash 3.2).
-_ka_config="${KA_CONFIG:-$HOME/.knowledge-assistant/config.yaml}"
+_ka_config="${KA_CONFIG:-$KA_CONFIG_DIR/config.yaml}"
 if [ -z "${WORKSPACE_CWD:-}" ] && [ -f "$_ka_config" ]; then
     _read_cfg() {  # $1=key → first value, trailing space stripped
         sed -n "s/^[[:space:]]*$1[[:space:]]*:[[:space:]]*//p" "$_ka_config" | head -1 | sed 's/[[:space:]]*$//'
@@ -82,7 +82,7 @@ if [ -z "$SESSION_ID" ]; then
     SESSION_ID="$(basename "$JSONL" .jsonl)"
 fi
 
-STATE_DIR="$HOME/.knowledge-assistant/state"
+STATE_DIR="$KA_STATE_DIR"
 mkdir -p "$STATE_DIR" || { log_err "cannot create $STATE_DIR"; exit 2; }
 
 # Log rotation: each background distill leaves a distill-<ts>.log; they pile up

@@ -169,7 +169,7 @@ fi
 # e. distill: last run verdict + time + last-run stats
 echo ""
 printf '%s── distill ──%s\n' "$C_DIM" "$C_RST"
-_distill_file="$HOME/.knowledge-assistant/state/distill-current.json"
+_distill_file="$KA_STATE_DIR/distill-current.json"
 if [ -f "$_distill_file" ] && command -v node >/dev/null 2>&1; then
     node -e '
       const fs=require("fs");

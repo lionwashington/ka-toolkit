@@ -10,7 +10,7 @@ set -euo pipefail
 : "${KA_HOME:=$HOME/.knowledge-assistant}"
 source "$KA_HOME/shared/ops/common.sh"
 
-STATUS_FILE="$HOME/.knowledge-assistant/state/distill-current.json"
+STATUS_FILE="$KA_STATE_DIR/distill-current.json"
 EMIT_JSON=0
 
 while [ $# -gt 0 ]; do

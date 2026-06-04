@@ -24,6 +24,7 @@ echo "$out" | grep -q "snapshot.count=2"
 # --- 2. Distill-status with no state file ------------------------------------
 HOME_BAK="$HOME"
 export HOME="$TMP/home"
+export KA_STATE_DIR="$HOME/.knowledge-assistant/state"
 mkdir -p "$HOME"
 status_empty="$(KA_HOME="$REPO" bash "$REPO/kb/ops/distill-status.sh")"
 echo "$status_empty" | grep -q "no distill run recorded"

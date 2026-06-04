@@ -119,7 +119,7 @@ fi
 # 6. cron jobs installed (declarative cron.yaml → launchd plists [macOS] / crontab lines [Linux])
 # Backend-aware to match detect_backend (Darwin→launchd, else→crontab); the old
 # launchd-only check always reported 0 on Linux/WSL even with jobs in crontab.
-cron_yaml="$HOME/.knowledge-assistant/cron.yaml"
+cron_yaml="$KA_CONFIG_DIR/cron.yaml"
 if [ -f "$cron_yaml" ]; then
     if [ "$(uname)" = "Darwin" ]; then
         installed="$(ls "$HOME"/Library/LaunchAgents/com.knowledge-assistant.ka.cron.*.plist 2>/dev/null | wc -l | tr -d ' ')"

@@ -16,7 +16,7 @@ source "$THIS_DIR/_common.sh"
 load_backend
 
 LA_DIR="$HOME/Library/LaunchAgents"
-BACKUP_DIR="$HOME/.knowledge-assistant/state/legacy-plist-backup"
+BACKUP_DIR="$KA_STATE_DIR/legacy-plist-backup"
 mkdir -p "$BACKUP_DIR"
 
 # Map of known legacy jobs → (schedule, kind, command, target_pane)
