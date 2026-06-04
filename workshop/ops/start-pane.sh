@@ -88,7 +88,7 @@ if [ -n "${KA_CHANNEL:-}" ]; then
         # isolated: per-pane --mcp-config keyed by CHANNEL NAME → no cwd collision.
         # Clear any stale local-scope reg in this cwd first so the names can't conflict.
         claude mcp remove "$_chan_server" >/dev/null 2>&1 || true
-        _mcp_dir="${KA_PANE_MCP_DIR:-$HOME/.knowledge-assistant/runtime/panes-mcp}"
+        _mcp_dir="${KA_PANE_MCP_DIR:-$KA_HOME/state/panes-mcp}"
         mkdir -p "$_mcp_dir"
         _mcp_cfg="$_mcp_dir/${_chan_kind}-${KA_CHANNEL}.json"
         printf '{"mcpServers":{"%s":{"type":"http","url":"%s"}}}\n' "$_chan_server" "$_chan_url" > "$_mcp_cfg"
