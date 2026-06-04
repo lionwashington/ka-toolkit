@@ -12,6 +12,21 @@ export HOME="$TMP/home"; mkdir -p "$HOME"
 WORKSPACE="$TMP/workspace"
 mkdir -p "$WORKSPACE/memory/raw" "$WORKSPACE/memory/conversations" "$WORKSPACE/memory/topics"
 
+# Regression guard for the multi-raw-file bug: a DECOY raw file that (a) sorts
+# first alphabetically and (b) quotes our session id in its BODY but NOT its
+# frontmatter. read_cur_offset must match session_id in the frontmatter only and
+# ignore this file — else it picks the decoy (no last_parsed_offset → 0) and the
+# advance check falsely aborts (the original exit-7 bug).
+cat > "$WORKSPACE/memory/raw/00-decoy.md" <<'DECOY'
+---
+id: decoy
+session_id: some-other-session-aaaa
+distilled: true
+---
+A logged conversation that happens to quote: session_id: fake-chunk
+(this must NOT be treated as the fake-chunk session's raw file)
+DECOY
+
 # Fake jsonl with a handful of messages so the snapshot offset is a few hundred
 # bytes — comfortably larger than the tiny CHUNK below → forces multi-pass.
 JSONL="$TMP/fake.jsonl"

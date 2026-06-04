@@ -257,11 +257,22 @@ run_distill_pass() {
 
 # read_cur_offset — the session's persisted last_parsed_offset (0 if no raw file
 # yet / first distill). Used to chunk huge snapshots + verify per-pass progress.
+# A session can have >1 raw file, and a raw body may quote another session's id,
+# so we (1) match session_id ONLY in the YAML frontmatter (between the first two
+# `---`), not the body, and (2) take the MAX last_parsed_offset across matches
+# (the offset is monotonic, so the highest is the authoritative current state).
 read_cur_offset() {
-    local rawdir="$WORKSPACE_CWD/memory/raw" f off=""
-    f="$(grep -rlE "^session_id:[[:space:]]*$SESSION_ID([[:space:]]|\$)" "$rawdir"/*.md 2>/dev/null | head -1)"
-    [ -n "$f" ] && off="$(sed -n 's/^last_parsed_offset:[[:space:]]*//p' "$f" | head -1 | tr -dc '0-9')"
-    printf '%s' "${off:-0}"
+    local rawdir="$WORKSPACE_CWD/memory/raw" f fm off best=0
+    [ -d "$rawdir" ] || { printf '0'; return; }
+    for f in "$rawdir"/*.md; do
+        [ -f "$f" ] || continue
+        fm="$(awk '/^---$/{c++; next} c==1{print} c>=2{exit}' "$f" 2>/dev/null)"
+        printf '%s\n' "$fm" | grep -qE "^session_id:[[:space:]]*$SESSION_ID[[:space:]]*\$" || continue
+        off="$(printf '%s\n' "$fm" | sed -n 's/^last_parsed_offset:[[:space:]]*//p' | head -1 | tr -dc '0-9')"
+        off="${off:-0}"
+        [ "$off" -gt "$best" ] && best="$off"
+    done
+    printf '%s' "$best"
 }
 
 # ---------- run claude headless (chunked) ----------
