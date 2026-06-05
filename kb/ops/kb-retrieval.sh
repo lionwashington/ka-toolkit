@@ -1,5 +1,5 @@
 #!/bin/bash
-# ka kb-retrieval — operate the shared LanceDB HTTP retrieval daemon (kb-retrieval).
+# ka kb retrieval — operate the shared LanceDB HTTP retrieval daemon (kb-retrieval).
 # The daemon + its launch scripts live in the deployed MCP dir $KA_HOME/kb/mcp/kb
 # (laid down by ./install.sh deploy_kb_mcp). Port = config.yaml
 # retrieval.daemon.port (default 7705). This is the type:http backend CCs register
@@ -35,7 +35,7 @@ case "$VERB" in
         exec "$DIR/status.sh"
         ;;
     *)
-        echo "ka kb-retrieval: unknown verb '$VERB' (start|stop|restart|status)" >&2
+        echo "ka kb retrieval: unknown verb '$VERB' (start|stop|restart|status)" >&2
         exit 2
         ;;
 esac

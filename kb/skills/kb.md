@@ -27,18 +27,18 @@ Use the `kb_status` MCP tool. Show knowledge base statistics.
 
 Execute knowledge distillation on unprocessed conversations.
 
-- **`/kb distill`** (no flag) and **`/kb distill --background`**: spawn a background Opus headless process via `ka distill --background`. The current session returns immediately; the worker runs to completion in the background and writes `~/.knowledge-assistant/state/distill-current.json`. The worker holds **no Telegram token and never pushes** — Telegram has a single egress, the main session. On failure the worker writes a standalone sentinel `~/.knowledge-assistant/state/distill-last-failure.json` (with `failed_at` / `exit_code` / `attempts` / `snapshot_offset` / `error_excerpt` / `log_path` / `acked:false`) that the next run does NOT overwrite. Use this 99% of the time.
+- **`/kb distill`** (no flag) and **`/kb distill --background`**: spawn a background Opus headless process via `ka kb distill --background`. The current session returns immediately; the worker runs to completion in the background and writes `~/.knowledge-assistant/state/distill-current.json`. The worker holds **no Telegram token and never pushes** — Telegram has a single egress, the main session. On failure the worker writes a standalone sentinel `~/.knowledge-assistant/state/distill-last-failure.json` (with `failed_at` / `exit_code` / `attempts` / `snapshot_offset` / `error_excerpt` / `log_path` / `acked:false`) that the next run does NOT overwrite. Use this 99% of the time.
 - **`/kb distill --foreground`**: run the workflow synchronously in the current session (blocks). Useful for debugging, when the background runner is broken, or when you specifically need the result inline.
 
 #### Background mode (default)
 
 1. Determine the jsonl path: `ls -t ~/.claude/projects/<encoded-cwd>/*.jsonl | head -n 1` (most recently modified one matches the current session). The "encoded cwd" replaces `/` with `-` (e.g. `-Users-you-workspace-your-project`).
-2. Spawn: `bash -c 'ka distill --background --jsonl <abs-path>'`
+2. Spawn: `bash -c 'ka kb distill --background --jsonl <abs-path>'`
 3. Capture the one-line stdout (`distill-bg: pid=N log=PATH status=STATEFILE snapshot=BYTES`) and surface it to the user.
 4. Done — do NOT execute Phase 0/1 yourself; the worker process handles them.
-5. If `ka distill --background` exits non-zero, fall back to the foreground workflow below (rare path; usually means jsonl missing or another worker already running).
+5. If `ka kb distill --background` exits non-zero, fall back to the foreground workflow below (rare path; usually means jsonl missing or another worker already running).
 
-To inspect a running or finished worker later, use `ka distill-status` (or `ka distill-status --json` for machine-readable output). On startup, sessions should run `ka distill-status` once and surface any `failed` or recent `done` state to the user so background runs aren't invisible.
+To inspect a running or finished worker later, use `ka kb distill status` (or `ka kb distill status --json` for machine-readable output). On startup, sessions should run `ka kb distill status` once and surface any `failed` or recent `done` state to the user so background runs aren't invisible.
 
 **Main-side failure notification contract (the single Telegram egress).** Because the background worker never touches Telegram, the main session is responsible for notifying the user of background-distill failures. On startup AND at the start of every `/kb distill`, the main session must:
 1. Read `~/.knowledge-assistant/state/distill-last-failure.json` if it exists.

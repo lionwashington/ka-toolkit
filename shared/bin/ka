@@ -2,9 +2,10 @@
 # ka — Knowledge Assistant CLI.
 #   ka workshop [start|stop|restart|spawn-mates] [name]   tmux panes / CCs
 #   ka daemon   [start|stop|restart|status|config]        the active channel daemon
-#   ka kb-retrieval [start|stop|restart|status]            shared LanceDB retrieval daemon
-#   ka kb-reindex [--full]                                 (re)build the kb_search index
-#   ka status | doctor | cron … | distill [status] | help
+#   ka kb retrieval [start|stop|restart|status]            shared LanceDB retrieval daemon
+#   ka kb reindex [--full]                                 (re)build the kb_search index
+#   ka kb distill [status]                                 background distillation
+#   ka status | doctor | cron … | help
 #
 # Symlink into PATH:
 #   ln -sf "$PWD/shared/bin/ka" ~/.local/bin/ka
@@ -34,26 +35,11 @@ case "$CMD" in
     daemon)          # the active channel daemon
         exec "$KA_CHANNELS_DIR/daemon.sh" "$@"
         ;;
-    kb-retrieval)    # the shared LanceDB HTTP retrieval daemon (kb_search backend)
-        exec "$KA_KB_DIR/kb-retrieval.sh" "$@"
-        ;;
-    kb-reindex)      # (re)build the LanceDB index via the daemon (incremental | --full)
-        exec "$KA_KB_DIR/kb-reindex.sh" "$@"
+    kb)              # knowledge-base ops cluster: kb retrieval … | kb reindex …
+        exec "$KA_KB_DIR/kb.sh" "$@"
         ;;
     cron)
         exec "$KA_CRON_OPS_DIR/cron.sh" "$@"
-        ;;
-    distill)
-        # Background distill is the only mode (synchronous distill lives inside
-        # /kb distill --foreground). `ka distill status` shows the last run.
-        if [ "${1:-}" = "status" ]; then
-            shift
-            exec "$KA_KB_DIR/distill-status.sh" "$@"
-        fi
-        # Tolerate a legacy --background flag (background is the default now).
-        FILTERED=()
-        for arg in "$@"; do [ "$arg" = "--background" ] && continue; FILTERED+=("$arg"); done
-        exec "$KA_KB_DIR/distill-bg.sh" ${FILTERED[@]+"${FILTERED[@]}"}
         ;;
     -h|--help|help|'')
         exec "$KA_SHARED_DIR/help.sh" "$@"

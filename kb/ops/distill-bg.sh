@@ -5,7 +5,7 @@
 # per-run log to ~/.knowledge-assistant/state/distill-<timestamp>.log.
 #
 # Usage:
-#   ka distill --background --jsonl <abs path> [--session-id <uuid>] [--dry-run]
+#   ka kb distill --background --jsonl <abs path> [--session-id <uuid>] [--dry-run]
 #
 # Snapshot enforcement (race condition guard):
 #   Captures the jsonl's current byte size + last-entry-uuid before spawning.
@@ -48,10 +48,10 @@ WORKSPACE_CWD="${WORKSPACE_CWD:-$HOME/workspace/your-workspace}"
 
 usage() {
     cat <<EOF
-ka distill --background — spawn background Opus distiller
+ka kb distill --background — spawn background Opus distiller
 
 USAGE
-    ka distill --background --jsonl <abs path> [--session-id <uuid>] [--dry-run]
+    ka kb distill --background --jsonl <abs path> [--session-id <uuid>] [--dry-run]
 
 FLAGS
     --jsonl <path>        Absolute path to the session .jsonl (required)

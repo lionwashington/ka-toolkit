@@ -9,7 +9,7 @@
   cwd, conversing with the user through the **telegram-channel daemon**;
 - run health diagnostics (`ka status` / `ka doctor`);
 - manage declarative **cron** scheduled jobs (`ka cron`);
-- trigger background knowledge-base distillation (`ka distill`).
+- trigger background knowledge-base distillation (`ka kb distill`).
 
 > **mate = an independent CC process**, not a subagent inside CC. Each mate has an independent cwd, an independent
 > `KA_CHANNEL`, and an independent process; they share no context. The pane / window layout is a purely visual choice.
@@ -182,7 +182,7 @@ ka daemon restart         # reload (CCs re-adopt)
 > so inbound+outbound recover within the SSE retry window.
 
 > **Top-level `ka start` / `ka stop` / `ka restart` / `ka spawn-mates` are gone** — use
-> the `ka workshop` verbs. `ka distill status` is now `ka distill status`.
+> the `ka workshop` verbs. `ka kb distill status` is now `ka kb distill status`.
 
 ---
 
@@ -308,13 +308,13 @@ For the full design see `KA_CRON_DESIGN.md`.
 
 ---
 
-## `ka distill` — background knowledge-base distillation
+## `ka kb distill` — background knowledge-base distillation
 
 Runs a background `/kb distill` inside a headless Opus claude process, returning immediately after spawning. Synchronous foreground distillation
-is still inside the `/kb distill --foreground` skill (`ka distill` currently **only** supports `--background`).
+is still inside the `/kb distill --foreground` skill (`ka kb distill` currently **only** supports `--background`).
 
 ```
-ka distill --jsonl <abs path> [--session-id <uuid>] [--dry-run]
+ka kb distill --jsonl <abs path> [--session-id <uuid>] [--dry-run]
 ```
 
 | Flag | Effect |
@@ -327,7 +327,7 @@ ka distill --jsonl <abs path> [--session-id <uuid>] [--dry-run]
 `--upper-offset <snapshot>` — messages appended after the snapshot are left for the next distillation, avoiding a race.
 
 The worker state is written to `~/.knowledge-assistant/state/distill-current.json`, and each run also leaves a
-`distill-<timestamp>.log`. Use `ka distill status [--json]` to view the status of the last / current background distillation.
+`distill-<timestamp>.log`. Use `ka kb distill status [--json]` to view the status of the last / current background distillation.
 If a worker is already running, it refuses to start another.
 
 ---

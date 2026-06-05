@@ -41,8 +41,8 @@ COMMANDS
                     Subcommands: list, add, remove, enable, disable, run,
                                  install, uninstall, import, status. See `ka cron help`.
     distill         Spawn a background Opus /kb distill worker (snapshot-bound).
-                      ka distill --jsonl <abs path> [--session-id <uuid>] [--dry-run]
-                      ka distill status [--json]    # state of the last/current run
+                      ka kb distill --jsonl <abs path> [--session-id <uuid>] [--dry-run]
+                      ka kb distill status [--json]    # state of the last/current run
     help, -h        Show this help.
 
 ENVIRONMENT

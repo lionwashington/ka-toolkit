@@ -4,7 +4,7 @@
 # health verdict (running vs. dead).
 #
 # Usage:
-#   ka distill status [--json]
+#   ka kb distill status [--json]
 
 set -euo pipefail
 : "${KA_HOME:=$HOME/.knowledge-assistant}"
@@ -18,10 +18,10 @@ while [ $# -gt 0 ]; do
         --json) EMIT_JSON=1; shift ;;
         -h|--help)
             cat <<EOF
-ka distill status — show last/current background distill run
+ka kb distill status — show last/current background distill run
 
 USAGE
-    ka distill status [--json]
+    ka kb distill status [--json]
 
 FLAGS
     --json   Print raw JSON instead of human-readable summary.

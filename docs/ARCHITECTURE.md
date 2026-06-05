@@ -144,7 +144,7 @@ deployed runtime) is organized by since gen3.
 ```
 
 The `ka` CLI (`shared/bin/ka`) is cross-cutting, not a fifth part — its verbs map
-onto the parts (`ka workshop`→2, `ka daemon`→3, `ka cron`→4, `ka distill`→1).
+onto the parts (`ka workshop`→2, `ka daemon`→3, `ka cron`→4, `ka kb distill`→1).
 
 ### Repo / runtime structure (organized by the four parts)
 
@@ -195,7 +195,7 @@ deposits → queries** them into an Obsidian-compatible Markdown knowledge base 
 | **kb MCP server** | `kb/mcp-server/` | Expose `kb_search / kb_read_topic / kb_list_topics / kb_status` to any MCP client |
 | **/kb skill** | `kb/skills/kb.md` | Skill entry point for browsing / searching / triggering distillation / reviewing topic suggestions |
 
-**Distillation triggers**: ① `/kb distill` (foreground, inside the skill) ② `ka distill` (background)
+**Distillation triggers**: ① `/kb distill` (foreground, inside the skill) ② `ka kb distill` (background)
 ③ `ka cron` scheduled (every 2h by default). All three share the same distiller pipeline.
 
 **Key property**: KB content is **owned by the user** (local Markdown, can be git-tracked, opens directly in Obsidian),
@@ -278,7 +278,7 @@ whether it is `default`.
 | `ka status` | <1s health summary (config / session / daemon / channels / cron) |
 | `ka doctor` | deeper read-only consistency diagnostics + fix hints |
 | `ka cron` | declarative scheduled jobs (see §5) |
-| `ka distill [status]` | trigger background distillation / show its progress (foreground is inside `/kb distill`) |
+| `ka kb distill [status]` | trigger background distillation / show its progress (foreground is inside `/kb distill`) |
 
 > The `ka logs` / `ka mate` / `ka patch-apply` / `ka install-crons` that were planned in old docs but **never shipped**
 > do not exist and have been removed from this document.

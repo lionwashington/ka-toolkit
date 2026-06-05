@@ -1,8 +1,8 @@
 #!/bin/bash
-# ka kb-reindex — (re)build the LanceDB index via the running kb-retrieval daemon,
+# ka kb reindex — (re)build the LanceDB index via the running kb-retrieval daemon,
 # reusing its already-loaded embedding model (no 2GB reload).
-#   ka kb-reindex          incremental: only files changed since last index (+ drop vanished)
-#   ka kb-reindex --full   drop + rebuild everything (slow; CPU embed of the whole KB)
+#   ka kb reindex          incremental: only files changed since last index (+ drop vanished)
+#   ka kb reindex --full   drop + rebuild everything (slow; CPU embed of the whole KB)
 # This is a thin curl to the daemon's /api/reindex — no native deps here. distill calls
 # the same endpoint after writing topics, so new knowledge shows up in kb_search in seconds.
 set -u
@@ -25,5 +25,5 @@ if [ -n "$r" ]; then
   echo "$r"
   echo "$r" | grep -q '"ok":true' && exit 0 || exit 1
 fi
-echo '{"ok":false,"error":"kb-retrieval daemon not reachable — start it: ka kb-retrieval start"}'
+echo '{"ok":false,"error":"kb-retrieval daemon not reachable — start it: ka kb retrieval start"}'
 exit 1
