@@ -1,8 +1,11 @@
-// The indexer: turn a knowledge base (topics/*.md + conversations/*.md) into
-// LanceDB chunk rows. Reads each file, chunks it (chunker.ts), segments the chunk
-// text for FTS (segmenter.ts), embeds the context-prefixed text (passage side),
-// and tags kind (parent / sub / conversation). `reindex()` then hands the rows to
-// the engine, which writes the table + manifest. This is `ka kb reindex`'s core.
+// The indexer: turn a knowledge base into LanceDB chunk rows. ONLY topics/*.md are
+// indexed — they are the distilled, structured knowledge. Raw conversations/*.md are
+// NOT indexed (industry practice: don't make raw dialogue logs a retrieval target —
+// they're noisy, redundant, and balloon the index/reindex cost; they stay as trace
+// material that distill mines into topics, and retrieval targets the topics). Reads
+// each topic, chunks it (chunker.ts), segments for FTS (segmenter.ts), embeds the
+// context-prefixed text (passage side), tags kind (parent / sub). `reindex()` hands
+// the rows to the engine, which writes the table + manifest. Core of `ka kb reindex`.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseFrontmatter } from '../knowledge-store/markdown.js'
@@ -41,14 +44,8 @@ function listFiles(kbPath: string): FileEntry[] {
       })
     }
   }
-  const convDir = join(kbPath, 'conversations')
-  if (existsSync(convDir)) {
-    for (const f of readdirSync(convDir)) {
-      if (!f.endsWith('.md')) continue
-      const abs = join(convDir, f)
-      out.push({ path: `conversations/${f}`, abs, topic: f.replace(/\.md$/, ''), kind: 'conversation', parent: `conversations/${f}`, mtime: statSync(abs).mtimeMs })
-    }
-  }
+  // conversations/ is intentionally NOT indexed — distill mines it into topics;
+  // retrieval targets the distilled topics only (see file header).
   return out
 }
 

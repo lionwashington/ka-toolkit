@@ -24,16 +24,18 @@ beforeAll(() => {
 afterAll(() => rmSync(kb, { recursive: true, force: true }))
 
 describe('buildChunkRows', () => {
-  it('chunks topics + conversations and tags kind (parent / sub / conversation)', async () => {
+  it('chunks ONLY topics (parent/sub) — conversations are NOT indexed', async () => {
     const { rows, docCount } = await buildChunkRows(kb, fakeEmbedder)
-    expect(docCount).toBe(3)
+    expect(docCount).toBe(2) // the 2 topics; the conversation file is skipped
     const byTopic = (t: string) => rows.filter((r) => r.topic === t)
     expect(byTopic('tech-network').every((r) => r.kind === 'parent')).toBe(true)
     const dns = byTopic('tech-network-dns')
     expect(dns.length).toBeGreaterThan(0)
     expect(dns[0].kind).toBe('sub')
     expect(dns[0].parent).toBe('topics/tech-network.md')
-    expect(byTopic('2026-06-05')[0].kind).toBe('conversation')
+    // the conversation file must not appear in the index, in any kind
+    expect(rows.some((r) => r.topic === '2026-06-05')).toBe(false)
+    expect(rows.some((r) => r.kind === 'conversation')).toBe(false)
   })
 
   it('segments the Chinese text_seg column and assigns a vector to each chunk', async () => {

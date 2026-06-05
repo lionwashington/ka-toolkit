@@ -5,13 +5,20 @@ Chinese-aware FTS + RRF) served by one shared daemon, kept fresh by incremental
 sync. The four MCP tools (`kb_search` / `kb_read_topic` / `kb_list_topics` /
 `kb_status`) are the stable surface; everything below is behind them.
 
+**Only `topics/` is indexed.** Topics are the distilled, structured knowledge —
+the retrieval target. Raw `conversations/*.md` are NOT indexed: per memory-system
+practice, raw dialogue logs are noisy, redundant, and balloon the index/reindex
+cost, so they stay as trace material that distill mines into topics, and retrieval
+hits the topics. (If undistilled-recent recall ever matters, the cheap hedge is to
+index each daily log's short `## TL;DR` only — not the full log.)
+
 Ground truth: `kb/core/src/retrieval/` (engine) + `kb/mcp-server/src/daemon.ts`
 (daemon). Code is authoritative for mechanism.
 
 ## Pipeline
 
 ```
-topics/*.md + conversations/*.md
+topics/*.md  (conversations/ NOT indexed — distill mines them into topics)
    └─ chunk (by ## H2, parent/sub aware, "topic › heading" prefix)
         └─ embed (multilingual-e5-large, passage side)        ─┐
 challenge query ─ embed (query side) ─┐                        │
@@ -32,9 +39,9 @@ challenge query ─ embed (query side) ─┐                        │
   shared model-cache dir (`KA_EMBED_CACHE_DIR` > `~/.cache/ka-toolkit/fastembed`).
 - **Hybrid search** (`lance-engine.ts`): vector ANN + full-text search fused by
   **RRF** (reciprocal rank fusion, `Σ 1/(k+rank)`, k=60) — rank-based, so there is
-  **no `min_score` cutoff**, just top-k. Per-kind weighting **down-weights
-  conversations** (parent/sub = 1, conversation = 0.5) so daily logs don't pollute
-  topic ranking. Results are de-duped to one hit per topic (best-scoring chunk).
+  **no `min_score` cutoff**, just top-k. Results are de-duped to one hit per topic
+  (best-scoring chunk). (A per-kind weight table remains for parent/sub; since only
+  topics are indexed there are no conversation rows to down-weight anymore.)
 - **Chinese FTS** (`segmenter.ts`): Node's built-in `Intl.Segmenter` pre-segments
   text into space-joined tokens → LanceDB's default FTS tokenizer. Zero-dependency;
   avoids LanceDB's native jieba dict (a non-portable per-machine install).
