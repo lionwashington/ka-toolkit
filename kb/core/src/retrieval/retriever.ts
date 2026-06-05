@@ -7,9 +7,20 @@ import type { LanceEngine } from './lance-engine.js'
 import type { Embedder } from './embedder.js'
 import type { SearchOptions, SearchResult } from './types.js'
 
+export interface ReindexResult {
+  full: boolean
+  changedPaths?: string[]
+  removedPaths?: string[]
+  rowCount?: number
+  docCount?: number
+  sourceMtimeMax?: number
+}
+
 export interface Retriever {
   search(query: string, options?: SearchOptions): Promise<SearchResult[]>
   indexAll(): Promise<void>
+  /** (Re)build the index. Optional — only the LanceDB retriever supports it. */
+  reindex?(opts?: { full?: boolean }): Promise<ReindexResult>
 }
 
 /** LanceDB index location under the knowledge base. */
@@ -17,12 +28,22 @@ export const LANCE_DB_SUBDIR = join('.vectors', 'lancedb')
 
 export class LanceRetriever implements Retriever {
   private enginePromise: Promise<LanceEngine> | null = null
+  private embedderInstance: Embedder | null = null
 
   constructor(
     private readonly kbPath: string,
     private readonly embedder?: Embedder,
     private readonly dbDir?: string,
   ) {}
+
+  /** Resolve + cache the embedder (so search and reindex share one loaded model). */
+  private async resolveEmbedder(): Promise<Embedder> {
+    if (!this.embedderInstance) {
+      if (this.embedder) this.embedderInstance = this.embedder
+      else { const { createEmbedder } = await import('./embedder.js'); this.embedderInstance = createEmbedder() }
+    }
+    return this.embedderInstance
+  }
 
   /**
    * Lazily construct the engine via DYNAMIC import. This is the load-bearing
@@ -36,17 +57,33 @@ export class LanceRetriever implements Retriever {
     if (!this.enginePromise) {
       this.enginePromise = (async () => {
         const { LanceEngine } = await import('./lance-engine.js')
-        const { createEmbedder } = await import('./embedder.js')
-        const emb = this.embedder ?? createEmbedder()
+        const emb = await this.resolveEmbedder()
         return new LanceEngine(this.dbDir ?? join(this.kbPath, LANCE_DB_SUBDIR), emb)
       })()
     }
     return this.enginePromise
   }
 
-  // No-op: the index is (re)built by the writer; the reader opens lazily on search
-  // and reloads on manifest version bump. Keeps MCP/daemon startup fast.
+  // No-op: the index is (re)built by reindex(); search opens it lazily and reloads
+  // on manifest version bump. Keeps MCP/daemon startup fast.
   async indexAll(): Promise<void> {}
+
+  /**
+   * (Re)build the index reusing THIS retriever's engine + loaded embedder (so the
+   * daemon doesn't reload the 2GB model). Default = incremental (only files changed
+   * since the index's source_mtime_max, + drop vanished files); `full` = drop+rebuild.
+   */
+  async reindex(opts: { full?: boolean } = {}): Promise<ReindexResult> {
+    const engine = await this.engine()
+    const emb = await this.resolveEmbedder()
+    const { reindex, incrementalReindex } = await import('./indexer.js')
+    if (opts.full) {
+      const b = await reindex(engine, this.kbPath, emb)
+      return { full: true, rowCount: b.rows.length, docCount: b.docCount, sourceMtimeMax: b.sourceMtimeMax }
+    }
+    const r = await incrementalReindex(engine, this.kbPath, emb)
+    return { full: false, changedPaths: r.changedPaths, removedPaths: r.removedPaths, rowCount: r.rowCount, sourceMtimeMax: r.sourceMtimeMax }
+  }
 
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
     const k = options?.maxResults ?? 5

@@ -65,6 +65,7 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
   const retriever: Retriever = createRetriever(config.knowledge_base_path, config)
   let ready = false
   let warmError: string | null = null
+  let reindexing = false
 
   installSignalHandlers(log)
 
@@ -138,13 +139,45 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
     setTimeout(() => process.exit(0), 200)
   })
 
+  // (Re)build the index using the ALREADY-LOADED model (no 2GB reload). Default
+  // incremental (only files changed since the index's source_mtime_max + drop
+  // vanished files); ?full=1 forces a drop+rebuild. distill curls this after
+  // writing topics; `ka kb reindex` curls it too. Serialized via `reindexing`.
+  app.post('/api/reindex', async (req, res) => {
+    if (!retriever.reindex) { res.status(400).json({ ok: false, error: 'reindex not supported by engine' }); return }
+    if (reindexing) { res.status(409).json({ ok: false, error: 'reindex already in progress' }); return }
+    const full = (req.query as any)?.full === '1' || (req.body && (req.body as any).full === true)
+    reindexing = true
+    try {
+      const r = await retriever.reindex({ full: !!full })
+      log(`reindex (${full ? 'full' : 'incremental'}): changed=${r.changedPaths?.length ?? r.docCount ?? 0} removed=${r.removedPaths?.length ?? 0} rows=${r.rowCount ?? 0}`)
+      res.json({ ok: true, ...r })
+    } catch (e: any) {
+      log(`reindex failed: ${e?.message ?? e}`)
+      res.json({ ok: false, error: e?.message ?? String(e) })
+    } finally {
+      reindexing = false
+    }
+  })
+
   app.use((_req, res) => res.status(404).json({ ok: false, error: 'not_found' }))
 
   const httpServer = app.listen(port, host, async () => {
     log(`kb-retrieval daemon listening on ${host}:${port}/mcp (pid=${process.pid}, engine=lancedb)`)
-    // Warm the retriever so the model loads now, not on the first user query.
+    // Warm + self-heal: an incremental reindex on startup catches any files that
+    // changed while the daemon was down (a no-op is cheap and doesn't load the model;
+    // changed files get embedded). Then a warmup search loads the model. Serialized
+    // via `reindexing` so the /api/reindex endpoint can't race startup.
     try {
-      await retriever.indexAll() // lancedb: no-op (index built by `ka kb reindex`)
+      if (retriever.reindex) {
+        reindexing = true
+        try {
+          const r = await retriever.reindex()
+          log(`startup incremental reindex: changed=${r.changedPaths?.length ?? 0} removed=${r.removedPaths?.length ?? 0} rows=${r.rowCount ?? 0}`)
+        } finally {
+          reindexing = false
+        }
+      }
       await retriever.search('warmup', { maxResults: 1 })
       ready = true
       log('retriever warm — ready')

@@ -123,9 +123,92 @@ export class LanceEngine {
     }
   }
 
+  /**
+   * Incremental update: replace the rows for the changed files (delete their old
+   * rows, add the new ones) + drop rows for removed files, refresh the FTS index,
+   * and bump the manifest (version + source_mtime_max). Far cheaper than rebuild()
+   * — the caller only re-embeds the touched files. If the table doesn't exist yet
+   * this behaves like a first build. Fail-loud: on error the manifest records
+   * status:'error' and the error is re-thrown.
+   */
+  async upsert(
+    rows: ChunkRow[],
+    opts: { removedPaths?: string[]; sourceMtimeMax?: number; embedModel?: string } = {},
+  ): Promise<void> {
+    const cur = readManifest(this.manifestPath)
+    const prev = cur?.version ?? 0
+    try {
+      const db = await this.conn()
+      const exists = (await db.tableNames()).includes(this.tableName)
+      if (!exists) {
+        this.tbl = rows.length
+          ? await db.createTable(this.tableName, rows as unknown as Record<string, unknown>[])
+          : null
+        if (this.tbl) await this.tbl.createIndex('text_seg', { config: lancedb.Index.fts(), replace: true })
+      } else {
+        const tbl = await db.openTable(this.tableName)
+        const changed = [...new Set(rows.map((r) => r.path))]
+        const deletePaths = [...new Set([...changed, ...(opts.removedPaths ?? [])])]
+        if (deletePaths.length) {
+          const inList = deletePaths.map((p) => `'${p.replace(/'/g, "''")}'`).join(', ')
+          await tbl.delete(`path IN (${inList})`)
+        }
+        if (rows.length) await tbl.add(rows as unknown as Record<string, unknown>[])
+        // The FTS (tantivy) index must be refreshed to cover the newly added rows.
+        await tbl.createIndex('text_seg', { config: lancedb.Index.fts(), replace: true })
+        this.tbl = tbl
+      }
+      let docCount = 0
+      let chunkCount = 0
+      if (this.tbl) {
+        chunkCount = await this.tbl.countRows()
+        const paths = await this.tbl.query().select(['path']).toArray()
+        docCount = new Set(paths.map((r: any) => r.path)).size
+      }
+      const m: IndexManifest = {
+        engine: 'lancedb',
+        version: prev + 1,
+        built_at: new Date().toISOString(),
+        source_mtime_max: Math.max(cur?.source_mtime_max ?? 0, opts.sourceMtimeMax ?? 0),
+        doc_count: docCount,
+        chunk_count: chunkCount,
+        embed_model: opts.embedModel ?? cur?.embed_model ?? '',
+        status: 'ok',
+        error: null,
+      }
+      writeManifest(this.manifestPath, m)
+      this.loadedVersion = m.version
+    } catch (e) {
+      writeManifest(this.manifestPath, {
+        engine: 'lancedb',
+        version: cur?.version ?? prev,
+        built_at: cur?.built_at ?? new Date().toISOString(),
+        source_mtime_max: cur?.source_mtime_max ?? 0,
+        doc_count: cur?.doc_count ?? 0,
+        chunk_count: cur?.chunk_count ?? 0,
+        embed_model: cur?.embed_model ?? '',
+        status: 'error',
+        error: e instanceof Error ? e.message : String(e),
+      })
+      throw e
+    }
+  }
+
   /** The current manifest (null if the index was never built). */
   status(): IndexManifest | null {
     return readManifest(this.manifestPath)
+  }
+
+  /** Distinct source paths currently in the index ([] if no table) — for deletion detection. */
+  async indexedPaths(): Promise<string[]> {
+    if (!readManifest(this.manifestPath)) return []
+    try {
+      const tbl = await this.table()
+      const rows = await tbl.query().select(['path']).toArray()
+      return [...new Set(rows.map((r: any) => r.path))]
+    } catch {
+      return []
+    }
   }
 
   private async table() {

@@ -3,6 +3,7 @@
 #   ka workshop [start|stop|restart|spawn-mates] [name]   tmux panes / CCs
 #   ka daemon   [start|stop|restart|status|config]        the active channel daemon
 #   ka kb-retrieval [start|stop|restart|status]            shared LanceDB retrieval daemon
+#   ka kb-reindex [--full]                                 (re)build the kb_search index
 #   ka status | doctor | cron … | distill [status] | help
 #
 # Symlink into PATH:
@@ -35,6 +36,9 @@ case "$CMD" in
         ;;
     kb-retrieval)    # the shared LanceDB HTTP retrieval daemon (kb_search backend)
         exec "$KA_KB_DIR/kb-retrieval.sh" "$@"
+        ;;
+    kb-reindex)      # (re)build the LanceDB index via the daemon (incremental | --full)
+        exec "$KA_KB_DIR/kb-reindex.sh" "$@"
         ;;
     cron)
         exec "$KA_CRON_OPS_DIR/cron.sh" "$@"

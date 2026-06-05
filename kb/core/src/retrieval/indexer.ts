@@ -52,14 +52,10 @@ function listFiles(kbPath: string): FileEntry[] {
   return out
 }
 
-export async function buildChunkRows(kbPath: string, embedder: IndexerEmbedder): Promise<BuiltIndex> {
-  const files = listFiles(kbPath)
-  let sourceMtimeMax = 0
-
-  // 1. chunk every file (cheap, sync) → flat list with the embed text.
+/** Chunk + embed a given set of files → ChunkRow[] (shared by full + incremental). */
+async function buildRowsForFiles(files: FileEntry[], embedder: IndexerEmbedder): Promise<ChunkRow[]> {
   const pending: { row: Omit<ChunkRow, 'vector'>; embedText: string }[] = []
   for (const f of files) {
-    sourceMtimeMax = Math.max(sourceMtimeMax, f.mtime)
     const raw = readFileSync(f.abs, 'utf-8')
     const { data } = parseFrontmatter(raw)
     const title = (data.title as string) ?? f.topic
@@ -74,15 +70,19 @@ export async function buildChunkRows(kbPath: string, embedder: IndexerEmbedder):
       })
     }
   }
-
-  // 2. embed all chunks in one pass (passage side), assign vectors back.
+  if (pending.length === 0) return []
   const vectors = await embedder.embedDocuments(pending.map((p) => p.embedText))
-  const rows: ChunkRow[] = pending.map((p, i) => ({ ...p.row, vector: vectors[i] }))
+  return pending.map((p, i) => ({ ...p.row, vector: vectors[i] }))
+}
 
+export async function buildChunkRows(kbPath: string, embedder: IndexerEmbedder): Promise<BuiltIndex> {
+  const files = listFiles(kbPath)
+  const sourceMtimeMax = files.reduce((m, f) => Math.max(m, f.mtime), 0)
+  const rows = await buildRowsForFiles(files, embedder)
   return { rows, sourceMtimeMax, docCount: files.length }
 }
 
-/** Build the index from a KB and (re)write the engine's table + manifest. */
+/** Build the index from a KB and (re)write the engine's table + manifest (full rebuild). */
 export async function reindex(engine: LanceEngine, kbPath: string, embedder: IndexerEmbedder): Promise<BuiltIndex> {
   const built = await buildChunkRows(kbPath, embedder)
   await engine.rebuild(built.rows, {
@@ -91,4 +91,39 @@ export async function reindex(engine: LanceEngine, kbPath: string, embedder: Ind
     docCount: built.docCount,
   })
   return built
+}
+
+export interface IncrementalResult {
+  changedPaths: string[]
+  removedPaths: string[]
+  rowCount: number
+  sourceMtimeMax: number
+}
+
+/**
+ * Incremental reindex: re-embed only the files changed since the index's
+ * source_mtime_max (from the manifest) and upsert them; also drop rows for files
+ * that vanished from disk. Returns what changed. No-op (no upsert) when nothing
+ * changed. This is what distill calls after writing topics — seconds, not a full
+ * rebuild. `since` overrides the manifest mtime (mainly for tests).
+ */
+export async function incrementalReindex(
+  engine: LanceEngine,
+  kbPath: string,
+  embedder: IndexerEmbedder,
+  since?: number,
+): Promise<IncrementalResult> {
+  const sinceMtime = since ?? engine.status()?.source_mtime_max ?? 0
+  const files = listFiles(kbPath)
+  const onDisk = new Set(files.map((f) => f.path))
+  const changed = files.filter((f) => f.mtime > sinceMtime)
+  // Removed = paths the index knew about but that no longer exist on disk.
+  const removedPaths = (await engine.indexedPaths()).filter((p) => !onDisk.has(p))
+  if (changed.length === 0 && removedPaths.length === 0) {
+    return { changedPaths: [], removedPaths: [], rowCount: 0, sourceMtimeMax: sinceMtime }
+  }
+  const rows = await buildRowsForFiles(changed, embedder)
+  const sourceMtimeMax = files.reduce((m, f) => Math.max(m, f.mtime), sinceMtime)
+  await engine.upsert(rows, { removedPaths, sourceMtimeMax, embedModel: embedder.model })
+  return { changedPaths: changed.map((f) => f.path), removedPaths, rowCount: rows.length, sourceMtimeMax }
 }
