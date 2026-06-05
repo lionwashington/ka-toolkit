@@ -3,20 +3,28 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { appendFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
-import { KnowledgeStore, KnowledgeRetrieval, loadConfig } from '@ka/core'
+import { KnowledgeStore, KnowledgeRetrieval, createRetriever, loadConfig, type Retriever } from '@ka/core'
 
-export function createMcpServer() {
+/**
+ * Build the kb MCP server. The retrieval backend is config-selected
+ * (`retrieval.engine`: orama | lancedb) via createRetriever; a daemon can inject a
+ * pre-built LanceRetriever (so the embedding model loads once, shared across CCs).
+ * The tool signatures (kb_search/read_topic/list_topics/status) are unchanged.
+ */
+export function createMcpServer(opts: { retriever?: Retriever } = {}) {
   const config = loadConfig()
   const store = new KnowledgeStore(config.knowledge_base_path)
-  const retrieval = new KnowledgeRetrieval(config.knowledge_base_path)
-  store.setRetrieval(retrieval)
+  const retriever = opts.retriever ?? createRetriever(config.knowledge_base_path, config)
+  // The distill→reindex hook (store.setRetrieval) is Orama-only and only matters in
+  // the distiller process, not this reader; wire it solely for the Orama path.
+  if (retriever instanceof KnowledgeRetrieval) store.setRetrieval(retriever)
 
   // Get topic names dynamically for kb_search description
   let topicNames: string[] = []
   try {
     store.init()
     topicNames = store.listTopics().map((t) => t.name)
-    retrieval.indexAll().catch(() => {})
+    retriever.indexAll().catch(() => {}) // Orama: build on startup; lancedb: no-op
   } catch {
     // Knowledge base may not be initialized yet
   }
@@ -38,7 +46,7 @@ export function createMcpServer() {
     },
     async ({ query, max_results }) => {
       try {
-        const results = await retrieval.search(query, {
+        const results = await retriever.search(query, {
           maxResults: max_results ?? config.retrieval.max_results,
           minScore: config.retrieval.min_score,
         })

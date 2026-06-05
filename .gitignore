@@ -22,6 +22,10 @@ GEMINI.md
 # Test run artifacts
 tests/results/
 
+# Local embedding-model cache (fastembed ONNX models, multi-GB, per-machine)
+local_cache/
+**/local_cache/
+
 # Local runtime / per-machine scaffolding (migrated from the old ops/.gitignore)
 state/
 *.local.env

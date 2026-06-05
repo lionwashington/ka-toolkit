@@ -40,6 +40,7 @@ vi.mock('@ka/core', () => {
   return {
     KnowledgeStore: vi.fn().mockReturnValue(mockStore),
     KnowledgeRetrieval: vi.fn().mockReturnValue(mockRetrieval),
+    createRetriever: vi.fn().mockReturnValue(mockRetrieval),
     loadConfig: vi.fn().mockReturnValue({
       channel_kind: 'telegram',
       knowledge_base_path: '/tmp/test-kb',
