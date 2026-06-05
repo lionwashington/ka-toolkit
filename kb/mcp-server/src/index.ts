@@ -3,16 +3,19 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { appendFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
-import { KnowledgeStore, KnowledgeRetrieval, createRetriever, loadConfig, type Retriever } from '@ka/core'
+import { pathToFileURL } from 'url'
+import { KnowledgeStore, KnowledgeRetrieval, createRetriever, loadConfig, type Retriever, type KaConfig } from '@ka/core'
 
 /**
  * Build the kb MCP server. The retrieval backend is config-selected
  * (`retrieval.engine`: orama | lancedb) via createRetriever; a daemon can inject a
- * pre-built LanceRetriever (so the embedding model loads once, shared across CCs).
- * The tool signatures (kb_search/read_topic/list_topics/status) are unchanged.
+ * pre-built LanceRetriever (so the embedding model loads once, shared across CCs)
+ * AND its own loaded config (so the store/KB path match the daemon's config rather
+ * than re-reading the default ~/.knowledge-assistant/config.yaml). The tool
+ * signatures (kb_search/read_topic/list_topics/status) are unchanged.
  */
-export function createMcpServer(opts: { retriever?: Retriever } = {}) {
-  const config = loadConfig()
+export function createMcpServer(opts: { retriever?: Retriever; config?: KaConfig } = {}) {
+  const config = opts.config ?? loadConfig()
   const store = new KnowledgeStore(config.knowledge_base_path)
   const retriever = opts.retriever ?? createRetriever(config.knowledge_base_path, config)
   // The distill→reindex hook (store.setRetrieval) is Orama-only and only matters in
@@ -209,7 +212,12 @@ async function main() {
   await server.connect(transport)
 }
 
-main().catch((error) => {
-  console.error('MCP server error:', error)
-  process.exit(1)
-})
+// Entrypoint guard: run the stdio server ONLY when this file is executed directly
+// (node dist/index.js). When imported (e.g. by the HTTP daemon to reuse
+// createMcpServer), do NOT auto-start a stdio server.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error('MCP server error:', error)
+    process.exit(1)
+  })
+}

@@ -21,6 +21,15 @@ const ConfigSchema = z.object({
     // Retrieval backend: 'orama' (current BM25) | 'lancedb' (hybrid vector+FTS).
     // Default orama until the LanceDB engine is verified + cut over (阶段B).
     engine: z.enum(['orama', 'lancedb']).default('orama').catch('orama'),
+    // Shared HTTP retrieval daemon (kb-retrieval): one resident process holds the
+    // LanceDB connection + embedding model (loaded once) and serves every CC over
+    // /mcp, instead of each CC spawning its own stdio server. Only used when CCs
+    // register the kb MCP as type:http pointing here; the stdio entry still works
+    // standalone. Loopback-only by default.
+    daemon: z.object({
+      host: z.string().default('127.0.0.1'),
+      port: z.number().default(7705),
+    }).default({}),
   }).default({}),
   memory: z.object({
     frozen_snapshot: z.boolean().default(false),
