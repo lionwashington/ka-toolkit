@@ -172,11 +172,26 @@ export function createMcpServer(opts: { retriever?: Retriever; config?: KaConfig
       try {
         const topics = store.listTopics()
 
+        // Search-index freshness (lancedb manifest) — so a caller can tell if the
+        // index is built / when / how big, and spot a failed/stale build.
+        let indexLine: string | null = null
+        try {
+          const m = await retriever.indexStatus?.()
+          if (!m) {
+            indexLine = `Search index: NOT BUILT — run \`ka kb reindex --full\``
+          } else {
+            const built = m.built_at ? new Date(m.built_at).toISOString().replace('T', ' ').slice(0, 19) + 'Z' : '?'
+            indexLine = `Search index: ${m.engine} v${m.version}, ${m.chunk_count} chunks / ${m.doc_count} docs, built ${built}` +
+              (m.status === 'ok' ? '' : ` ⚠️ status=${m.status}${m.error ? ` (${m.error})` : ''}`)
+          }
+        } catch { /* index status is best-effort */ }
+
         const lines = [
           `**Knowledge Base Status**`,
           `Path: ${config.knowledge_base_path}`,
           `Topics: ${topics.length}`,
           topics.length > 0 ? `Topic names: ${topics.map((t) => t.name).join(', ')}` : null,
+          indexLine,
           `Distiller interval: ${config.distiller.interval}`,
           `Max search results: ${config.retrieval.max_results}`,
         ]

@@ -61,6 +61,26 @@ export class LanceEngine {
   private readonly manifestPath: string
   /** Manifest version the currently-open table reflects (-1 = none loaded). */
   private loadedVersion = -1
+  /**
+   * Write gate: serializes table mutations (rebuild/upsert) and makes searches
+   * wait out an in-flight mutation, so a search never reads the table while its
+   * rows + FTS index are being swapped out (the concurrent read-during-reindex
+   * that could wedge the daemon). Mutations chain; reads just await the latest.
+   */
+  private writeGate: Promise<void> = Promise.resolve()
+
+  /** Run `fn` as the exclusive writer (after any prior write completes). */
+  private async withWrite<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = this.writeGate
+    let release!: () => void
+    this.writeGate = new Promise<void>((r) => { release = r })
+    await prev.catch(() => {})
+    try {
+      return await fn()
+    } finally {
+      release()
+    }
+  }
 
   constructor(
     private readonly dbPath: string,
@@ -81,6 +101,9 @@ export class LanceEngine {
    * status:'error' and the error is RE-THROWN — never silently swallowed.
    */
   async rebuild(rows: ChunkRow[], meta: RebuildMeta = {}): Promise<void> {
+    return this.withWrite(() => this._rebuild(rows, meta))
+  }
+  private async _rebuild(rows: ChunkRow[], meta: RebuildMeta = {}): Promise<void> {
     const prev = readManifest(this.manifestPath)?.version ?? 0
     try {
       const db = await this.conn()
@@ -132,6 +155,12 @@ export class LanceEngine {
    * status:'error' and the error is re-thrown.
    */
   async upsert(
+    rows: ChunkRow[],
+    opts: { removedPaths?: string[]; sourceMtimeMax?: number; embedModel?: string } = {},
+  ): Promise<void> {
+    return this.withWrite(() => this._upsert(rows, opts))
+  }
+  private async _upsert(
     rows: ChunkRow[],
     opts: { removedPaths?: string[]; sourceMtimeMax?: number; embedModel?: string } = {},
   ): Promise<void> {
@@ -228,6 +257,9 @@ export class LanceEngine {
 
   /** Hybrid search: vector top-N + FTS top-N → RRF fuse → dedupe to topic → top-k. */
   async search(query: string, topK = 5, fetch = 30): Promise<SearchHit[]> {
+    // Wait out any in-flight table mutation (rebuild/upsert) so we never read the
+    // table mid-swap; reads run concurrently with each other.
+    await this.writeGate.catch(() => {})
     const tbl = await this.table()
     const qv = await this.embedder.embedQuery(query)
     const qseg = segment(query)

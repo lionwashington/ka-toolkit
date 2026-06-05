@@ -21,6 +21,8 @@ export interface Retriever {
   indexAll(): Promise<void>
   /** (Re)build the index. Optional — only the LanceDB retriever supports it. */
   reindex?(opts?: { full?: boolean }): Promise<ReindexResult>
+  /** Index freshness manifest (version/built_at/counts/status). Optional. */
+  indexStatus?(): Promise<import('./manifest.js').IndexManifest | null>
 }
 
 /** LanceDB index location under the knowledge base. */
@@ -67,6 +69,13 @@ export class LanceRetriever implements Retriever {
   // No-op: the index is (re)built by reindex(); search opens it lazily and reloads
   // on manifest version bump. Keeps MCP/daemon startup fast.
   async indexAll(): Promise<void> {}
+
+  /** Read the index manifest directly (no engine/model load) — for kb_status. */
+  async indexStatus() {
+    const { readManifest, MANIFEST_FILE } = await import('./manifest.js')
+    const dir = this.dbDir ?? join(this.kbPath, LANCE_DB_SUBDIR)
+    return readManifest(join(dir, MANIFEST_FILE))
+  }
 
   /**
    * (Re)build the index reusing THIS retriever's engine + loaded embedder (so the
