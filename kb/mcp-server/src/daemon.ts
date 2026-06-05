@@ -183,7 +183,9 @@ function installSignalHandlers(log: (msg: string) => void): void {
   })
 }
 
-// Entrypoint guard: boot ONLY when executed directly.
+// Entrypoint guard: boot ONLY when executed directly. An optional argv[2] is the
+// config path (daemon.sh passes the gen3 $KA_HOME/config/config.yaml, since
+// @ka/core's loadConfig otherwise defaults to ~/.knowledge-assistant/config.yaml).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  void runRetrievalDaemon()
+  void runRetrievalDaemon(process.argv[2])
 }

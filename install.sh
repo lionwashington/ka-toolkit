@@ -138,13 +138,16 @@ deploy_ka() {            # ka CLI + the by-part sh trees copied to runtime (D1, 
   log "  OK ${RUNTIME}/{shared/bin/ka,shared/ops,workshop/ops,channels/ops,cron/ops,kb/ops; config templates}"
 }
 
-deploy_node_mcp() {      # P1.2
+deploy_node_mcp() {      # P1.2 — pure-JS node MCPs (no native deps): single self-contained esbuild bundle.
   want node-mcp || return 0
+  # NOTE: kb (knowledge-assistant) is NO LONGER bundled here — its LanceDB engine
+  # pulls in native modules (onnxruntime via fastembed, lancedb's .node) that can't
+  # be esbuild-bundled. It ships via deploy_kb_mcp() (pnpm deploy + node_modules).
   # esbuild binary (repo-root .pnpm, a transitive dependency of tsup). The bundle
   # packs all dependencies (including the workspace package @ka/core) into a single
   # file → self-contained, bypasses the pnpm symlink farm, never points at repo.
   local ESB; ESB="$(find "$REPO_ROOT/node_modules/.pnpm" -path '*esbuild@*/node_modules/esbuild/bin/esbuild' -type f 2>/dev/null | head -1 || true)"
-  for spec in "kb=kb/mcp-server" "market=kb/tools/market-mcp"; do
+  for spec in "market=kb/tools/market-mcp"; do
     local name="${spec%%=*}" pkg="${spec#*=}" dest="$RUNTIME/kb/mcp/${spec%%=*}"
     log "node MCP [$name]: esbuild bundle -> $dest/index.mjs"
     if [ "$DRY_RUN" = 1 ]; then
@@ -162,6 +165,100 @@ deploy_node_mcp() {      # P1.2
       fi
     fi
   done
+}
+
+deploy_kb_mcp() {        # kb (knowledge-assistant) MCP + kb-retrieval daemon — native deps
+  want node-mcp || return 0
+  # The kb MCP's single backend is the LanceDB hybrid engine, which pulls in NATIVE
+  # modules (fastembed→onnxruntime, @lancedb/lancedb's .node) that esbuild can't
+  # bundle. Strategy (hybrid of the channel-daemon bundle + the opennutrition copy):
+  #   1. esbuild BOTH entries to self-contained .mjs — @ka/core + every pure-JS dep
+  #      inlined; ONLY the 3 native packages left external.
+  #   2. `npm install` just those 3 natives into $dest/node_modules so the platform's
+  #      .node files resolve next to the bundle (no pnpm symlink farm, no repo pointer).
+  # Entries: dist/index.mjs (stdio MCP) + dist/daemon.mjs (the kb-retrieval HTTP daemon).
+  # 🔴 Non-disruptive: only lays down the artifact. Does NOT register the MCP
+  #    (register_mcp, --switch) and does NOT start the daemon (ka kb-retrieval start /
+  #    阶段B). A plain install never changes a running CC.
+  local src="$REPO_ROOT/kb/mcp-server" dest="$RUNTIME/kb/mcp/kb"
+  log "kb MCP + kb-retrieval daemon → ${dest} (esbuild self-contained + npm install natives)"
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  [dry-run] pnpm --filter @ka/core build  (esbuild resolves @ka/core from its dist)"
+    echo "  [dry-run] esbuild src/{index,daemon}.ts --bundle --external:onnxruntime-node,@lancedb/lancedb,fastembed -> ${dest}/dist/{index,daemon}.mjs"
+    echo "  [dry-run] write ${dest}/package.json (natives) + npm install --omit=dev (materialize @lancedb/fastembed/onnxruntime for this platform)"
+    echo "  [dry-run] cp kb/ops/kb-retrieval/*.sh -> ${dest}; model cache: keep ${dest}/local_cache if present, else copy repo local_cache (one-time multi-GB) else warn"
+    return 0
+  fi
+  local ESB; ESB="$(find "$REPO_ROOT/node_modules/.pnpm" -path '*esbuild@*/node_modules/esbuild/bin/esbuild' -type f 2>/dev/null | head -1 || true)"
+  [ -n "$ESB" ] || { log "  WARN esbuild not found (need pnpm install), skipping"; return 0; }
+  command -v npm >/dev/null 2>&1 || { log "  WARN npm not found, skipping"; return 0; }
+  # 1) Build @ka/core so esbuild resolves it from dist (its lazy-loaded lance-engine
+  #    chunk keeps the bundle's native refs behind the dynamic import).
+  ( cd "$REPO_ROOT" && pnpm --filter @ka/core build >/dev/null 2>&1 ) \
+    || { log "  FAIL build @ka/core"; return 0; }
+  # 2) 🔒 Back up current dist+scripts (rollback net) — only if previously deployed.
+  if [ -d "$dest" ] && [ -e "$dest/daemon.sh" ]; then
+    local bak="${dest}.bak.$(date +%Y%m%d-%H%M%S)"
+    rm -rf "$bak"; mkdir -p "$bak"
+    cp -a "$dest/dist" "$bak/dist" 2>/dev/null || true
+    cp -a "$dest"/*.sh "$bak/" 2>/dev/null || true
+    log "  🔒 backed up current dist+scripts → ${bak}  (rollback: ka kb-retrieval stop; restore dist/*.sh; ka kb-retrieval start)"
+  fi
+  # 3) esbuild both entries → self-contained .mjs (natives external).
+  mkdir -p "$dest/dist"
+  local e ok=1
+  for e in index daemon; do
+    if ! "$ESB" "$src/src/$e.ts" --bundle --platform=node --format=esm \
+        --external:onnxruntime-node --external:@lancedb/lancedb --external:fastembed \
+        --banner:js="import{createRequire}from'module';const require=createRequire(import.meta.url);" \
+        --outfile="$dest/dist/$e.mjs" >/dev/null 2>&1; then
+      log "  FAIL esbuild $e.ts"; ok=0
+    fi
+  done
+  [ "$ok" = 1 ] || return 0
+  # 4) Materialize the native deps next to the bundle (npm resolves the platform
+  #    closure: @lancedb/lancedb + its platform .node, fastembed + onnxruntime-node).
+  cat > "$dest/package.json" <<'EOF'
+{
+  "name": "ka-kb-mcp-deploy",
+  "private": true,
+  "type": "module",
+  "description": "Deployed kb MCP + kb-retrieval daemon. dist/*.mjs are self-contained esbuild bundles; node_modules holds ONLY the native deps that can't be bundled.",
+  "dependencies": {
+    "@lancedb/lancedb": "^0.30.0",
+    "fastembed": "^2.1.0"
+  }
+}
+EOF
+  if ! ( cd "$dest" && npm install --omit=dev --no-audit --no-fund >/dev/null 2>&1 ); then
+    log "  FAIL npm install natives (need network on first deploy)"; return 0
+  fi
+  [ -d "$dest/node_modules/@lancedb" ] && [ -d "$dest/node_modules/fastembed" ] \
+    || { log "  FAIL native deps missing after npm install"; return 0; }
+  # 5) Launch scripts for the kb-retrieval daemon.
+  local f
+  for f in daemon.sh start.sh stop.sh status.sh; do
+    cp "$REPO_ROOT/kb/ops/kb-retrieval/$f" "$dest/$f"
+  done
+  chmod +x "$dest"/*.sh
+  # 6) Embedding model cache (fastembed ONNX, multi-GB). Persist across installs:
+  #    keep an existing one; else copy the repo's; else leave it to download on
+  #    first daemon run. The daemon cd's into $dest, so fastembed finds ./local_cache.
+  if [ -e "$dest/local_cache" ]; then
+    log "  model cache present at ${dest}/local_cache (kept)"
+  else
+    local cache_src=""
+    [ -d "$src/local_cache" ] && cache_src="$src/local_cache"
+    [ -z "$cache_src" ] && [ -d "$REPO_ROOT/kb/core/local_cache" ] && cache_src="$REPO_ROOT/kb/core/local_cache"
+    if [ -n "$cache_src" ]; then
+      log "  copying model cache ${cache_src} → ${dest}/local_cache (one-time, multi-GB)…"
+      cp -R "$cache_src" "$dest/local_cache"
+    else
+      log "  ⚠️ no model cache in repo — the daemon will download multilingual-e5-large to ${dest}/local_cache on first run (needs network)"
+    fi
+  fi
+  local nmsz; nmsz="$(du -sh "$dest/node_modules" 2>/dev/null | cut -f1)"
+  log "  OK ${dest} (dist[index.mjs+daemon.mjs] + node_modules[${nmsz}, natives only] + scripts; deployed, NOT registered/started)"
 }
 
 deploy_opennutrition() { # P1.4: node MCP special case (native better-sqlite3 + compressed dataset)
@@ -509,7 +606,10 @@ rt = os.environ["RT"]; p = sys.argv[1]
 d = json.load(open(p))
 ms = d.get("mcpServers", {})
 mapping = {
-    "knowledge-assistant": f"{rt}/kb/mcp/kb/index.mjs",
+    # kb ships as a self-contained esbuild bundle (dist/index.mjs) with an adjacent
+    # node_modules holding only the native LanceDB deps. (阶段B may instead register
+    # kb as type:http pointing at the kb-retrieval daemon on the configured port.)
+    "knowledge-assistant": f"{rt}/kb/mcp/kb/dist/index.mjs",
     "market-data":         f"{rt}/kb/mcp/market/index.mjs",
     "opennutrition":       f"{rt}/kb/mcp/opennutrition/build/index.js",
 }
@@ -750,6 +850,7 @@ main() {
   if [ "$DO_CLEANUP" = 1 ]; then do_cleanup_old; echo "----"; log "cleanup-old done."; return 0; fi
   deploy_ka
   deploy_node_mcp
+  deploy_kb_mcp
   deploy_opennutrition
   deploy_python_mcp
   deploy_daemon
