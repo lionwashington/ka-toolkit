@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@orama/orama": "^3.1.0",
+    "fastembed": "^2.1.0",
     "gray-matter": "^4.0.3",
     "yaml": "^2.4.0",
     "zod": "^3.23.0"
