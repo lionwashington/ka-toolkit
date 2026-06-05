@@ -63,10 +63,23 @@ function expandHome(filepath: string): string {
   return filepath
 }
 
-const DEFAULT_CONFIG_PATHS = [
-  '~/.knowledge-assistant/config.yaml',
-  '~/.knowledge-assistant/config.yml',
-]
+// gen3: config + secrets live in the CONFIG DIR ($KA_CONFIG_DIR, else $KA_HOME/config,
+// else ~/.knowledge-assistant/config) — NOT the KA_HOME root. Resolved at call time so
+// the daemon / tests can repoint via $KA_CONFIG_DIR or $KA_HOME. (The old top-level
+// ~/.knowledge-assistant/config.yaml is retired — everything reads config/ now.)
+function configDir(): string {
+  if (process.env.KA_CONFIG_DIR) return process.env.KA_CONFIG_DIR
+  const home = process.env.KA_HOME || join(homedir(), '.knowledge-assistant')
+  return join(home, 'config')
+}
+function defaultConfigPaths(): string[] {
+  const d = configDir()
+  return [join(d, 'config.yaml'), join(d, 'config.yml')]
+}
+function defaultSecretsPaths(): string[] {
+  const d = configDir()
+  return [join(d, 'secrets.yaml'), join(d, 'secrets.yml')]
+}
 
 export function loadConfig(configPath?: string): KaConfig {
   let raw: Record<string, unknown> = {}
@@ -82,7 +95,7 @@ export function loadConfig(configPath?: string): KaConfig {
       }
     }
   } else {
-    for (const p of DEFAULT_CONFIG_PATHS) {
+    for (const p of defaultConfigPaths()) {
       const resolved = expandHome(p)
       if (existsSync(resolved)) {
         const content = readFileSync(resolved, 'utf-8')
@@ -150,11 +163,6 @@ export function injectChannels(config: Pick<KaConfig, 'channels'>): string[] {
   }
 }
 
-const DEFAULT_SECRETS_PATHS = [
-  '~/.knowledge-assistant/secrets.yaml',
-  '~/.knowledge-assistant/secrets.yml',
-]
-
 export function loadSecrets(secretsPath?: string): KaSecrets {
   let raw: Record<string, unknown> = {}
 
@@ -169,7 +177,7 @@ export function loadSecrets(secretsPath?: string): KaSecrets {
       }
     }
   } else {
-    for (const p of DEFAULT_SECRETS_PATHS) {
+    for (const p of defaultSecretsPaths()) {
       const resolved = expandHome(p)
       if (existsSync(resolved)) {
         const content = readFileSync(resolved, 'utf-8')
