@@ -1,0 +1,8 @@
+[
+  { "query": "Clash TUN NAT 配置", "expect": ["sample-network"], "note": "回归: 词面+语义" },
+  { "query": "网怎么又连不上了梯子", "expect": ["sample-network"], "note": "口语化, 测语义" },
+  { "query": "DNS GeoSite GeoIP 分流规则", "expect": ["sample-dns"] },
+  { "query": "ASUS 路由器 双层 DNS", "expect": ["sample-router"] },
+  { "query": "跑步 Zone2 心率 有氧", "expect": ["sample-cardio"] },
+  { "query": "IBKR 投资仓位 ETF 现金", "expect": ["sample-finance"] }
+]
