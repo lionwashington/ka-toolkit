@@ -3,7 +3,6 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRetriever, LanceRetriever } from './retriever.js'
-import { KnowledgeRetrieval } from './retrieval.js'
 import { LanceEngine } from './lance-engine.js'
 import { reindex } from './indexer.js'
 
@@ -26,14 +25,9 @@ beforeAll(async () => {
 afterAll(() => rmSync(kb, { recursive: true, force: true }))
 
 describe('createRetriever', () => {
-  it('defaults to Orama (KnowledgeRetrieval)', () => {
-    expect(createRetriever(kb, {})).toBeInstanceOf(KnowledgeRetrieval)
-    expect(createRetriever(kb, { retrieval: { engine: 'orama' } })).toBeInstanceOf(KnowledgeRetrieval)
-  })
-
-  it('returns LanceRetriever when engine=lancedb', () => {
-    const r = createRetriever(kb, { retrieval: { engine: 'lancedb' } }, { embedder: fakeEmbedder as any })
-    expect(r).toBeInstanceOf(LanceRetriever)
+  it('always returns the LanceDB retriever (single backend)', () => {
+    expect(createRetriever(kb, {})).toBeInstanceOf(LanceRetriever)
+    expect(createRetriever(kb, {}, { embedder: fakeEmbedder as any })).toBeInstanceOf(LanceRetriever)
   })
 })
 

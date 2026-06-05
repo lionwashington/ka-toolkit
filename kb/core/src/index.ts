@@ -11,7 +11,6 @@ export type { SplitPlan, SubTopicSpec, SplitOptions as SplitTopicOptions, SplitT
 export { KnowledgeStore } from './knowledge-store/store.js'
 export type { Topic, TopicSummary, IndexData } from './knowledge-store/types.js'
 export { parseFrontmatter, serializeWithFrontmatter } from './knowledge-store/markdown.js'
-export { KnowledgeRetrieval } from './retrieval/retrieval.js'
 export type { SearchOptions, SearchResult } from './retrieval/types.js'
 // LanceDB hybrid retrieval engine (阶段A) — the daemon + `ka kb reindex` use these.
 export { createRetriever, LanceRetriever, LANCE_DB_SUBDIR, type Retriever } from './retrieval/retriever.js'

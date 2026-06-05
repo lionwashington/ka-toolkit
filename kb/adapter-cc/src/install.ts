@@ -98,7 +98,6 @@ async function setupConfig(): Promise<Record<string, any>> {
     },
     retrieval: {
       max_results: 5,
-      min_score: 0.7,
     },
   }
 

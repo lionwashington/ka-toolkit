@@ -1,6 +1,5 @@
 export interface SearchOptions {
   maxResults?: number
-  minScore?: number
   filter?: {
     type?: 'topic' | 'conversation'
   }

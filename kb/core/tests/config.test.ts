@@ -24,7 +24,6 @@ distiller:
   interval: "1h"
 retrieval:
   max_results: 10
-  min_score: 0.8
 `)
 
     const config = loadConfig(configPath)

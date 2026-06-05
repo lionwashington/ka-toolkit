@@ -1,8 +1,10 @@
 // Integration test for the shared HTTP retrieval daemon: boots the real daemon
 // against the sanitized self-made corpus (tests/kb-eval/corpus), connects a real
 // MCP client over Streamable HTTP, and exercises the tool surface end-to-end.
-// The orama path runs always (no model). A lancedb variant, gated behind RUN_E5=1,
-// proves the shared embedding model is loaded once and served over HTTP.
+// The always-on test proves the HTTP transport + tool surface WITHOUT loading the
+// embedding model (kb_list_topics/kb_read_topic are store-backed; kb_search with
+// no index returns gracefully). A model-backed variant, gated behind RUN_E5=1,
+// proves the shared e5 model is loaded once and hybrid search is served over HTTP.
 import { describe, it, expect } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, cpSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -30,12 +32,11 @@ function freePort(): Promise<number> {
 
 /**
  * Boot the daemon against a FRESH COPY of the corpus in a temp dir — never the
- * committed source (the orama store writes INDEX.md and lancedb writes .vectors/).
+ * committed source (the store writes INDEX.md, the engine writes .vectors/).
  * `prepare(kbDir)` runs after the copy, before the daemon starts (e.g. to build
- * the lancedb index into the temp KB so the daemon's LanceRetriever finds it).
+ * the LanceDB index into the temp KB so the daemon's retriever finds it).
  */
 async function withDaemon(
-  engine: 'orama' | 'lancedb',
   fn: (client: Client) => Promise<void>,
   prepare?: (kbDir: string) => Promise<void>,
 ) {
@@ -53,7 +54,6 @@ async function withDaemon(
       `knowledge_base_path: ${kbDir}`,
       `state_dir: ${stateDir}`,
       `retrieval:`,
-      `  engine: ${engine}`,
       `  daemon:`,
       `    host: 127.0.0.1`,
       `    port: ${port}`,
@@ -74,43 +74,42 @@ async function withDaemon(
   }
 }
 
+const textOf = (r: unknown) => (r as { content: Array<{ text: string }> }).content[0].text
+
 describe('kb-retrieval HTTP daemon', () => {
-  it('exposes the kb tool surface and serves kb_list_topics / kb_search over HTTP (orama)', async () => {
-    await withDaemon('orama', async (client) => {
+  it('exposes the kb tool surface and serves store-backed tools over HTTP (no model)', async () => {
+    await withDaemon(async (client) => {
       const tools = (await client.listTools()).tools.map((t) => t.name).sort()
       expect(tools).toEqual(['kb_list_topics', 'kb_read_topic', 'kb_search', 'kb_status'])
 
-      const list = await client.callTool({ name: 'kb_list_topics', arguments: {} })
-      const listText = (list.content as Array<{ type: string; text: string }>)[0].text
       // kb_list_topics shows frontmatter titles; the corpus's network topic is 网络配置.
-      expect(listText).toMatch(/网络配置/)
+      const list = await client.callTool({ name: 'kb_list_topics', arguments: {} })
+      expect(textOf(list)).toMatch(/网络配置/)
 
+      // kb_search with no index built yet returns gracefully (proves the HTTP path
+      // + retriever wiring without loading the embedding model).
       const search = await client.callTool({
         name: 'kb_search',
         arguments: { query: 'NAT 模式', max_results: 5 },
       })
-      const searchText = (search.content as Array<{ type: string; text: string }>)[0].text
-      // Orama BM25 should surface the network topic for a network query.
-      expect(searchText.length).toBeGreaterThan(0)
+      expect(textOf(search).length).toBeGreaterThan(0)
     })
   }, 60_000)
 
   it.runIf(process.env.RUN_E5 === '1')(
-    'serves hybrid kb_search over HTTP with one shared e5 model (lancedb, RUN_E5=1)',
+    'serves hybrid kb_search over HTTP with one shared e5 model (RUN_E5=1)',
     async () => {
       const { createEmbedder, LanceEngine, reindex, LANCE_DB_SUBDIR } = await import('@ka/core')
       await withDaemon(
-        'lancedb',
         async (client) => {
           const search = await client.callTool({
             name: 'kb_search',
             arguments: { query: '上不了网，连不上路由器', max_results: 5 },
           })
-          const text = (search.content as Array<{ type: string; text: string }>)[0].text
           // Hybrid search should surface the network/router topic for a colloquial query.
-          expect(text).toMatch(/网络配置|路由器/)
+          expect(textOf(search)).toMatch(/网络配置|路由器/)
         },
-        // Build the lancedb index into the temp KB so the daemon's LanceRetriever
+        // Build the LanceDB index into the temp KB so the daemon's retriever
         // (which looks under kbDir/.vectors/lancedb) finds it. One shared embedder.
         async (kbDir) => {
           const emb = createEmbedder()

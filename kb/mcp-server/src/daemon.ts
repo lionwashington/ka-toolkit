@@ -58,10 +58,9 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
   const port = config.retrieval.daemon.port
   const log = makeLogger(stateDir)
 
-  // The ONE shared retriever — engine selected by config (orama | lancedb).
-  // For lancedb this constructs the embedder; the model itself loads lazily on
-  // the first embed. We warm it below so the first real query isn't slow and so
-  // /api/status can report readiness.
+  // The ONE shared retriever (LanceDB hybrid). Constructing it sets up the
+  // embedder; the model itself loads lazily on the first embed. We warm it below
+  // so the first real query isn't slow and so /api/status can report readiness.
   const retriever: Retriever = createRetriever(config.knowledge_base_path, config)
   let ready = false
   let warmError: string | null = null
@@ -124,7 +123,7 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
       service: 'kb-retrieval',
       pid: process.pid,
       uptime_seconds: Math.floor(process.uptime()),
-      engine: config.retrieval.engine,
+      engine: 'lancedb',
       ready,
       warm_error: warmError,
       mcp_sessions: sessions.size,
@@ -141,11 +140,11 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
   app.use((_req, res) => res.status(404).json({ ok: false, error: 'not_found' }))
 
   const httpServer = app.listen(port, host, async () => {
-    log(`kb-retrieval daemon listening on ${host}:${port}/mcp (pid=${process.pid}, engine=${config.retrieval.engine})`)
+    log(`kb-retrieval daemon listening on ${host}:${port}/mcp (pid=${process.pid}, engine=lancedb)`)
     // Warm the retriever so the model loads now, not on the first user query.
     try {
-      await retriever.indexAll() // orama: build index; lancedb: no-op
-      await retriever.search('warmup', { maxResults: 1, minScore: config.retrieval.min_score })
+      await retriever.indexAll() // lancedb: no-op (index built by `ka kb reindex`)
+      await retriever.search('warmup', { maxResults: 1 })
       ready = true
       log('retriever warm — ready')
     } catch (e: any) {

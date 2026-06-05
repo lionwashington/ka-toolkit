@@ -17,15 +17,11 @@ const ConfigSchema = z.object({
   }).default({}),
   retrieval: z.object({
     max_results: z.number().default(5),
-    min_score: z.number().default(0.7),
-    // Retrieval backend: 'orama' (current BM25) | 'lancedb' (hybrid vector+FTS).
-    // Default orama until the LanceDB engine is verified + cut over (阶段B).
-    engine: z.enum(['orama', 'lancedb']).default('orama').catch('orama'),
     // Shared HTTP retrieval daemon (kb-retrieval): one resident process holds the
     // LanceDB connection + embedding model (loaded once) and serves every CC over
-    // /mcp, instead of each CC spawning its own stdio server. Only used when CCs
-    // register the kb MCP as type:http pointing here; the stdio entry still works
-    // standalone. Loopback-only by default.
+    // /mcp, instead of each CC spawning its own stdio server. Loopback-only by
+    // default. The backend is LanceDB hybrid (vector + Intl-FTS + RRF, top-k) —
+    // the single retrieval engine; there is no min_score cutoff (rank-based fusion).
     daemon: z.object({
       host: z.string().default('127.0.0.1'),
       port: z.number().default(7705),

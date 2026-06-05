@@ -39,13 +39,12 @@ vi.mock('@ka/core', () => {
 
   return {
     KnowledgeStore: vi.fn().mockReturnValue(mockStore),
-    KnowledgeRetrieval: vi.fn().mockReturnValue(mockRetrieval),
     createRetriever: vi.fn().mockReturnValue(mockRetrieval),
     loadConfig: vi.fn().mockReturnValue({
       channel_kind: 'telegram',
       knowledge_base_path: '/tmp/test-kb',
       distiller: { interval: '1h' },
-      retrieval: { max_results: 5, min_score: 0.3 },
+      retrieval: { max_results: 5, daemon: { host: '127.0.0.1', port: 7705 } },
       memory: { frozen_snapshot: false },
     }),
   }
@@ -80,11 +79,11 @@ describe('MCP Server', () => {
 
   describe('tool handlers', () => {
     it('kb_search returns results', async () => {
-      const { KnowledgeRetrieval } = await import('@ka/core')
-      const retrieval = (KnowledgeRetrieval as ReturnType<typeof vi.fn>).mock.results[0]?.value
+      const { createRetriever } = await import('@ka/core')
+      const retriever = (createRetriever as ReturnType<typeof vi.fn>).mock.results[0]?.value
 
-      if (retrieval) {
-        const results = await retrieval.search('typescript patterns', { maxResults: 5, minScore: 0.3 })
+      if (retriever) {
+        const results = await retriever.search('typescript patterns', { maxResults: 5 })
         expect(results).toHaveLength(1)
         expect(results[0].title).toBe('typescript')
         expect(results[0].score).toBe(0.85)

@@ -1,11 +1,8 @@
-// The retrieval adapter that keeps the MCP tool signatures unchanged while letting
-// the backend be swapped by config. Both backends produce the same SearchResult[]:
-//   - KnowledgeRetrieval  → Orama BM25 (current default / fallback)
-//   - LanceRetriever      → LanceDB hybrid engine (vector + Intl-FTS + RRF)
-// `config.retrieval.engine` selects which. The LanceDB index is built by the writer
-// (`ka kb reindex` / distill); this reader opens it lazily and reloads on version bump.
+// The retrieval adapter behind the MCP tools. The single backend is the LanceDB
+// hybrid engine (vector ANN + Intl-segmented FTS + RRF, top-k) — produces
+// SearchResult[]. The LanceDB index is built by the writer (`ka kb reindex` /
+// distill); this reader opens it lazily and reloads on manifest version bump.
 import { join } from 'node:path'
-import { KnowledgeRetrieval } from './retrieval.js'
 import type { LanceEngine } from './lance-engine.js'
 import type { Embedder } from './embedder.js'
 import type { SearchOptions, SearchResult } from './types.js'
@@ -31,8 +28,9 @@ export class LanceRetriever implements Retriever {
    * Lazily construct the engine via DYNAMIC import. This is the load-bearing
    * boundary: the lancedb engine + fastembed pull in native modules
    * (onnxruntime, lancedb's .node), so keeping them off the static import graph
-   * lets the orama default path (and its self-contained esbuild bundle) stay
-   * free of native deps — they only resolve when the lancedb backend is used.
+   * means `import '@ka/core'` loads zero native modules — consumers that never
+   * search (cron CLIs, distill, daily-brief) don't pay the model/onnxruntime load.
+   * The natives only resolve on the first actual search.
    */
   private engine(): Promise<LanceEngine> {
     if (!this.enginePromise) {
@@ -69,17 +67,18 @@ export class LanceRetriever implements Retriever {
 }
 
 export interface RetrieverConfig {
-  retrieval?: { engine?: string }
+  retrieval?: unknown
 }
 
-/** Pick the retrieval backend from config (default orama; lancedb opt-in). */
+/**
+ * Construct the retriever. There is a single backend (LanceDB hybrid); the
+ * config param is kept for call-site stability and future knobs. An optional
+ * embedder lets the daemon share one model across all CCs.
+ */
 export function createRetriever(
   kbPath: string,
-  config: RetrieverConfig,
+  _config: RetrieverConfig,
   opts: { embedder?: Embedder } = {},
 ): Retriever {
-  if (config.retrieval?.engine === 'lancedb') {
-    return new LanceRetriever(kbPath, opts.embedder)
-  }
-  return new KnowledgeRetrieval(kbPath)
+  return new LanceRetriever(kbPath, opts.embedder)
 }

@@ -4,30 +4,27 @@ import { z } from 'zod'
 import { appendFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
-import { KnowledgeStore, KnowledgeRetrieval, createRetriever, loadConfig, type Retriever, type KaConfig } from '@ka/core'
+import { KnowledgeStore, createRetriever, loadConfig, type Retriever, type KaConfig } from '@ka/core'
 
 /**
- * Build the kb MCP server. The retrieval backend is config-selected
- * (`retrieval.engine`: orama | lancedb) via createRetriever; a daemon can inject a
- * pre-built LanceRetriever (so the embedding model loads once, shared across CCs)
- * AND its own loaded config (so the store/KB path match the daemon's config rather
- * than re-reading the default ~/.knowledge-assistant/config.yaml). The tool
- * signatures (kb_search/read_topic/list_topics/status) are unchanged.
+ * Build the kb MCP server. Retrieval is the LanceDB hybrid engine via
+ * createRetriever; a daemon can inject a pre-built LanceRetriever (so the
+ * embedding model loads once, shared across CCs) AND its own loaded config (so
+ * the store/KB path match the daemon's config rather than re-reading the default
+ * ~/.knowledge-assistant/config.yaml). The tool signatures
+ * (kb_search/read_topic/list_topics/status) are stable.
  */
 export function createMcpServer(opts: { retriever?: Retriever; config?: KaConfig } = {}) {
   const config = opts.config ?? loadConfig()
   const store = new KnowledgeStore(config.knowledge_base_path)
   const retriever = opts.retriever ?? createRetriever(config.knowledge_base_path, config)
-  // The distill→reindex hook (store.setRetrieval) is Orama-only and only matters in
-  // the distiller process, not this reader; wire it solely for the Orama path.
-  if (retriever instanceof KnowledgeRetrieval) store.setRetrieval(retriever)
 
   // Get topic names dynamically for kb_search description
   let topicNames: string[] = []
   try {
     store.init()
     topicNames = store.listTopics().map((t) => t.name)
-    retriever.indexAll().catch(() => {}) // Orama: build on startup; lancedb: no-op
+    retriever.indexAll().catch(() => {}) // lancedb: no-op (index built by `ka kb reindex`)
   } catch {
     // Knowledge base may not be initialized yet
   }
@@ -51,7 +48,6 @@ export function createMcpServer(opts: { retriever?: Retriever; config?: KaConfig
       try {
         const results = await retriever.search(query, {
           maxResults: max_results ?? config.retrieval.max_results,
-          minScore: config.retrieval.min_score,
         })
 
         if (results.length === 0) {

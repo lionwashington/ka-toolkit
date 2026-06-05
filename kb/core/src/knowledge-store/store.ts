@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { parseFrontmatter, serializeWithFrontmatter } from './markdown.js'
-import type { KnowledgeRetrieval } from '../retrieval/retrieval.js'
 import type { Topic, TopicSummary } from './types.js'
 
 function sanitizeTopicName(name: string): string {
@@ -16,14 +15,9 @@ function sanitizeTopicName(name: string): string {
 
 export class KnowledgeStore {
   private basePath: string
-  private retrieval: KnowledgeRetrieval | null = null
 
   constructor(basePath: string) {
     this.basePath = basePath
-  }
-
-  setRetrieval(retrieval: KnowledgeRetrieval): void {
-    this.retrieval = retrieval
   }
 
   get root(): string {
@@ -159,9 +153,7 @@ export class KnowledgeStore {
     const body = `# Knowledge Base Index\n\n## Topics\n\n${topicLines}`
 
     writeFileSync(this.indexPath, serializeWithFrontmatter(data, body), 'utf-8')
-
-    if (this.retrieval) {
-      this.retrieval.indexAll().catch(() => {})
-    }
+    // The LanceDB index is rebuilt out-of-band by `ka kb reindex` / the distill
+    // increment, not synchronously on topic save — so no in-process reindex hook here.
   }
 }

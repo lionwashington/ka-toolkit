@@ -4,7 +4,7 @@ import { defineConfig } from 'tsup'
 // bash (cron / doctor) and the distill worker. They must be fully self-contained,
 // so bundle ALL third-party deps in (noExternal) + a createRequire shim so any
 // CJS dep's bare require() resolves under ESM output. Covers yaml / zod /
-// gray-matter / @orama — a missing one crashes at runtime with ERR_MODULE_NOT_FOUND.
+// gray-matter — a missing one crashes at runtime with ERR_MODULE_NOT_FOUND.
 const cli = {
   format: ['esm'] as const,
   dts: false,
