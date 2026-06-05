@@ -145,7 +145,7 @@ ka cron run lark-daemon    # foreground test (should report the daemon already u
 2. The CC calls `reply` (passing `chat_id`) → the group receives `**[#number-name]** …`.
 3. `to <another channel>: …` → routes to that CC.
 4. Restart the lark daemon (stop/start) → the CC **needs no restart and no touch**; the receive line reconnects automatically via re-adopt
-   (see docs/telegram-channel-design.md §6c/§6d; when downtime is < ~2.5s).
+   (see docs/channels/telegram/ARCHITECTURE.md §6c/§6d; when downtime is < ~2.5s).
 
 To run the tests without a real Lark: `cd channels/lark && pnpm test` (19 of them).
 

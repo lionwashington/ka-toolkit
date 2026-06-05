@@ -140,7 +140,7 @@ claude-ch main --dangerously-skip-permissions --dangerously-load-development-cha
 3. **Routing**: send `to <another channel name>: content` in the group → delivered to that channel; no prefix → `main`.
 4. **Offline replay**: messages sent in the group while cc is disconnected are delivered after cc reconnects (the watermark doesn't advance).
 5. **Daemon-restart auto-recovery**: restart the daemon (`stop.sh` then `start.sh`); cc **needs no restart, no touch**,
-   the receive line is reconnected automatically via re-adopt (when downtime is short; see `docs/telegram-channel-design.md` §6c/§6d).
+   the receive line is reconnected automatically via re-adopt (when downtime is short; see `docs/channels/telegram/ARCHITECTURE.md` §6c/§6d).
 
 ---
 

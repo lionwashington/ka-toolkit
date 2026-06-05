@@ -147,7 +147,7 @@ restart a single mate = stop that pane + re-start. **Restarting loses that CC's 
 
 > **If your channel merely dropped** (e.g. the CC went flat after a daemon restart and isn't receiving messages), **don't use
 > restart** — in that CC's window, manually trigger one tool call to make it re-init, and you won't lose
-> context (see `telegram-channel-design.md` A5). restart is only for when a CC is truly stuck / you need to change cwd /
+> context (see `channels/telegram/ARCHITECTURE.md` A5). restart is only for when a CC is truly stuck / you need to change cwd /
 > you need to clear state.
 
 To restart the **whole** workshop use `ka workshop restart` (no name) — run it from a plain terminal, since stopping the session would otherwise kill the invoking pane.
@@ -196,8 +196,8 @@ plugin. `ka workshop` automatically ensures the daemon is running at startup (un
 - **CC → user**: the `reply` tool (replies to Telegram).
 - **user → CC**: route in Telegram with `to <name>:` or `to <number>:`.
 
-For the daemon's design, half-open connection diagnostics, and the A5 reconnect mechanism, see `telegram-channel-design.md` and
-`telegram-channel-design.md` (§5). Daemon status can be viewed with the `/telegram-channel` skill.
+For the daemon's design, half-open connection diagnostics, and the A5 reconnect mechanism, see `channels/telegram/ARCHITECTURE.md` and
+`channels/telegram/ARCHITECTURE.md` (§5). Daemon status can be viewed with the `/telegram-channel` skill.
 
 ---
 

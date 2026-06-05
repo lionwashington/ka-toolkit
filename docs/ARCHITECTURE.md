@@ -5,7 +5,7 @@
 > deployed runtime layout below reflect the **ka-gen3 reorganization** (source organized by the four
 > functional parts; runtime is a single root with no `runtime/` wrapper — see §1.5).
 > It no longer describes any retired legacy paths. If it conflicts with the code, the code wins (ground truth: top-level `install.sh`,
-> `workshop/ops/workshop.sh`, `shared/bin/ka`, `docs/telegram-channel-design.md`).
+> `workshop/ops/workshop.sh`, `shared/bin/ka`, `docs/channels/telegram/ARCHITECTURE.md`).
 >
 > **The two pillars of ka-gen2**:
 > - **Startup converges onto `ka workshop` + the telegram-channel daemon**: a mate = its own independent CC process
@@ -191,7 +191,7 @@ deposits → queries** them into an Obsidian-compatible Markdown knowledge base 
 | **capture** | `kb/core/src/` + the CC capture-hook | Write the session transcript into `~/.knowledge-assistant/raw/` |
 | **distiller** | `kb/core/src/` | Distill `raw/` into `memory/topics/*.md` (user memory / skills / log / topic suggestions) |
 | **knowledge-store** | `kb/core/src/` | KB read/write + Obsidian-compatible markdown + INDEX routing |
-| **retrieval / watermark** | `kb/core/src/` | CJK-tokenized retrieval + incremental watermark (never reprocesses already-distilled raw) |
+| **retrieval / watermark** | `kb/core/src/` | LanceDB hybrid `kb_search` (vector + Intl-segmented FTS + RRF, shared daemon, incremental sync — see [`docs/components/kb-retrieval.md`](components/kb-retrieval.md)) + incremental watermark (never reprocesses already-distilled raw) |
 | **kb MCP server** | `kb/mcp-server/` | Expose `kb_search / kb_read_topic / kb_list_topics / kb_status` to any MCP client |
 | **/kb skill** | `kb/skills/kb.md` | Skill entry point for browsing / searching / triggering distillation / reviewing topic suggestions |
 
@@ -211,7 +211,7 @@ the outward channel, and **`ka workshop`** orchestrates a set of independent CC 
 
 ### §3.1 telegram-channel daemon (the single channel exit)
 
-For implementation-level details see `docs/telegram-channel-design.md`. Key points:
+For implementation-level details see `docs/channels/telegram/ARCHITECTURE.md`. Key points:
 
 - **A standalone background daemon**: node + express, bound to `127.0.0.1:9877`, **MCP-over-HTTP**
   (`/mcp` SSE), **not a CC plugin and not relying on flock**. Singleton via port binding (`EADDRINUSE → exit 0`).
@@ -219,7 +219,7 @@ For implementation-level details see `docs/telegram-channel-design.md`. Key poin
   token**, they only send/receive via MCP tools (`reply` / `send_to_channel`) — a single credential exit.
 - **Multi-channel routing**: in Telegram the user routes to a target channel with a `to <name|number>:` prefix
   (no prefix → `main`); each CC process is attached to a channel name (registration URL `?name=<X>`).
-- **CC↔CC communication**: via `send_to_channel` (cc2cc, see `docs/telegram-channel-design.md` §5),
+- **CC↔CC communication**: via `send_to_channel` (cc2cc, see `docs/channels/telegram/ARCHITECTURE.md` §5),
   distinct from `reply` which goes to the user.
 - **M6 half-open self-healing (2026-05-31)**: a standard MCP `ping` probe detects a half-open SSE (network jitter / sleep-wake
   causes the daemon's `send()` to silently no-op) → `closeStandaloneSSEStream()` closes the stream to preserve the session, lets the CC
@@ -408,7 +408,7 @@ Three big categories: **the Agent itself** / **KA products (design)** / **per-ma
 | `kb/adapter-cc/` | CC capture/compact hook source |
 | `shared/bin/ka` + `{shared,workshop,channels,cron,kb}/ops/` | CLI + orchestration + cron generator |
 | `install.sh` | unified deployment entry point |
-| `docs/` | this document + telegram-channel-design + KA_CLI_USAGE + INSTALL |
+| `docs/` | this document + channels/telegram/ARCHITECTURE + KA_CLI_USAGE + INSTALL |
 
 ### 7.3 per-machine runtime (not tracked by git)
 

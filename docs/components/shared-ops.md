@@ -110,7 +110,7 @@ The bot token lives **only** in the daemon; no CC process ever touches it.
 `telegram-channel` MCP server pointing at `…/mcp?name=$KA_CHANNEL`. `ka workshop`
 does NOT manage the daemon (it only warns if it's down); daemon lifecycle is
 `ka daemon start|stop|restart|status|config`. Full design:
-`docs/telegram-channel-design.md`. Live state: the `/telegram-channel` skill.
+`docs/channels/telegram/ARCHITECTURE.md`. Live state: the `/telegram-channel` skill.
 
 ## Three-layer cwd guarantee
 

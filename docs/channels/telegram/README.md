@@ -4,7 +4,7 @@ Standalone background daemon that bridges **the owner's Telegram DM** with **mul
 the owner routes messages to different CCs with `to <channel name>: content`, and a CC replies to the owner's DM via the `reply` tool.
 The credential (bot token) lives only at this single daemon exit; **CC processes never touch the token**.
 
-> Implementation-level design / invariants / historical decisions are in [`telegram-channel-design.md`](../../telegram-channel-design.md) (as-built).
+> Implementation-level design / invariants / historical decisions are in [`ARCHITECTURE.md`](ARCHITECTURE.md) (as-built).
 
 ```
 Owner's Telegram DM
@@ -75,7 +75,7 @@ curl -s 127.0.0.1:9877/api/status | python3 -m json.tool   # detailed status
 * * * * * ~/.knowledge-assistant/channels/telegram-daemon/start.sh >> ~/.knowledge-assistant/channels/telegram-daemon/supervisor.log 2>&1
 ```
 
-- **② Connection level / half-open self-heal (M6, 2026-05-31)** — when network jitter causes the CC↔daemon SSE to go one-way half-open (process hasn't crashed, TCP hasn't dropped, but CC isn't receiving dispatches), the daemon's ping probe detects it and automatically `closeStandaloneSSEStream()` (closes the notification stream, keeps the session), triggering CC to reconnect with the same session-id and seamlessly resume, **no manual intervention, no restart** (see `docs/telegram-channel-design.md` A4/A5).
+- **② Connection level / half-open self-heal (M6, 2026-05-31)** — when network jitter causes the CC↔daemon SSE to go one-way half-open (process hasn't crashed, TCP hasn't dropped, but CC isn't receiving dispatches), the daemon's ping probe detects it and automatically `closeStandaloneSSEStream()` (closes the notification stream, keeps the session), triggering CC to reconnect with the same session-id and seamlessly resume, **no manual intervention, no restart** (see `ARCHITECTURE.md` A4/A5).
   - ⚠️ A daemon **process restart** (code upgrade) loses in-memory sessions; existing CCs reconnecting with old ids hit 404 and go idle — in this case **no need to restart the CC** (which would lose runtime context); manually have it call an MCP tool once in its window to trigger a re-init and resume.
 
 **Singleton**: a second daemon hitting port 9877 → `EADDRINUSE` → clean exit (exit 0).
