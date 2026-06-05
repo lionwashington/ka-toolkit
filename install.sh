@@ -242,19 +242,20 @@ EOF
   done
   chmod +x "$dest"/*.sh
   # 6) Embedding model cache (fastembed ONNX, multi-GB). Persist across installs:
-  #    keep an existing one; else copy the repo's; else leave it to download on
-  #    first daemon run. The daemon cd's into $dest, so fastembed finds ./local_cache.
+  #    keep an existing one; else copy from the single shared dev cache (the embedder's
+  #    DEFAULT_EMBED_CACHE_DIR = ~/.cache/ka-toolkit/fastembed); else download on first
+  #    run. daemon.sh exports KA_EMBED_CACHE_DIR=$dest/local_cache so the daemon uses
+  #    this shipped copy (offline), not the dev default.
   if [ -e "$dest/local_cache" ]; then
     log "  model cache present at ${dest}/local_cache (kept)"
   else
     local cache_src=""
-    [ -d "$src/local_cache" ] && cache_src="$src/local_cache"
-    [ -z "$cache_src" ] && [ -d "$REPO_ROOT/kb/core/local_cache" ] && cache_src="$REPO_ROOT/kb/core/local_cache"
+    [ -d "$HOME/.cache/ka-toolkit/fastembed" ] && cache_src="$HOME/.cache/ka-toolkit/fastembed"
     if [ -n "$cache_src" ]; then
       log "  copying model cache ${cache_src} → ${dest}/local_cache (one-time, multi-GB)…"
       cp -R "$cache_src" "$dest/local_cache"
     else
-      log "  ⚠️ no model cache in repo — the daemon will download multilingual-e5-large to ${dest}/local_cache on first run (needs network)"
+      log "  ⚠️ no shared model cache (~/.cache/ka-toolkit/fastembed) — the daemon will download multilingual-e5-large to ${dest}/local_cache on first run (needs network)"
     fi
   fi
   local nmsz; nmsz="$(du -sh "$dest/node_modules" 2>/dev/null | cut -f1)"

@@ -21,7 +21,11 @@ LOCK="$ROOT/.daemon.lock"
 # kb/mcp/kb → ../../.. = KA_HOME. Export so the daemon resolves $KA_HOME/config.
 : "${KA_HOME:=$(cd "$ROOT/../../.." && pwd)}"
 export KA_HOME
-cd "$ROOT"   # fastembed model cache (./local_cache) + node_modules resolve from here
+cd "$ROOT"   # node_modules (native @lancedb/fastembed) resolve from here
+# Point the embedder at the cache shipped alongside this deploy (install put the
+# fastembed model under $ROOT/local_cache). Explicit so it doesn't fall back to the
+# dev default ~/.cache/ka-toolkit/fastembed (which the runtime may not have).
+export KA_EMBED_CACHE_DIR="${KA_EMBED_CACHE_DIR:-$ROOT/local_cache}"
 
 ENTRY="${KA_KB_DAEMON_ENTRY:-$ROOT/dist/daemon.mjs}"
 # gen3 config lives at $KA_HOME/config/config.yaml (KA_CONFIG_DIR), NOT the

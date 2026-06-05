@@ -6,8 +6,20 @@
 // different prefixes — fastembed's queryEmbed/passageEmbed handle that, so the
 // model swap stays behind this interface.
 import { FlagEmbedding, EmbeddingModel } from 'fastembed'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 export const DEFAULT_EMBED_MODEL = EmbeddingModel.MLE5Large // 'fast-multilingual-e5-large'
+
+// ONE shared model-cache location. fastembed otherwise defaults to `./local_cache`
+// relative to CWD, which spawned a duplicate multi-GB cache per package the embedder
+// ran from (repo-root, kb/core, kb/mcp-server). An absolute, CWD-independent default
+// collapses those to a single cache. Resolution: opts.cacheDir > $KA_EMBED_CACHE_DIR
+// (the deployed daemon points this at its shipped cache) > this user-level default.
+export const DEFAULT_EMBED_CACHE_DIR = join(homedir(), '.cache', 'ka-toolkit', 'fastembed')
+export function resolveEmbedCacheDir(cacheDir?: string): string {
+  return cacheDir ?? process.env.KA_EMBED_CACHE_DIR ?? DEFAULT_EMBED_CACHE_DIR
+}
 
 export interface Embedder {
   readonly model: string
@@ -34,11 +46,12 @@ export function createEmbedder(opts: EmbedderOptions = {}): Embedder {
   let _dim = 0
   const toArr = (v: ArrayLike<number>) => Array.from(v as Float32Array)
 
+  const cacheDir = resolveEmbedCacheDir(opts.cacheDir)
   const ensure = async () => {
     if (!fe) {
       // fastembed's init() overloads are finicky to satisfy structurally; the runtime
-      // accepts { model, cacheDir? } — cast past the overload typing.
-      const initOpts = { model, ...(opts.cacheDir ? { cacheDir: opts.cacheDir } : {}) }
+      // accepts { model, cacheDir } — cast past the overload typing.
+      const initOpts = { model, cacheDir }
       fe = await FlagEmbedding.init(initOpts as Parameters<typeof FlagEmbedding.init>[0])
     }
     return fe
