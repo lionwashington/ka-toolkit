@@ -144,16 +144,40 @@ function chunk(text: string, limit: number, mode: 'length' | 'newline'): string[
 
 // Send `text` to a Telegram chat (the owner's DM), chunked. Returns null on
 // success, or an error string. Sent as plain text (no parse_mode).
+//
+// Each chunk is retried with bounded backoff on transient failures — Telegram
+// flood-limits (429, honoring retry_after), 5xx, and network blips — which were
+// the suspected cause of replies silently not arriving (a 429 used to surface as
+// a hard failure and the message was lost). Non-retryable errors (chat not found,
+// bad request) bail immediately and are returned so the caller counts a real
+// failure (reply tool → isError + repliesFailed++). "sent" now means delivered
+// or genuinely-failed, not "fired once and hoped".
+const SEND_MAX_ATTEMPTS = 4
 async function sendToTelegram(chatId: string | number, text: string): Promise<string | null> {
   const chunks = chunk(text, MAX_CHUNK_LIMIT, 'newline')
-  try {
-    for (const c of chunks) {
-      await bot.api.sendMessage(chatId, c)
+  for (const c of chunks) {
+    let lastErr: string | null = null
+    for (let attempt = 0; attempt < SEND_MAX_ATTEMPTS; attempt++) {
+      try {
+        await bot.api.sendMessage(chatId, c)
+        lastErr = null
+        break
+      } catch (e: any) {
+        lastErr = e?.message ?? String(e)
+        const code = e?.error_code
+        const retryAfter = e?.parameters?.retry_after
+        const retryable =
+          code === 429 || (typeof code === 'number' && code >= 500) ||
+          e?.name === 'HttpError' || /network|socket|timed?out|ECONN|EAI_AGAIN|fetch failed/i.test(lastErr)
+        if (!retryable || attempt === SEND_MAX_ATTEMPTS - 1) break
+        const waitMs = retryAfter ? (retryAfter * 1000 + 250) : Math.min(1000 * 2 ** attempt, 8000)
+        log(`sendMessage retry (attempt ${attempt + 1}/${SEND_MAX_ATTEMPTS}, code=${code ?? '?'}, wait ${waitMs}ms): ${lastErr}`)
+        await new Promise((r) => setTimeout(r, waitMs))
+      }
     }
-    return null
-  } catch (e: any) {
-    return e?.message ?? String(e)
+    if (lastErr) return lastErr // surface → reply isError + repliesFailed++
   }
+  return null
 }
 
 // ─────────────────────────── inbound attachments (photo/document/…) ─────────────
