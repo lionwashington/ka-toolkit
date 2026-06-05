@@ -18,6 +18,9 @@ const ConfigSchema = z.object({
   retrieval: z.object({
     max_results: z.number().default(5),
     min_score: z.number().default(0.7),
+    // Retrieval backend: 'orama' (current BM25) | 'lancedb' (hybrid vector+FTS).
+    // Default orama until the LanceDB engine is verified + cut over (阶段B).
+    engine: z.enum(['orama', 'lancedb']).default('orama').catch('orama'),
   }).default({}),
   memory: z.object({
     frozen_snapshot: z.boolean().default(false),
