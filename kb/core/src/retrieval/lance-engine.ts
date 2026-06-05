@@ -3,8 +3,15 @@
 // un-normalized min_score cutoff). Results are de-duped to topic level (best chunk
 // per topic) and conversations are down-weighted (they polluted the old ranking).
 // MCP tool signatures are unchanged; this lives behind the KnowledgeRetrieval layer.
+import { join } from 'node:path'
 import * as lancedb from '@lancedb/lancedb'
 import { segment } from './segmenter.js'
+import {
+  MANIFEST_FILE,
+  readManifest,
+  writeManifest,
+  type IndexManifest,
+} from './manifest.js'
 
 export interface ChunkRow {
   id: string
@@ -37,6 +44,13 @@ export interface EngineEmbedder {
   embedQuery(text: string): Promise<number[]>
 }
 
+/** Build-time metadata recorded in the index manifest. */
+export interface RebuildMeta {
+  sourceMtimeMax?: number
+  embedModel?: string
+  docCount?: number
+}
+
 /** Per-kind weight in the fusion — conversations rank below topic files. */
 const KIND_WEIGHT: Record<string, number> = { parent: 1, sub: 1, conversation: 0.5 }
 const RRF_K = 60
@@ -44,28 +58,83 @@ const RRF_K = 60
 export class LanceEngine {
   private db: lancedb.Connection | null = null
   private tbl: lancedb.Table | null = null
+  private readonly manifestPath: string
+  /** Manifest version the currently-open table reflects (-1 = none loaded). */
+  private loadedVersion = -1
 
   constructor(
     private readonly dbPath: string,
     private readonly embedder: EngineEmbedder,
     private readonly tableName = 'kb',
-  ) {}
+  ) {
+    this.manifestPath = join(dbPath, MANIFEST_FILE)
+  }
 
   private async conn() {
     if (!this.db) this.db = await lancedb.connect(this.dbPath)
     return this.db
   }
 
-  /** Full rebuild: drop + recreate the table from chunk rows, then build the FTS index. */
-  async rebuild(rows: ChunkRow[]): Promise<void> {
-    const db = await this.conn()
-    try { await db.dropTable(this.tableName) } catch { /* table may not exist */ }
-    if (rows.length === 0) { this.tbl = null; return }
-    this.tbl = await db.createTable(this.tableName, rows)
-    await this.tbl.createIndex('text_seg', { config: lancedb.Index.fts(), replace: true })
+  /**
+   * Full rebuild: drop + recreate the table from chunk rows, build the FTS index,
+   * then write the manifest (version bump). On failure the manifest records
+   * status:'error' and the error is RE-THROWN — never silently swallowed.
+   */
+  async rebuild(rows: ChunkRow[], meta: RebuildMeta = {}): Promise<void> {
+    const prev = readManifest(this.manifestPath)?.version ?? 0
+    try {
+      const db = await this.conn()
+      try { await db.dropTable(this.tableName) } catch { /* table may not exist */ }
+      if (rows.length === 0) {
+        this.tbl = null
+      } else {
+        this.tbl = await db.createTable(this.tableName, rows)
+        await this.tbl.createIndex('text_seg', { config: lancedb.Index.fts(), replace: true })
+      }
+      const m: IndexManifest = {
+        engine: 'lancedb',
+        version: prev + 1,
+        built_at: new Date().toISOString(),
+        source_mtime_max: meta.sourceMtimeMax ?? 0,
+        doc_count: meta.docCount ?? new Set(rows.map((r) => r.path)).size,
+        chunk_count: rows.length,
+        embed_model: meta.embedModel ?? '',
+        status: 'ok',
+        error: null,
+      }
+      writeManifest(this.manifestPath, m)
+      this.loadedVersion = m.version
+    } catch (e) {
+      // Fail loud: record the failure in the manifest (old table left in place), re-throw.
+      const cur = readManifest(this.manifestPath)
+      writeManifest(this.manifestPath, {
+        engine: 'lancedb',
+        version: cur?.version ?? prev,
+        built_at: cur?.built_at ?? new Date().toISOString(),
+        source_mtime_max: cur?.source_mtime_max ?? 0,
+        doc_count: cur?.doc_count ?? 0,
+        chunk_count: cur?.chunk_count ?? 0,
+        embed_model: cur?.embed_model ?? '',
+        status: 'error',
+        error: e instanceof Error ? e.message : String(e),
+      })
+      throw e
+    }
+  }
+
+  /** The current manifest (null if the index was never built). */
+  status(): IndexManifest | null {
+    return readManifest(this.manifestPath)
   }
 
   private async table() {
+    // Reload-on-version: if a writer bumped the manifest since we opened the table,
+    // re-open so this long-lived reader serves the latest committed build.
+    const m = readManifest(this.manifestPath)
+    if (m && m.version !== this.loadedVersion) {
+      this.tbl = null
+      this.loadedVersion = m.version
+    }
     if (!this.tbl) {
       const db = await this.conn()
       this.tbl = await db.openTable(this.tableName)
