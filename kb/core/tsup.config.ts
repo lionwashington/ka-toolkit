@@ -16,7 +16,7 @@ const cli = {
 
 export default defineConfig([
   {
-    entry: ['src/index.ts'],
+    entry: ['src/index.ts', 'src/retrieval-index.ts'],
     format: ['esm'],
     dts: true,
     clean: true,

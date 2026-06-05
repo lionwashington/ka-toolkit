@@ -26,7 +26,8 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
-import { loadConfig, createRetriever, type Retriever } from '@ka/core'
+import { loadConfig } from '@ka/core'
+import { createRetriever, type Retriever } from '@ka/core/retrieval'
 import { createMcpServer } from './index.js'
 
 interface Session {

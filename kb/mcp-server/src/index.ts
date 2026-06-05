@@ -4,7 +4,8 @@ import { z } from 'zod'
 import { appendFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
-import { KnowledgeStore, createRetriever, loadConfig, type Retriever, type KaConfig } from '@ka/core'
+import { KnowledgeStore, loadConfig, type KaConfig } from '@ka/core'
+import { createRetriever, type Retriever } from '@ka/core/retrieval'
 
 /**
  * Build the kb MCP server. Retrieval is the LanceDB hybrid engine via

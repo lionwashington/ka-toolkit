@@ -99,7 +99,7 @@ describe('kb-retrieval HTTP daemon', () => {
   it.runIf(process.env.RUN_E5 === '1')(
     'serves hybrid kb_search over HTTP with one shared e5 model (RUN_E5=1)',
     async () => {
-      const { createEmbedder, LanceEngine, reindex, LANCE_DB_SUBDIR } = await import('@ka/core')
+      const { createEmbedder, LanceEngine, reindex, LANCE_DB_SUBDIR } = await import('@ka/core/retrieval')
       await withDaemon(
         async (client) => {
           const search = await client.callTool({

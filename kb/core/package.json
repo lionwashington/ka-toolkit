@@ -4,6 +4,16 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./retrieval": {
+      "types": "./dist/retrieval-index.d.ts",
+      "import": "./dist/retrieval-index.js"
+    }
+  },
   "bin": {
     "ka-jsonl-reader": "./dist/jsonl-reader-cli.js",
     "ka-split-daily-log": "./dist/daily-log-splitter-cli.js",
@@ -27,5 +37,6 @@
     "tsup": "^8.0.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
-  }
+  },
+  "sideEffects": false
 }
