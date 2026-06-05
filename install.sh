@@ -531,22 +531,20 @@ deploy_core_cli() {      # core CLI (called by kb skill) → runtime/core-cli (t
 deploy_skills() {        # skills → runtime/skills/<name>/SKILL.md (design→runtime copy; symlink created by switch_skills)
   want skills || return 0
   local dest="$RUNTIME/kb/skills"
-  log "skills → ${dest} (copy kb/skills/*.md + kb; symlink pointed at runtime by switch_skills)"
+  log "skills → ${dest} (copy kb/skills/*.md; symlink pointed at runtime by switch_skills)"
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  [dry-run] cp kb/skills/*.md + kb/skill/src/kb.md -> ${dest}/<name>/SKILL.md"
+    echo "  [dry-run] cp kb/skills/*.md -> ${dest}/<name>/SKILL.md (incl the kb entry kb/skills/kb.md)"
     return 0
   fi
   mkdir -p "$dest"
+  # All skill sources live flat under kb/skills/*.md (the /kb entry kb.md included —
+  # the old kb/skill package shell was merged in). Each → runtime/kb/skills/<name>/SKILL.md.
   local f name cnt=0
   for f in "$REPO_ROOT"/kb/skills/*.md; do
     [ -f "$f" ] || continue
     name="$(basename "$f" .md)"
     mkdir -p "$dest/$name"; cp "$f" "$dest/$name/SKILL.md"; cnt=$((cnt + 1))
   done
-  # The kb entry source path is special (kb/skill/src/kb.md, not under kb/skills/)
-  if [ -f "$REPO_ROOT/kb/skill/src/kb.md" ]; then
-    mkdir -p "$dest/kb"; cp "$REPO_ROOT/kb/skill/src/kb.md" "$dest/kb/SKILL.md"; cnt=$((cnt + 1))
-  fi
   log "  OK ${dest} (${cnt} skill(s) copied into runtime; pure docs, self-contained)"
 }
 

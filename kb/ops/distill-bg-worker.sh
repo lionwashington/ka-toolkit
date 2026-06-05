@@ -17,7 +17,7 @@
 # Notification: the worker NEVER touches Telegram and holds no token. Telegram
 # has a single egress — the main session. The main session reads the failure
 # sentinel (acked:false) and notifies the user, then sets acked:true. See
-# kb/skill/src/kb.md for the main-side read contract.
+# kb/skills/kb.md for the main-side read contract.
 
 set -uo pipefail
 : "${KA_HOME:=$HOME/.knowledge-assistant}"
@@ -169,7 +169,7 @@ build_prompt() {
 You are a background distiller worker. Run mode: headless Opus, no TTY interaction.
 
 [Task]
-Complete one incremental distill following the /kb distill --foreground workflow in kb/skill/src/kb.md.
+Complete one incremental distill following the /kb distill --foreground workflow in kb/skills/kb.md.
 
 [Snapshot constraints (race condition guard)]
 - session_id: $SESSION_ID

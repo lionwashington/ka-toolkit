@@ -131,8 +131,6 @@ importers:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@25.5.2)
 
-  kb/skill: {}
-
   kb/tools/market-mcp:
     dependencies:
       '@modelcontextprotocol/sdk':

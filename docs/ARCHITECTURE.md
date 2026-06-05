@@ -193,7 +193,7 @@ deposits → queries** them into an Obsidian-compatible Markdown knowledge base 
 | **knowledge-store** | `kb/core/src/` | KB read/write + Obsidian-compatible markdown + INDEX routing |
 | **retrieval / watermark** | `kb/core/src/` | CJK-tokenized retrieval + incremental watermark (never reprocesses already-distilled raw) |
 | **kb MCP server** | `kb/mcp-server/` | Expose `kb_search / kb_read_topic / kb_list_topics / kb_status` to any MCP client |
-| **/kb skill** | `kb/skill/src/kb.md` | Skill entry point for browsing / searching / triggering distillation / reviewing topic suggestions |
+| **/kb skill** | `kb/skills/kb.md` | Skill entry point for browsing / searching / triggering distillation / reviewing topic suggestions |
 
 **Distillation triggers**: ① `/kb distill` (foreground, inside the skill) ② `ka distill` (background)
 ③ `ka cron` scheduled (every 2h by default). All three share the same distiller pipeline.
@@ -322,7 +322,7 @@ The runtime isn't one lump; it's **two big blocks belonging to different owners*
 | python MCP (ibkr / hkprop) | `kb/tools/*` | `kb/venvs/<name>` (**wheel install, not editable**) | build wheel + pip |
 | CC hooks (capture / compact) | `kb/adapter-cc/dist/hooks` | `kb/hooks/` (esbuild bundle, @ka/core folded in self-contained) | esbuild |
 | core CLI (called by the kb skill) | `kb/core/dist/*-cli.js` | `kb/core/dist/` (tsup already self-contained, pure copy) | copy |
-| skills (5 + kb) | `kb/skills/*.md` + `kb/skill/src/kb.md` | `kb/skills/<name>/SKILL.md`; `~/.claude/skills/<name>` symlink pointing at runtime | copy + symlink |
+| skills (5 + kb) | `kb/skills/*.md` + `kb/skills/kb.md` | `kb/skills/<name>/SKILL.md`; `~/.claude/skills/<name>` symlink pointing at runtime | copy + symlink |
 | telegram daemon | `channels/telegram` | `channels/telegram-daemon/` (esbuild bundle + scripts; no secrets) | esbuild + copy |
 | config / state / credentials | repo ships `config/*.example.{yaml,…}` templates | `$KA_HOME/config/{config,secrets,workshop,cron}.yaml` + `$KA_HOME/state/` + `$KA_HOME/raw/` | install seed (no overwrite) |
 | cron plist | `cron/ops/cron` generator | `~/Library/LaunchAgents/com.knowledge-assistant.ka.cron.*.plist` (platform-mandated) | ka cron install |
@@ -369,7 +369,7 @@ the capability is provided by the runtime; `planned` = not yet delivered.
 
 | Capability | status | Path | Description |
 |---|---|---|---|
-| **kb core** | shipped | `kb/core/` + `kb/mcp-server/` + `kb/skill/` | capture / distill / store / retrieve + MCP + /kb skill (§2) |
+| **kb core** | shipped | `kb/core/` + `kb/mcp-server/` + `kb/skills/kb.md` | capture / distill / store / retrieve + MCP + /kb skill (§2) |
 | **workshop** | shipped | `workshop/ops/workshop.sh` + `workshop/ops/` + `config/workshop.example.yaml` | orchestrate independent CC processes (§3.2) |
 | **telegram channel** | shipped | `channels/telegram/` (on `channels/core/`) | MCP-over-HTTP daemon, multi-channel routing + M6 self-healing (§3.1) |
 | **distill scheduling** | shipped | `ka cron` + `kb/core/` | OS-level persistent scheduling (distill every 2h by default) |
@@ -403,7 +403,7 @@ Three big categories: **the Agent itself** / **KA products (design)** / **per-ma
 |---|---|
 | `kb/core/` | distiller / config / tokenizer / core CLI |
 | `kb/mcp-server/` + `kb/tools/{market-mcp,mcp-opennutrition,hkprop-mcp,ibkr-mcp}` | MCP servers |
-| `kb/skills/` + `kb/skill/src/kb.md` | skill sources |
+| `kb/skills/` + `kb/skills/kb.md` | skill sources |
 | `channels/core/` + `channels/{telegram,lark}/` | channel daemon kernel + platform adapters |
 | `kb/adapter-cc/` | CC capture/compact hook source |
 | `shared/bin/ka` + `{shared,workshop,channels,cron,kb}/ops/` | CLI + orchestration + cron generator |
