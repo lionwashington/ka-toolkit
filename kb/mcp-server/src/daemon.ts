@@ -32,7 +32,17 @@ import { createMcpServer } from './index.js'
 
 interface Session {
   transport: StreamableHTTPServerTransport
+  lastSeen: number
 }
+
+// Session hygiene: HTTP MCP clients (a CC's kb connection) often vanish without a
+// clean DELETE, so transport.onclose never fires and sessions pile up forever
+// (observed 54 inits / 0 closes → the daemon's event loop eventually jammed). Evict
+// sessions idle beyond the TTL, and hard-cap the total. A CC whose session was
+// reaped just re-initializes on its next call (cheap).
+const SESSION_IDLE_TTL_MS = 15 * 60_000
+const SESSION_MAX = 48
+const SESSION_SWEEP_MS = 60_000
 
 function makeLogger(stateDir: string): (msg: string) => void {
   const logFile = join(stateDir, 'kb-retrieval.log')
@@ -78,6 +88,24 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
 
   const sessions = new Map<string, Session>()
 
+  const closeSession = (id: string, why: string) => {
+    const s = sessions.get(id)
+    if (!s) return
+    sessions.delete(id)
+    try { void s.transport.close() } catch { /* best-effort */ }
+    log(`mcp session evicted ${id} (${why}, sessions=${sessions.size})`)
+  }
+  // Periodic hygiene sweep: drop idle sessions + enforce the cap (oldest-first).
+  const sweep = setInterval(() => {
+    const now = Date.now()
+    for (const [id, s] of sessions) if (now - s.lastSeen > SESSION_IDLE_TTL_MS) closeSession(id, 'idle')
+    if (sessions.size > SESSION_MAX) {
+      const oldest = [...sessions.entries()].sort((a, b) => a[1].lastSeen - b[1].lastSeen)
+      for (const [id] of oldest.slice(0, sessions.size - SESSION_MAX)) closeSession(id, 'over-cap')
+    }
+  }, SESSION_SWEEP_MS)
+  sweep.unref()
+
   const app = express()
   app.use(express.json({ limit: '5mb' }))
 
@@ -85,6 +113,7 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
     const sessionId = (req.headers['mcp-session-id'] as string | undefined) ?? undefined
     const existing = sessionId ? sessions.get(sessionId) : undefined
     if (existing) {
+      existing.lastSeen = Date.now()
       await existing.transport.handleRequest(req as any, res as any, req.body)
       return
     }
@@ -95,7 +124,7 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
-          sessions.set(id, { transport })
+          sessions.set(id, { transport, lastSeen: Date.now() })
           log(`mcp session init ${id} (sessions=${sessions.size})`)
         },
       })
