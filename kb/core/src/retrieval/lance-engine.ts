@@ -88,7 +88,8 @@ export class LanceEngine {
       if (rows.length === 0) {
         this.tbl = null
       } else {
-        this.tbl = await db.createTable(this.tableName, rows)
+        // ChunkRow is a typed interface; LanceDB's createTable wants Record<string,unknown>[].
+        this.tbl = await db.createTable(this.tableName, rows as unknown as Record<string, unknown>[])
         await this.tbl.createIndex('text_seg', { config: lancedb.Index.fts(), replace: true })
       }
       const m: IndexManifest = {

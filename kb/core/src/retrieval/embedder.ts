@@ -36,10 +36,10 @@ export function createEmbedder(opts: EmbedderOptions = {}): Embedder {
 
   const ensure = async () => {
     if (!fe) {
-      fe = await FlagEmbedding.init({
-        model,
-        ...(opts.cacheDir ? { cacheDir: opts.cacheDir } : {}),
-      })
+      // fastembed's init() overloads are finicky to satisfy structurally; the runtime
+      // accepts { model, cacheDir? } — cast past the overload typing.
+      const initOpts = { model, ...(opts.cacheDir ? { cacheDir: opts.cacheDir } : {}) }
+      fe = await FlagEmbedding.init(initOpts as Parameters<typeof FlagEmbedding.init>[0])
     }
     return fe
   }
