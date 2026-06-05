@@ -25,6 +25,9 @@
 #   ka workshop spawn-mates <name> [<workdir>]
 #       with <workdir> = registrar (add/replace yaml + launch). [P2 step ②]
 #       without        = alias for `ka workshop start <name>`.
+#   ka workshop peek <name> [lines]    capture-pane: see a pane's live screen (READ; safe)
+#   ka workshop poke <name> <keys…>    send-keys: unstick a hung pane (WRITE; recovery only)
+#       out-of-band fallback for when the channel can't reach a pane; normal comms = the channel.
 #
 # Each CC gets its own tmux pane, its own cwd (`-c`), and its own KA_CHANNEL —
 # separate processes, separate working dirs, separate channels. No cwd/context is
@@ -63,7 +66,7 @@ LAYOUT="pane"     # default (P2): all CCs as split-panes in ONE window (one scre
 
 VERB="start"
 case "${1:-}" in
-    start|stop|restart|spawn-mates) VERB="$1"; shift ;;
+    start|stop|restart|spawn-mates|peek|poke) VERB="$1"; shift ;;
 esac
 
 declare -a POSITIONAL
@@ -85,8 +88,40 @@ for arg in "$@"; do
     esac
     prev_arg="$arg"
 done
-TARGET="${POSITIONAL[0]:-}"      # <name> for start/stop/spawn-mates
+TARGET="${POSITIONAL[0]:-}"      # <name> for start/stop/spawn-mates/peek/poke
 WORKDIR_ARG="${POSITIONAL[1]:-}" # <workdir> for spawn-mates
+
+# ---- peek / poke: out-of-band tmux inspection + recovery of a CC pane ---------
+# Out-of-band path for when the channel can't reach a pane (a hung/unresponsive CC).
+#   ka workshop peek <name> [lines]   capture-pane → see the pane's live screen (READ; always safe)
+#   ka workshop poke <name> <keys…>   send-keys → nudge/unstick a hung pane (WRITE; deliberate only)
+# <name> is a channel name (e.g. main) or a raw tmux target. Normal CC↔CC comms stay on the channel.
+if [ "$VERB" = "peek" ] || [ "$VERB" = "poke" ]; then
+    tmux_require || { log_err "tmux not available"; exit 1; }
+    [ -n "$TARGET" ] || { log_err "usage: ka workshop $VERB <name> [...]"; exit 2; }
+    # sanitize identically to the channel name (sanitize_channel is defined later in
+    # this file, so inline it here to avoid an ordering dependency).
+    PEEK_NAME="$(printf '%s' "$TARGET" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]//g')"
+    PEEK_PANE="$(tmux_pane_for_channel "$PEEK_NAME" 2>/dev/null || true)"
+    if [ -z "$PEEK_PANE" ] && tmux_pane_exists "$TARGET"; then PEEK_PANE="$TARGET"; fi
+    if [ -z "$PEEK_PANE" ]; then
+        log_err "no workshop pane for '$TARGET'. Online channels:"
+        "$TMUX_BIN" list-panes -a -F '  #{@ka_channel}  (#{session_name}:#{window_index}.#{pane_index})' 2>/dev/null | grep -vE '^\s+\(' || true
+        exit 1
+    fi
+    if [ "$VERB" = "peek" ]; then
+        PEEK_LINES="${POSITIONAL[1]:-60}"
+        "$TMUX_BIN" capture-pane -p -t "$PEEK_PANE" -S "-${PEEK_LINES}"
+        exit 0
+    fi
+    # poke: pass everything after <name> straight to send-keys (so `Enter`, `C-c`,
+    # `Escape`, or literal text all work, e.g. `poke main Enter`, `poke main /clear Enter`).
+    POKE_KEYS=("${POSITIONAL[@]:1}")
+    [ ${#POKE_KEYS[@]} -gt 0 ] || { log_err "usage: ka workshop poke <name> <keys…>   e.g. poke main Enter"; exit 2; }
+    log_info "poke ${TARGET} (${PEEK_PANE}): send-keys ${POKE_KEYS[*]}"
+    "$TMUX_BIN" send-keys -t "$PEEK_PANE" "${POKE_KEYS[@]}"
+    exit 0
+fi
 
 # ---- shared helpers ---------------------------------------------------------
 # sanitize a channel name identically to the daemon's sanitizeChannelName.
