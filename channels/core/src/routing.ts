@@ -54,6 +54,29 @@ export function resolveTargetList(
   return { deliver, notFound }
 }
 
+// Sticky-routing decision — platform-independent, shared by EVERY platform's inbound
+// path (telegram, lark, …) so the "no prefix → last target" rule lives in ONE place.
+// Given a parsed routing prefix and the last single target this conversation was sent
+// to, return the target list to dispatch AND the last_target to persist:
+//   • explicit prefix  → use its targets; remember it ONLY when it is a SINGLE,
+//                        non-`all` target (multi-target and `to all` do NOT stick)
+//   • no prefix (bare) → reuse last_target as a 1-element list, or [] when there is
+//                        none — an empty list makes core dispatch prompt the owner to
+//                        pick a channel (no silent default), and an offline remembered
+//                        target falls through to the same "not found" prompt.
+// The caller persists the returned lastTarget in its own platform state (telegram: one
+// global value; lark: keyed per chat). Pure → unit-testable with no platform state.
+export function applyStickyRouting(
+  parsed: { matched: boolean; rawTargets: string[]; body: string },
+  lastTarget: string | undefined,
+): { rawTargets: string[]; lastTarget: string | undefined } {
+  if (parsed.matched) {
+    const remember = parsed.rawTargets.length === 1 && parsed.rawTargets[0] !== 'all'
+    return { rawTargets: parsed.rawTargets, lastTarget: remember ? parsed.rawTargets[0] : lastTarget }
+  }
+  return { rawTargets: lastTarget ? [lastTarget] : [], lastTarget }
+}
+
 export function sanitizeChannelName(raw: string | undefined | null): string {
   const s = String(raw ?? '').toLowerCase().replace(/[^a-z0-9_-]/g, '')
   return s || 'main'

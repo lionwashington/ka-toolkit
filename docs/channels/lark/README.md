@@ -118,13 +118,15 @@ What `claude-ch` (at `~/.local/bin/claude-ch`) does: sanitizes the channel name 
 
 | Form | Behavior |
 |---|---|
-| `content` | Default → `main` |
+| `content` | **Sticky** → reuses this chat's last single target (see below) |
 | `to <name>: content` / `to <name> content` / `2<name>` / `2 <name> content` | Targeted to `<name>` (prefix `to`/`2`, spaces flexible, colon optional) |
 | `to 1:` / `to2:` / `to 3` / `2 1: content` | Targeted by **number** (numbers in `/api/status`'s `channel_numbers`) |
 | `to all: content` / `2 all content` | Broadcast to all online channels |
 | `to <nonexistent>: content` | With explicit colon → daemon replies "offline" + lists online channels (#numbers) |
 
-> Since v0.5.3 the prefix is lenient (`to`/`2`, colon optional); **without a colon, routing only happens if the target matches an online channel (name or number)**, otherwise it's treated as a plain message and the full text goes to main (so `tomorrow…`/`2 weeks…` won't be misrouted). Channel names can't contain characters like `.` (`weex.repo`→`weexrepo`).
+> Since v0.5.3 the prefix is lenient (`to`/`2`, colon optional); **without a colon, routing only happens if the target matches an online channel (name or number)**, otherwise it's treated as a plain message (so `tomorrow…`/`2 weeks…` won't be misrouted). Channel names can't contain characters like `.` (`weex.repo`→`weexrepo`).
+>
+> **Sticky routing**: a plain message with no `to` prefix goes to the **last single target this chat routed to** (stored **per chat** as `last_target_by_chat`, since a lark daemon serves many group chats). Only an explicit **single, non-`all`** target sticks; multi-target and `to all` do not. A chat's first plain message (nothing remembered yet) or one whose remembered target is offline is **not** silently defaulted — the daemon replies asking to pick a channel + lists who's online. Same core decision (`applyStickyRouting`, `channels/core/src/routing.ts`) as telegram; only the persistence shape differs (telegram: one global `last_target`; lark: keyed per chat). The old per-chat attachment-target store now rides on this same sticky store.
 
 ## HTTP API
 

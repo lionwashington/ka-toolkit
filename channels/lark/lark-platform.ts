@@ -24,7 +24,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { homedir } from 'os'
 import { parse as parseYaml } from 'yaml'
-import { parseRoutingPrefix } from '../core/src/routing.ts'
+import { parseRoutingPrefix, applyStickyRouting } from '../core/src/routing.ts'
 import { byName, sessionsById, resolveTargetToName } from '../core/src/sessions.ts'
 import type { Platform, InboundDispatch } from '../core/src/platform.ts'
 
@@ -68,6 +68,7 @@ type State = {
   recent_msg_ids?: Record<string, string[]>    // per-chat last RECENT_IDS_KEEP message_ids
   channel_numbers?: Record<string, number>     // stable channel name → number (persisted)
   next_channel_number?: number
+  last_target_by_chat?: Record<string, string> // sticky routing: per-chat last single target (no prefix → here)
 }
 
 const RECENT_IDS_KEEP = 100
@@ -130,13 +131,12 @@ let inboundDispatch: InboundDispatch
 // Per-group scheduler bookkeeping.
 const groupLastPolledMs: Record<string, number> = {}
 const groupInFlight: Record<string, boolean> = {}
-// Attachment routing follows the MOST RECENT text's destination (option B). Lark
-// images carry no channel of their own, so each attachment goes wherever this chat's
-// last text went: a plain text (→ main) points subsequent attachments at main; a
-// `to spot:` text points them at spot; they stay there until the next text moves
-// them. Per-chat, in-memory → a daemon restart resets to main (send any text to
-// re-point). Mental model: "images go where my last message went."
-const attachTarget = new Map<string, string[]>()
+// Attachment routing reuses the SAME sticky store as text (state.last_target_by_chat):
+// lark images carry no channel of their own, so each attachment goes wherever this
+// chat's last SINGLE-target message went — a `to spot:` text points subsequent images
+// at spot; multi-target / `to all` never stick (rule A/D); none yet → the core
+// "pick a channel" prompt. Persisted, so it survives a daemon restart. Mental model:
+// "images go where my last message went."
 
 // ─────────────────────────── lark-cli spawn (auth via lark-cli's own creds) ─────
 
@@ -359,25 +359,29 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
     let attachment_path = ''
 
     if (q.att) {
-      // Attachment → the chat's STICKY target LIST (set by the most recent text;
-      // none yet → main). Fan out to the whole list. lark images carry no caption,
-      // so this sticky list is the only routing signal. Download ONCE to the first
-      // target's subdir (a deliberate multicast — the listed channels are all intended
-      // recipients, so sharing the file across them is fine).
-      rawTargets = attachTarget.get(chatId) ?? ['main']
+      // Attachment → the chat's sticky target (same store as text). lark images carry no
+      // caption, so the persisted per-chat last_target is the only routing signal: a
+      // single target (multi/`all` never stick). None yet → [] → core "pick a channel"
+      // prompt (no silent default).
+      const stickyLast = state.last_target_by_chat?.[chatId]
+      rawTargets = stickyLast ? [stickyLast] : []
       attachment_path = await larkPlatform.fetchAttachment({ ...q.att, channel: rawTargets[0] ?? 'main' })
       content = attachmentPlaceholder(q.att.kind)
       if (!attachment_path) content += '\n (attachment download failed; text only)'
     } else {
-      // Text. Parse the (possibly multi-target, comma-separated) prefix; no prefix →
-      // main with the full text. Core (dispatchTargets) resolves the list: online
-      // targets receive it, offline/unknown are reported back. Colon has no semantic.
+      // Text. Sticky routing (SHARED with telegram via applyStickyRouting): an explicit
+      // prefix routes to its list; a bare message reuses this chat's last single target,
+      // or [] when there is none. Core (dispatchTargets) resolves the list — online
+      // targets receive it, offline/unknown/empty are reported back with the online list.
       const p = parseRoutingPrefix(q.text)
-      rawTargets = p.matched ? p.rawTargets : ['main']
+      const sticky = applyStickyRouting(p, state.last_target_by_chat?.[chatId])
+      rawTargets = sticky.rawTargets
       content = p.matched ? p.body : q.text
-      // Sticky: subsequent (captionless) attachments follow wherever THIS text was
-      // aimed — the whole list ("images go where my last message went").
-      attachTarget.set(chatId, rawTargets)
+      const byChat = state.last_target_by_chat ?? (state.last_target_by_chat = {})
+      if (sticky.lastTarget && sticky.lastTarget !== byChat[chatId]) {
+        byChat[chatId] = sticky.lastTarget
+        saveState(state)
+      }
     }
 
     await inboundDispatch(rawTargets, content, {

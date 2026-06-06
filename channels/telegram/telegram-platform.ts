@@ -21,7 +21,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { homedir } from 'os'
 import { parse as parseYaml } from 'yaml'
-import { parseRoutingPrefix } from '../core/src/routing.ts'
+import { parseRoutingPrefix, applyStickyRouting } from '../core/src/routing.ts'
 import { byName, sessionsById, resolveTargetToName } from '../core/src/sessions.ts'
 import type { Platform, InboundDispatch } from '../core/src/platform.ts'
 
@@ -58,6 +58,7 @@ type State = {
   offset: number                              // next getUpdates offset = last update_id + 1
   channel_numbers?: Record<string, number>    // stable channel name → number (persisted)
   next_channel_number?: number                // next number to assign
+  last_target?: string                        // sticky routing: last single explicit target (no prefix → here)
 }
 
 function log(msg: string): void {
@@ -281,14 +282,22 @@ async function handleUpdate(u: any): Promise<'ok' | 'stop'> {
   state.offset = u.update_id + 1
   saveState(state)
 
-  // Routing — for an attachment the prefix (and caption) lives in `caption`.
-  // Parse the (possibly multi-target, comma-separated) prefix; no prefix → main with
-  // the full text. Core (dispatchTargets) resolves the list: online targets receive it,
-  // offline/unknown are reported back. Colon has no semantic.
+  // Routing (sticky) — for an attachment the prefix (and caption) lives in `caption`.
+  // An explicit `to X` prefix routes to that list; a BARE message (no prefix) reuses
+  // the last single target it was sent to (state.last_target). We record last_target
+  // ONLY for a single, non-`all` explicit target — multi-target and `to all` do NOT
+  // become sticky. A bare message with no remembered target (first ever) dispatches an
+  // EMPTY list; an offline remembered target dispatches that name — both land on the
+  // core "pick a channel / not found" prompt (no silent default). Colon has no semantic.
   const routingText = text || caption
   const p = parseRoutingPrefix(routingText)
-  const rawTargets = p.matched ? p.rawTargets : ['main']
+  const sticky = applyStickyRouting(p, state.last_target)
+  const rawTargets = sticky.rawTargets
   let content = p.matched ? p.body : routingText
+  if (sticky.lastTarget !== state.last_target) {
+    state.last_target = sticky.lastTarget
+    saveState(state)
+  }
 
   // Attachment → local path in meta so the consumer CC can Read it. content falls
   // back to a placeholder with no caption; on download failure deliver text + note.

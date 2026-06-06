@@ -82,6 +82,23 @@ export async function dispatchTargets(
   content: string,
   metaBase: Record<string, unknown>,
 ): Promise<void> {
+  // Sticky-routing escape hatch: a bare owner message with no remembered target
+  // (first ever, or after the last target went away) arrives as an EMPTY list.
+  // Nothing to deliver to — don't silently default. Ask the owner to pick a
+  // channel and show who is online. (Explicit-but-offline targets fall through to
+  // the resolveTargetList "not found" path below, which is the same prompt.)
+  if (rawTargets.length === 0) {
+    const replyTo = String(metaBase.chat_id ?? '')
+    if (replyTo) {
+      counters.routeMiss++
+      await platform.send(
+        replyTo,
+        `⚠️ no target remembered — reply with \`to <channel>:\` to pick one\nOnline channels: ${onlineChannelListStr()}`,
+      )
+    }
+    return
+  }
+
   const { deliver, notFound } = resolveTargetList(
     rawTargets,
     resolveTargetToName,

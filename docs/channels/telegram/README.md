@@ -108,13 +108,14 @@ TG_CHANNEL_PORT=9999 channels/telegram/tg-ch main   # change daemon port (defaul
 
 | Form | Behavior |
 |---|---|
-| `content` (no prefix) | Default → `main` channel |
+| `content` (no prefix) | **Sticky** → reuses the last single target this chat was sent to (see below) |
 | `to <name>: content` / `to <name> content` | Targeted to `<name>` (prefix `to`/`2`, colon optional, spaces flexible) |
 | `to <number>: content` | Targeted by number (numbers in `/api/status`'s `channel_numbers`) |
+| `to <a>, <b>: content` | Multi-target — comma-separated names/numbers |
 | `to all: content` | Broadcast to all online channels |
 | `to <nonexistent>: content` | daemon replies "channel offline" + lists currently online channels |
 
-- A no-prefix message defaults to `main`; if no `main` channel is online → daemon returns a route-miss hint (not a bug).
+- **Sticky routing (no-prefix message)**: a bare message with no `to` prefix is delivered to the **last single target** this chat routed to. Only an explicit **single** target (`to <name>:`) is remembered as the sticky target — a multi-target (`to a, b:`) or `to all` does **not** stick. The remembered target is persisted (`last_target`), so it survives daemon restarts. The first bare message (no target ever remembered), or one whose remembered target has gone offline, is **not** silently defaulted: the daemon replies asking the owner to pick a channel and lists who is online. Core decision lives in `applyStickyRouting` (`channels/core/src/routing.ts`), shared with lark.
 - **Offset doesn't advance when there's no session**: messages the owner sent while offline are replayed after the corresponding CC reconnects.
 
 ## Security Iron Rules

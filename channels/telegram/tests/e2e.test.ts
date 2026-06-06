@@ -82,10 +82,26 @@ describe('MCP tools contract', () => {
   })
 })
 
-describe('inbound: Telegram → MCP notification', () => {
-  test('owner text dispatches to main with stringified meta (no source field)', async () => {
+describe('inbound: Telegram → MCP notification (sticky routing)', () => {
+  // B: a BARE owner message with no remembered target (fresh daemon, last_target
+  // unset) must NOT silently default anywhere — the owner is prompted to pick a
+  // channel and shown who is online. Runs first so last_target is still unset.
+  test('bare text with no last_target → pick-a-channel prompt, no delivery', async () => {
     main.received.length = 0
-    pushOwnerText('hello from owner')
+    ka.received.length = 0
+    const before = mock.sent().length
+    pushOwnerText('hello with no target yet')
+    const prompted = await waitFor(() =>
+      mock.sent().slice(before).some(m => /no target remembered/i.test(m.text)))
+    assert.ok(prompted, 'owner should be prompted to pick a channel')
+    assert.equal(main.received.some(r => r.content === 'hello with no target yet'), false,
+      'no silent default to main')
+    assert.equal(ka.received.some(r => r.content === 'hello with no target yet'), false)
+  })
+
+  test('explicit `to main:` delivers to main + stringified meta (no source field)', async () => {
+    main.received.length = 0
+    pushOwnerText('to main: hello from owner')
     const ok = await waitFor(() => main.received.some(r => r.content === 'hello from owner'))
     assert.ok(ok, 'main should receive the owner text')
     const n = main.received.find(r => r.content === 'hello from owner')!
@@ -98,8 +114,17 @@ describe('inbound: Telegram → MCP notification', () => {
     assert.equal(n.meta.source, undefined)
   })
 
-  test('photo attachment is downloaded; path + placeholder delivered', async () => {
+  // sticky core: after a single `to main:`, a BARE follow-up reuses main.
+  test('bare follow-up after `to main:` is sticky → delivered to main', async () => {
     main.received.length = 0
+    pushOwnerText('sticky follow-up')
+    const ok = await waitFor(() => main.received.some(r => r.content === 'sticky follow-up'))
+    assert.ok(ok, 'bare follow-up should stick to main')
+    assert.equal(main.received.find(r => r.content === 'sticky follow-up')!.meta.routed_target, 'main')
+  })
+
+  test('photo attachment (sticky to main) is downloaded; path + placeholder delivered', async () => {
+    main.received.length = 0  // last_target=main from the prior test → bare photo sticks to main
     updateId += 1
     mock.push({
       update_id: updateId,
@@ -119,7 +144,7 @@ describe('inbound: Telegram → MCP notification', () => {
     assert.equal(readFileSync(n.meta.attachment_path, 'utf8'), 'MOCKIMGBYTES', 'file downloaded to disk')
   })
 
-  test('routing `to ka:` delivers to ka only, not main', async () => {
+  test('routing `to ka:` delivers to ka only, not main, and re-points sticky to ka', async () => {
     main.received.length = 0
     ka.received.length = 0
     pushOwnerText('to ka: routed message')
@@ -129,6 +154,72 @@ describe('inbound: Telegram → MCP notification', () => {
     const n = ka.received.find(r => r.content === 'routed message')!
     assert.equal(n.meta.channel_name, 'ka')
     assert.equal(n.meta.routed_target, 'ka')
+    // sticky re-pointed: a bare follow-up now goes to ka, not main.
+    main.received.length = 0
+    ka.received.length = 0
+    pushOwnerText('bare sticks to ka now')
+    const ok2 = await waitFor(() => ka.received.some(r => r.content === 'bare sticks to ka now'))
+    assert.ok(ok2, 'bare follow-up should stick to ka')
+    assert.equal(main.received.some(r => r.content === 'bare sticks to ka now'), false)
+  })
+
+  // A: a MULTI-target send delivers to all listed but does NOT become sticky.
+  test('multi-target `to main,ka:` delivers to both but does NOT change last_target', async () => {
+    // anchor sticky on ka first
+    pushOwnerText('to ka: anchor ka')
+    await waitFor(() => ka.received.some(r => r.content === 'anchor ka'))
+    main.received.length = 0
+    ka.received.length = 0
+    pushOwnerText('to main,ka: multi body')
+    const both = await waitFor(() =>
+      main.received.some(r => r.content === 'multi body') && ka.received.some(r => r.content === 'multi body'))
+    assert.ok(both, 'both main and ka should receive the multi-target body')
+    // bare follow-up must reuse the PRIOR single target (ka), proving multi was not recorded.
+    main.received.length = 0
+    ka.received.length = 0
+    pushOwnerText('after multi bare')
+    const ok = await waitFor(() => ka.received.some(r => r.content === 'after multi bare'))
+    assert.ok(ok, 'bare follow-up sticks to the last SINGLE target (ka)')
+    assert.equal(main.received.some(r => r.content === 'after multi bare'), false,
+      'multi-target did not become sticky')
+  })
+
+  // D: `to all:` broadcasts but does NOT become sticky.
+  test('`to all:` broadcasts but does NOT change last_target', async () => {
+    pushOwnerText('to ka: anchor ka2')
+    await waitFor(() => ka.received.some(r => r.content === 'anchor ka2'))
+    main.received.length = 0
+    ka.received.length = 0
+    pushOwnerText('to all: broadcast body')
+    const both = await waitFor(() =>
+      main.received.some(r => r.content === 'broadcast body') && ka.received.some(r => r.content === 'broadcast body'))
+    assert.ok(both, 'broadcast should reach both channels')
+    main.received.length = 0
+    ka.received.length = 0
+    pushOwnerText('after all bare')
+    const ok = await waitFor(() => ka.received.some(r => r.content === 'after all bare'))
+    assert.ok(ok, 'bare follow-up sticks to ka, not the broadcast')
+    assert.equal(main.received.some(r => r.content === 'after all bare'), false,
+      '`to all` did not become sticky')
+  })
+
+  // C: when the remembered target is offline (here an unknown name), a bare message
+  // is NOT delivered — the owner gets a "not found" + online list to re-pick.
+  test('bare message whose last_target is offline → not found + online list, no delivery', async () => {
+    // an explicit single target that is offline still becomes last_target (optimistic);
+    // it surfaces immediately as not-found, and the next bare hits the same path.
+    let before = mock.sent().length
+    pushOwnerText('to ghost: ghost body')
+    assert.ok(await waitFor(() => mock.sent().slice(before).some(m => /not found/i.test(m.text))),
+      'offline explicit target → not found')
+    main.received.length = 0
+    ka.received.length = 0
+    before = mock.sent().length
+    pushOwnerText('bare after ghost')
+    assert.ok(await waitFor(() => mock.sent().slice(before).some(m => /not found/i.test(m.text))),
+      'bare with offline last_target → not found prompt')
+    assert.equal(main.received.some(r => r.content === 'bare after ghost'), false)
+    assert.equal(ka.received.some(r => r.content === 'bare after ghost'), false)
   })
 })
 
@@ -188,7 +279,10 @@ describe('offline replay (no MCP session)', () => {
         update_id: 7000,
         message: {
           message_id: 1, from: { id: Number(OWNER), first_name: 'L' },
-          chat: { id: Number(OWNER) }, date: Math.floor(Date.now() / 1000), text: 'replay me',
+          // explicit target: this test exercises the defer/replay OFFSET mechanism,
+          // not routing defaults — a bare message with no last_target would (correctly)
+          // hit the sticky "pick a channel" prompt instead of delivering.
+          chat: { id: Number(OWNER) }, date: Math.floor(Date.now() / 1000), text: 'to main: replay me',
         },
       })
       await new Promise(r => setTimeout(r, 1500))  // daemon polls, finds no session → defers (keeps offset)

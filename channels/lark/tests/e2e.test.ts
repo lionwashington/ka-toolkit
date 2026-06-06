@@ -44,8 +44,18 @@ after(async () => {
 })
 
 describe('inbound (lark-cli poll → dispatch)', () => {
-  test('owner message with no prefix → delivered to main with meta', async () => {
-    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'm1', text: 'hello lark', createTime: nextTime(), selfOpenId: SELF })])
+  // B: a bare message with no remembered target for this chat must NOT silently
+  // default — the group gets a "pick a channel" prompt. Runs first (last_target unset).
+  test('bare message with no last_target → pick-a-channel prompt, no delivery', async () => {
+    const before = webhook.sent().length
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'm0', text: 'no target yet', createTime: nextTime(), selfOpenId: SELF })])
+    const prompted = await waitFor(() => webhook.sent().slice(before).some(s => /no target remembered/i.test(s.text)), 5000)
+    assert.ok(prompted, 'owner should be prompted to pick a channel')
+    assert.ok(!main.received.some(r => r.content === 'no target yet'), 'no silent default to main')
+  })
+
+  test('explicit `to main:` → delivered to main with meta', async () => {
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'm1', text: 'to main: hello lark', createTime: nextTime(), selfOpenId: SELF })])
     const ok = await waitFor(() => main.received.some(r => r.content === 'hello lark'), 5000)
     assert.ok(ok, 'main should receive the owner message')
     const got = main.received.find(r => r.content === 'hello lark')!
@@ -53,6 +63,13 @@ describe('inbound (lark-cli poll → dispatch)', () => {
     assert.equal(got.meta.message_id, 'm1')
     // 🔴 meta all-string invariant
     for (const v of Object.values(got.meta)) assert.equal(typeof v, 'string')
+  })
+
+  // sticky: after `to main:`, a bare follow-up in the SAME chat reuses main.
+  test('bare follow-up after `to main:` is sticky → delivered to main', async () => {
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'm1b', text: 'sticky lark follow-up', createTime: nextTime(), selfOpenId: SELF })])
+    const ok = await waitFor(() => main.received.some(r => r.content === 'sticky lark follow-up'), 5000)
+    assert.ok(ok, 'bare follow-up should stick to main')
   })
 
   test('non-owner message → dropped (self-filter)', async () => {
@@ -68,7 +85,7 @@ describe('inbound (lark-cli poll → dispatch)', () => {
 
   test('same message_id is not re-delivered (dedup ring) across repeated polls', async () => {
     const t = nextTime()
-    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'm-dup', text: 'only once', createTime: t, selfOpenId: SELF })])
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'm-dup', text: 'to main: only once', createTime: t, selfOpenId: SELF })])
     await waitFor(() => main.received.some(r => r.content === 'only once'), 5000)
     // the fake CLI keeps returning the same message every poll for ~3s more
     await waitFor(() => false, 3000).catch(() => {})
@@ -78,7 +95,11 @@ describe('inbound (lark-cli poll → dispatch)', () => {
 })
 
 describe('inbound attachments', () => {
-  test('image message → downloaded, delivered to main with meta.attachment_path + [image] placeholder', async () => {
+  test('image message (sticky to main) → downloaded, delivered to main with meta.attachment_path + [image] placeholder', async () => {
+    // captionless images carry no routing signal → they follow the chat's sticky target;
+    // establish it with an explicit `to main:` text first.
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'm-img-pre', text: 'to main: pics incoming', createTime: nextTime(), selfOpenId: SELF })])
+    await waitFor(() => main.received.some(r => r.content === 'pics incoming'), 5000)
     daemon.pushMessages(CHAT, [{
       message_id: 'm-img', create_time: nextTime(),
       sender: { id: SELF, sender_type: 'user', name: 'Owner' },
@@ -109,7 +130,7 @@ describe('attachment routing follows the last text (option B)', () => {
     sender: { id: SELF, sender_type: 'user', name: 'Owner' },
     msg_type: 'image', content: `[Image: ${key}]`,
   })
-  test('`to ka:` points images at ka; a later plain text resets them to main', async () => {
+  test('`to ka:` points images at ka; a later `to main:` resets them to main', async () => {
     // a text routed to ka → this chat's subsequent attachments go to ka
     daemon.pushMessages(CHAT, [ownerMsg({ mid: 'b-text1', text: 'to ka: incoming pics', createTime: nextTime(), selfOpenId: SELF })])
     await waitFor(() => ka.received.some(r => r.content === 'incoming pics'), 5000)
@@ -119,13 +140,29 @@ describe('attachment routing follows the last text (option B)', () => {
     // v4 cross-channel isolation: saved under attachments/<channel>/ (here ka)
     assert.match(ka.received.find(r => r.meta.message_id === 'b-img1')!.meta.attachment_path, /attachments\/ka\//, 'image1 lands in the ka subdir')
 
-    // a later PLAIN text (→ main) re-points attachments back to main (the v3 fix)
-    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'b-text2', text: 'back to main now', createTime: nextTime(), selfOpenId: SELF })])
+    // a later explicit `to main:` re-points attachments back to main (the v3 fix; under
+    // sticky routing a BARE text would keep following ka, so the re-point must be explicit)
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'b-text2', text: 'to main: back to main now', createTime: nextTime(), selfOpenId: SELF })])
     await waitFor(() => main.received.some(r => r.content === 'back to main now'), 5000)
     daemon.pushMessages(CHAT, [img('b-img2', 'img_b_2')])
-    assert.ok(await waitFor(() => main.received.some(r => r.meta.message_id === 'b-img2' && r.meta.attachment_path), 6000), 'image2 → main (a plain text reset the target)')
+    assert.ok(await waitFor(() => main.received.some(r => r.meta.message_id === 'b-img2' && r.meta.attachment_path), 6000), 'image2 → main (the `to main:` text reset the target)')
     assert.ok(!ka.received.some(r => r.meta.message_id === 'b-img2'), 'image2 must NOT stick to ka')
     assert.match(main.received.find(r => r.meta.message_id === 'b-img2')!.meta.attachment_path, /attachments\/main\//, 'image2 lands in the main subdir')
+  })
+
+  // 甲: a MULTI-target text does NOT re-point attachments (multi never becomes sticky).
+  // The image follows the prior SINGLE target, not the multi list.
+  test('a multi-target text does NOT re-point images (they follow the last single target)', async () => {
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'c-text1', text: 'to ka: single anchor', createTime: nextTime(), selfOpenId: SELF })])
+    await waitFor(() => ka.received.some(r => r.content === 'single anchor'), 5000)
+    // multi-target text: delivered to both, but must NOT change the sticky target.
+    daemon.pushMessages(CHAT, [ownerMsg({ mid: 'c-text2', text: 'to main, ka: multi text', createTime: nextTime(), selfOpenId: SELF })])
+    await waitFor(() => main.received.some(r => r.content === 'multi text') && ka.received.some(r => r.content === 'multi text'), 5000)
+    daemon.pushMessages(CHAT, [img('c-img', 'img_c_1')])
+    assert.ok(await waitFor(() => ka.received.some(r => r.meta.message_id === 'c-img' && r.meta.attachment_path), 6000),
+      'image → ka (the prior SINGLE target, not the multi list)')
+    assert.ok(!main.received.some(r => r.meta.message_id === 'c-img'),
+      'image must NOT follow the multi-target text to main')
   })
 })
 

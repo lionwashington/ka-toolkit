@@ -9,12 +9,45 @@
 // Run: node --experimental-strip-types --test tests/unit.test.ts
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseRoutingPrefix, sanitizeChannelName, resolveTargetList } from '../../core/src/routing.ts'
+import { parseRoutingPrefix, sanitizeChannelName, resolveTargetList, applyStickyRouting } from '../../core/src/routing.ts'
 import { chunk, extractAttachment, attachmentPlaceholder } from '../telegram-platform.ts'
 
 // NEW CONTRACT (multi-target): parseRoutingPrefix returns `rawTargets: string[]`
 // (comma-separated list, names+numbers mixable, deduped) and NO `hadColon` — the
 // colon is parsed-and-ignored (no semantic). Single target = a 1-element list.
+// Sticky-routing decision shared by telegram + lark (no duplicated logic). Covers the
+// owner's A/B/C/D rules at the pure-function level; per-platform persistence is tested
+// in the e2e suites.
+describe('applyStickyRouting', () => {
+  const parse = parseRoutingPrefix
+  test('B: bare + no last_target → empty list (core will prompt), last_target stays undefined', () => {
+    assert.deepEqual(applyStickyRouting(parse('hi there'), undefined),
+      { rawTargets: [], lastTarget: undefined })
+  })
+  test('bare + last_target=main → reuse main, unchanged', () => {
+    assert.deepEqual(applyStickyRouting(parse('hi again'), 'main'),
+      { rawTargets: ['main'], lastTarget: 'main' })
+  })
+  test('explicit single `to ka:` → deliver ka AND record ka', () => {
+    assert.deepEqual(applyStickyRouting(parse('to ka: yo'), 'main'),
+      { rawTargets: ['ka'], lastTarget: 'ka' })
+  })
+  test('A: multi-target `to a,b:` → deliver both, DO NOT change last_target', () => {
+    assert.deepEqual(applyStickyRouting(parse('to a,b: yo'), 'ka'),
+      { rawTargets: ['a', 'b'], lastTarget: 'ka' })
+  })
+  test('D: `to all:` → broadcast, DO NOT change last_target', () => {
+    assert.deepEqual(applyStickyRouting(parse('to all: yo'), 'ka'),
+      { rawTargets: ['all'], lastTarget: 'ka' })
+  })
+  test('C: an offline/unknown single target still becomes last_target (optimistic)', () => {
+    // delivery online-ness is resolved later by core; recording is optimistic so a
+    // momentarily-offline mate becomes sticky and works once it reconnects.
+    assert.deepEqual(applyStickyRouting(parse('to ghost: yo'), 'main'),
+      { rawTargets: ['ghost'], lastTarget: 'ghost' })
+  })
+})
+
 describe('parseRoutingPrefix', () => {
   test('no prefix → not a routing attempt', () => {
     assert.deepEqual(parseRoutingPrefix('hello world'),
