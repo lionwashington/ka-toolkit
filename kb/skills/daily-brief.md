@@ -55,11 +55,10 @@ Then **proactively filter for important** (not just highlight):
 Output format: for each account, list 1-3 "important" emails (with sender + subject + a short content judgment); if there are no important ones, explicitly say "none important". **Do not list the unread count number** — unless there's a genuinely important actionable.
 
 ### 5. Market
-Use the `market-data` MCP tools (`crypto_price`, `crypto_prices`, `stock_quote`, `stock_quotes`) for real-time prices.
+Use **WebSearch** for real-time prices. (The `market-data` and IBKR MCP servers are retired — do NOT reference them, and do NOT report any "market data interface down / restart Gateway" degradation: web search IS the normal data path here.)
 - Check knowledge base (topics/finance.md or similar) for which assets the user tracks
-- Use `crypto_prices` for crypto (e.g. ids: "bitcoin,ethereum,solana")
-- Use `stock_quotes` for stocks/indices (e.g. symbols: "SPY,QQQ,NVDA")
-- Fall back to web search only if MCP tools are unavailable
+- Search crypto prices (e.g. query `bitcoin ethereum solana price today`)
+- Search stocks/indices (e.g. query `SPY QQQ NVDA stock price today`)
 - Show: price, daily change %
 
 ### 6. News
