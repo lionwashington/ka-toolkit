@@ -131,4 +131,12 @@ describe('reply-safety hook — forgot-reply nudge branch', () => {
     const out = await runHook([cc, asstText(ANSWER)])
     assert.equal(decision(out).decision, undefined, 'cc messages do not require an owner reply')
   })
+
+  test('LARK owner message answered in terminal → also nudges (platform-agnostic)', async () => {
+    const larkOwner = { message: { role: 'user', content: [
+      { type: 'text', text: `<channel source="lark-channel" chat_id="oc_grp" sender_name="owner" message_id="mlk1">${'问题'}</channel>` },
+    ] } }
+    const out = await runHook([larkOwner, asstText(ANSWER)])
+    assert.equal(decision(out).decision, 'block', 'lark owner msg must nudge too (not just telegram)')
+  })
 })

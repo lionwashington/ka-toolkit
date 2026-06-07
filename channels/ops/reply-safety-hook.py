@@ -30,7 +30,10 @@ LEAK_RE = re.compile(
     r'<parameter\s+name="chat_id">(?P<cid>[^<]+)</parameter>.*?'
     r'<parameter\s+name="text">(?P<txt>.*?)</parameter>\s*</invoke>',
     re.S)
-OWNER_TAG = '<channel source="telegram-channel"'   # owner channel-message marker
+# Owner channel-message marker — platform-agnostic: telegram-channel / lark-channel / …
+# (the `<channel source="X">` tag's X is the MCP server name = "<platform>-channel"; cc
+# messages are source="cc" and excluded below). Hardcoding telegram broke lark's nudge.
+OWNER_TAG_RE = re.compile(r'<channel\s+source="[a-z]+-channel"')
 PARSE_ERR = "could not be parsed"
 TEXT_MIN = 30
 
@@ -44,7 +47,7 @@ def is_owner_msg(m):
     for b in blocks(m):
         if isinstance(b, dict) and b.get("type") == "text":
             t = b.get("text", "")
-            if OWNER_TAG in t and 'source="cc"' not in t and 'from_channel=' not in t:
+            if OWNER_TAG_RE.search(t) and 'source="cc"' not in t and 'from_channel=' not in t:
                 return True
     return False
 
