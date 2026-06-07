@@ -162,6 +162,33 @@ export function createHttpApp(platform: Platform) {
     setTimeout(() => process.exit(0), 200)
   })
 
+  // /api/send — deterministic re-send of a reply the MODEL leaked as TEXT instead of
+  // emitting a real tool_use (the Opus tool-call-as-text bug). The Stop hook detects
+  // that leak, extracts {channel, target, text}, and POSTs here so the owner still
+  // gets the message. Goes through the SAME path as the `reply` tool (resolveReplyTarget
+  // policy + [#num-name] prefix + platform.send), so the active platform decides HOW to
+  // send (telegram bot / lark webhook) — the caller never picks a platform. Loopback-only
+  // by virtue of the daemon binding 127.0.0.1 (same as /api/shutdown). NO LLM involved.
+  app.post('/api/send', async (req, res) => {
+    const { channel, target, text } = (req.body ?? {}) as { channel?: string; target?: string; text?: string }
+    const ch = sanitizeChannelName(channel)
+    const chatId = String(target ?? '')
+    const body = String(text ?? '')
+    if (!chatId || !body) { res.status(400).json({ ok: false, error: 'target and text required' }); return }
+    const resolved = platform.resolveReplyTarget(chatId)
+    if (!resolved) { res.status(403).json({ ok: false, error: `reply target not allowed: ${chatId}` }); return }
+    const prefixed = `**[#${channelNumberOf(ch)}-${ch}]** ${body}`
+    const err = await platform.send(resolved, prefixed)
+    if (err) {
+      counters.repliesFailed++
+      log(`/api/send FAILED (ch=${ch} → ${resolved}): ${err}`)
+      res.status(502).json({ ok: false, error: err }); return
+    }
+    counters.replies++
+    log(`/api/send re-sent leaked reply (ch=${ch} → ${resolved}, hook repair)`)
+    res.json({ ok: true, sent: true })
+  })
+
   // Catch-all
   app.use((_req, res) => res.status(404).json({ ok: false, error: 'not_found' }))
 

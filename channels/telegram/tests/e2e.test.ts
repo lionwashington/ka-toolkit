@@ -234,6 +234,33 @@ describe('outbound: reply → Telegram sendMessage', () => {
     assert.equal(sent.chat_id, OWNER)
     assert.match(sent.text, /\[#1-main\]/, 'reply is prefixed with stable [#num-name]')
   })
+
+  // /api/send — the Stop-hook reply-repair path: re-send a reply the model leaked as
+  // text. Goes through resolveReplyTarget + [#num-name] prefix + platform.send, same as
+  // the reply tool, so it lands on the owner via the active platform (here telegram).
+  test('/api/send re-sends a leaked reply with [#num-name] prefix (hook repair path)', async () => {
+    const before = mock.sent().length
+    const r = await fetch(`${daemon.baseUrl}/api/send`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: 'main', target: OWNER, text: 'leaked body 99' }),
+    })
+    assert.equal(r.ok, true)
+    assert.equal((await r.json() as any).ok, true)
+    const ok = await waitFor(() => mock.sent().slice(before).some(m => m.text.includes('leaked body 99')))
+    assert.ok(ok, 'mock should receive the re-sent leaked reply')
+    const sent = mock.sent().slice(before).find(m => m.text.includes('leaked body 99'))!
+    assert.equal(sent.chat_id, OWNER)
+    assert.match(sent.text, /\[#1-main\]/, 're-sent reply carries the [#num-name] prefix')
+  })
+
+  test('/api/send rejects missing target/text (400)', async () => {
+    const r = await fetch(`${daemon.baseUrl}/api/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: 'main', text: '' }),
+    })
+    assert.equal(r.status, 400)
+  })
 })
 
 describe('cc2cc: send_to_channel', () => {

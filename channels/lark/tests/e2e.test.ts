@@ -200,4 +200,29 @@ describe('outbound (reply → webhook)', () => {
     const res: any = await main.client.callTool({ name: 'reply', arguments: { chat_id: 'oc_unknown', text: 'nope' } })
     assert.ok(res.isError, 'reply to a non-configured group must be rejected')
   })
+
+  // /api/send — Stop-hook reply-repair path on LARK: proves kind-awareness (the SAME
+  // endpoint sends via the lark webhook here, telegram bot elsewhere — caller picks no
+  // platform). Re-sends a leaked reply + enforces the same resolveReplyTarget policy.
+  test('/api/send re-sends a leaked reply via the lark webhook (hook repair path)', async () => {
+    const before = webhook.sent().length
+    const r = await fetch(`${daemon.baseUrl}/api/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: 'main', target: CHAT, text: 'leaked lark 77' }),
+    })
+    assert.equal(r.ok, true)
+    assert.equal((await r.json() as any).ok, true)
+    const ok = await waitFor(() => webhook.sent().slice(before).some(s => /leaked lark 77/.test(s.text)), 4000)
+    assert.ok(ok, 'webhook should receive the re-sent leaked reply')
+    const sent = webhook.sent().slice(before).find(s => /leaked lark 77/.test(s.text))!
+    assert.match(sent.text, /\[#\d+-main\]/, 're-sent reply carries the [#num-name] prefix')
+  })
+
+  test('/api/send to an unconfigured group → 403 (same resolveReplyTarget policy)', async () => {
+    const r = await fetch(`${daemon.baseUrl}/api/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: 'main', target: 'oc_unknown', text: 'nope' }),
+    })
+    assert.equal(r.status, 403)
+  })
 })
