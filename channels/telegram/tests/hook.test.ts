@@ -7,7 +7,7 @@
 import { test, before, after, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { writeFileSync, mkdtempSync } from 'node:fs'
+import { writeFileSync, mkdtempSync, appendFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -29,7 +29,7 @@ after(async () => { await main?.close(); await daemon?.stop(); await mock?.close
 // Run the hook ASYNC (not spawnSync — that would block this process's event loop which
 // hosts the in-process mock telegram, falsely hanging /api/send). Returns the hook's
 // stdout (the decision:block JSON, when it nudges).
-function runHook(lines: object[], opts: { home?: string; channel?: string } = {}): Promise<string> {
+function runHook(lines: object[], opts: { home?: string; channel?: string; appendAfterMs?: number; appendLines?: object[] } = {}): Promise<string> {
   const home = opts.home ?? mkdtempSync(join(tmpdir(), 'hook-home-'))
   const tpath = join(home, 'transcript.jsonl')
   writeFileSync(tpath, lines.map(l => JSON.stringify(l)).join('\n') + '\n')
@@ -42,6 +42,13 @@ function runHook(lines: object[], opts: { home?: string; channel?: string } = {}
     p.stdout.on('data', d => { out += d })
     p.on('close', () => resolve(out))
     p.on('error', () => resolve(out))
+    // Race sim: flush more transcript lines a bit AFTER the hook starts, mimicking Claude
+    // Code writing the turn's final assistant block late (the 2920/3118 race).
+    if (opts.appendLines) {
+      setTimeout(() => {
+        try { appendFileSync(tpath, opts.appendLines!.map(l => JSON.stringify(l)).join('\n') + '\n') } catch {}
+      }, opts.appendAfterMs ?? 500)
+    }
     p.stdin.end(JSON.stringify({ transcript_path: tpath, session_id: 'sess-test', cwd: home }))
   })
 }
@@ -151,5 +158,17 @@ describe('reply-safety hook — forgot-reply nudge branch', () => {
     ] } }
     const out = await runHook([larkOwner, asstText(ANSWER)])
     assert.equal(decision(out).decision, 'block', 'lark owner msg must nudge too (not just telegram)')
+  })
+
+  test('RACE: answer flushes 500ms after the hook fires → settle-wait, then nudge (2920/3118 fix)', async () => {
+    // Transcript tail is the owner msg only (assistant block not flushed yet); the
+    // terminal-text answer (no reply) lands 500ms late. Hook must wait, not bail on the
+    // empty tail.
+    const out = await runHook(
+      [ownerMsg('今天进展如何?', 'mrace1')],
+      { appendAfterMs: 500, appendLines: [asstText(ANSWER)] },
+    )
+    assert.equal(decision(out).decision, 'block',
+      'hook must settle-wait for the late-flushed answer instead of bailing on the empty tail')
   })
 })

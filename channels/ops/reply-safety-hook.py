@@ -71,18 +71,9 @@ def state_add(path, key):
     except Exception:
         pass
 
-def main():
-    try:
-        inp = json.load(sys.stdin)
-    except Exception:
-        return 0
-    transcript = inp.get("transcript_path")
-    session_id = inp.get("session_id", "")
-    channel = os.environ.get("KA_CHANNEL")
-    port = os.environ.get("KA_CHANNEL_PORT")
-    if not (transcript and os.path.exists(transcript) and channel and port):
-        return 0
-
+def load_messages(transcript):
+    """Parse the transcript JSONL into user/assistant messages (with _apierr flag).
+    Returns None on read error, [] when the file holds no qualifying messages yet."""
     msgs = []
     try:
         with open(transcript) as f:
@@ -99,7 +90,39 @@ def main():
                     m["_apierr"] = bool(o.get("isApiErrorMessage"))
                     msgs.append(m)
     except Exception:
+        return None
+    return msgs
+
+def main():
+    try:
+        inp = json.load(sys.stdin)
+    except Exception:
         return 0
+    transcript = inp.get("transcript_path")
+    session_id = inp.get("session_id", "")
+    channel = os.environ.get("KA_CHANNEL")
+    port = os.environ.get("KA_CHANNEL_PORT")
+    if not (transcript and os.path.exists(transcript) and channel and port):
+        return 0
+
+    # Stop hook can fire BEFORE Claude Code flushes the turn's final assistant block to the
+    # transcript. If the tail is still a USER message (no assistant after it), the turn we're
+    # meant to police hasn't landed yet — short-poll re-read until an assistant turn appears
+    # or we time out (~1.5s). Fixes the race that silently dropped BOTH the leak re-send
+    # (msg 2920) and the forgot nudge (msg 3118). Cheap: only waits in that suspicious
+    # "tail is a user message" state; a normally-completed turn already has its assistant
+    # block on disk, so this loop doesn't run at all.
+    msgs = load_messages(transcript)
+    if msgs is None:
+        return 0
+    SETTLE_MS, POLL_MS = 1500, 400
+    waited = 0
+    while waited < SETTLE_MS and msgs and msgs[-1].get("role") == "user":
+        time.sleep(POLL_MS / 1000.0)
+        waited += POLL_MS
+        m2 = load_messages(transcript)
+        if m2:
+            msgs = m2
     if not msgs:
         return 0
 
