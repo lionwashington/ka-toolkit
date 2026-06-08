@@ -116,6 +116,19 @@ describe('reply-safety hook — forgot-reply nudge branch', () => {
     assert.equal(decision(out).decision, undefined)
   })
 
+  test('non-reply tool leaked as text (Bash) + owner msg ignored → STILL nudges (2026-06-08 gap)', async () => {
+    // main got stuck leaking a Bash call (poke story-maker) and never replied the owner.
+    // The leaked <invoke name="Bash"> must NOT suppress the forgot-nudge (only reply leaks do).
+    const bashLeak = asstText('还差最后一步,马上完成。\ncard\n<invoke name="Bash">\n<parameter name="command">ka workshop poke story-maker /compact</parameter>\n</invoke>')
+    const out = await runHook([ownerMsg('帮我看下 story-maker 卡没卡', 'mb1'), bashLeak])
+    assert.equal(decision(out).decision, 'block', 'a leaked Bash call must not swallow the owner reply')
+  })
+
+  test('reply leaked as text after owner msg → branch 1 re-sends, forgot does NOT also nudge', async () => {
+    const out = await runHook([ownerMsg('q', 'mb2'), leakMsg(OWNER, 'forgot-vs-leak X')])
+    assert.equal(decision(out).decision, undefined, 'reply leak is branch-1 territory; no double notify')
+  })
+
   test('owner msg properly replied → no nudge', async () => {
     const out = await runHook([ownerMsg('q', 'mf4'), realReply('here is my proper answer')])
     assert.equal(decision(out).decision, undefined)

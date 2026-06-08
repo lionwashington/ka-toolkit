@@ -13,7 +13,8 @@
 #    but the model never called reply → the owner saw nothing. We can't re-send (no tool
 #    call to extract), so we return decision:block telling the model to reply now. That
 #    re-engages the model for ONE more turn (bounded: at most one nudge per owner message
-#    → no loop). Excludes parse-error / leak turns (those are the parse bug, not a forget).
+#    → no loop). Excludes parse-error / *reply*-leak turns (the parse bug / branch-1's job),
+#    but a leaked NON-reply tool call (Bash etc.) does NOT suppress the nudge.
 import sys, os, json, re, hashlib, urllib.request, time
 
 KA_HOME = os.environ.get("KA_HOME", os.path.expanduser("~/.knowledge-assistant"))
@@ -34,6 +35,12 @@ LEAK_RE = re.compile(
 # (the `<channel source="X">` tag's X is the MCP server name = "<platform>-channel"; cc
 # messages are source="cc" and excluded below). Hardcoding telegram broke lark's nudge.
 OWNER_TAG_RE = re.compile(r'<channel\s+source="[a-z]+-channel"')
+# A *reply* tool call leaked as text — branch 1 re-sends these, so branch 2 must skip them
+# to avoid a double notification. NOTE: only matches the reply tool; a leaked NON-reply tool
+# call (e.g. <invoke name="Bash">, which branch 1 does NOT re-send) must NOT suppress the
+# forgot-nudge — otherwise an owner message the model ignored while stuck in a Bash-leak loop
+# silently falls through both branches (the 2026-06-08 gap).
+REPLY_LEAK_TAG = re.compile(r'<invoke\s+name="mcp__[a-z0-9_-]+__reply"')
 PARSE_ERR = "could not be parsed"
 TEXT_MIN = 30
 
@@ -96,6 +103,16 @@ def main():
     if not msgs:
         return 0
 
+    # ── DIAGNOSTIC entry log (TEMPORARY) — one line per invocation on a channel pane.
+    # Lets us split "Stop hook never fired for that turn" (NO entry line) from "fired but
+    # the leaked reply wasn't written to the transcript yet" (entry line present with
+    # last_invoke_text=False). Remove once the 2920-style leak-miss root cause is nailed.
+    _last_asst = next((m for m in reversed(msgs) if m.get("role") == "assistant"), None)
+    _last_sr = _last_asst.get("stop_reason") if _last_asst else None
+    _last_leak = any(isinstance(b, dict) and b.get("type") == "text" and "<invoke" in b.get("text", "")
+                     for b in (blocks(_last_asst) if _last_asst else []))
+    log(f"ENTRY ch={channel} msgs={len(msgs)} last_sr={_last_sr} last_invoke_text={_last_leak}")
+
     # ── BRANCH 1: leak repair — re-send any reply the model leaked as <invoke> text ──
     last_user = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=-1)
     sent_texts, leaks = set(), []
@@ -156,8 +173,9 @@ def main():
                 has_reply = True
             elif b.get("type") == "text":
                 txt = b.get("text", "")
-                if PARSE_ERR in txt or "<invoke" in txt:
-                    is_parse_err = True          # parse-error / leak text → not a forget
+                if PARSE_ERR in txt or REPLY_LEAK_TAG.search(txt):
+                    is_parse_err = True          # parse-error / reply-leak → branch 1's job, not a forget
+                    # (a leaked Bash/other tool call is NOT excluded here — see REPLY_LEAK_TAG note)
                 elif len(txt) > len(best):
                     best = txt
     # replied / parse-bug / nothing substantive → no nudge
