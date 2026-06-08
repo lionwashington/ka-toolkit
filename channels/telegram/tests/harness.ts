@@ -25,6 +25,10 @@ export interface MockTelegram {
   sent(): Array<{ chat_id: string; text: string }>
   /** All sendChatAction calls (typing ACKs). */
   chatActions(): Array<{ chat_id: string; action: string }>
+  /** Make getUpdates hang forever (never respond) — mimics a half-dead TCP socket. */
+  setHang(on: boolean): void
+  /** How many getUpdates requests the mock has received (a reconnect = a new request). */
+  getUpdatesCount(): number
   close(): Promise<void>
 }
 
@@ -34,9 +38,15 @@ export async function startMockTelegram(): Promise<MockTelegram> {
   const pending: TgUpdate[] = []
   const sentMsgs: Array<{ chat_id: string; text: string }> = []
   const actions: Array<{ chat_id: string; action: string }> = []
+  let hang = false
+  let getUpdatesCount = 0
 
   // grammy posts to ${apiRoot}/bot<token>/<method>
   app.post('/bot:token/getUpdates', (req, res) => {
+    getUpdatesCount++
+    // Hang mode: never respond → the request stays open until the CLIENT aborts it.
+    // This IS a half-dead TCP socket — the exact symptom we're reproducing.
+    if (hang) return
     const offset = Number(req.body?.offset ?? 0)
     const ready = pending.filter(u => (u.update_id ?? 0) >= offset)
     if (ready.length > 0) {
@@ -73,6 +83,8 @@ export async function startMockTelegram(): Promise<MockTelegram> {
     push: u => pending.push(u),
     sent: () => sentMsgs,
     chatActions: () => actions,
+    setHang: (on: boolean) => { hang = on },
+    getUpdatesCount: () => getUpdatesCount,
     close: () => new Promise<void>(r => http.close(() => r())),
   }
 }
@@ -93,16 +105,19 @@ async function getFreePort(): Promise<number> {
   return port
 }
 
-export async function startDaemon(opts: { apiRoot: string; ownerChatId?: string }): Promise<Daemon> {
+export async function startDaemon(opts: { apiRoot: string; ownerChatId?: string; pollTimeout?: number; pollHardTimeoutMs?: number }): Promise<Daemon> {
   const dataDir = mkdtempSync(join(tmpdir(), 'tg-daemon-test-'))
   const port = await getFreePort()
   const ownerChatId = opts.ownerChatId ?? '12345'
+  const pollTimeout = opts.pollTimeout ?? 1
+  // Omit the key entirely (not 0) unless the test sets it → exercises the real default path.
+  const hardLine = opts.pollHardTimeoutMs !== undefined ? `    poll_hard_timeout_ms: ${opts.pollHardTimeoutMs}\n` : ''
   // Two-bucket data, same as prod: config.yaml (non-secret port/poll) +
   // secrets.yaml (token/owner) in the config dir the daemon resolves via
   // KA_CONFIG_DIR. state.json/log/pid stay in KA_DAEMON_DATA_DIR. Here both
   // point at dataDir so the test exercises the real resolution path.
   writeFileSync(join(dataDir, 'config.yaml'),
-    `channels:\n  telegram:\n    port: ${port}\n    poll_timeout: 1\n`)
+    `channels:\n  telegram:\n    port: ${port}\n    poll_timeout: ${pollTimeout}\n${hardLine}`)
   writeFileSync(join(dataDir, 'secrets.yaml'),
     `channels:\n  telegram:\n    token: "test-token"\n    owner_chat_id: "${ownerChatId}"\n`)
   // Two launch modes, SAME assertions:

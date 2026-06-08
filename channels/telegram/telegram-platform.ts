@@ -50,7 +50,8 @@ const SECRETS_YAML = join(CONFIG_DIR, 'secrets.yaml')
 type Config = {
   http_host: string
   http_port: number
-  poll_timeout: number      // getUpdates long-poll seconds
+  poll_timeout: number      // getUpdates long-poll seconds (server-side)
+  poll_hard_timeout_ms: number  // client-side hard cap on a single getUpdates; 0 = off
   token: string             // bot token (secrets.yaml channels.telegram.token)
   owner_chat_id: string     // only this Telegram user id may reach the daemon
 }
@@ -80,6 +81,11 @@ function loadConfig(): Config {
     http_host: String(pub.host ?? '127.0.0.1'),
     http_port: Number(pub.port ?? 9877),
     poll_timeout: Number(pub.poll_timeout ?? 25),
+    // Client-side hard cap so a half-dead TCP socket can't hang the single-threaded
+    // pollLoop until the OS TCP timeout (observed: a 9-min inbound outage). Default =
+    // long-poll seconds + 10s buffer. Telegram's `timeout` is only a SERVER-side
+    // promise to reply within N s — it does nothing if the reply never reaches us.
+    poll_hard_timeout_ms: Number(pub.poll_hard_timeout_ms ?? (Number(pub.poll_timeout ?? 25) + 10) * 1000),
     // Secrets (token, owner_chat_id) come ONLY from secrets.yaml — never from
     // config.yaml or the environment. No silent default: an empty token/owner
     // is fail-closed in initTelegram (the daemon refuses to start).
@@ -324,6 +330,11 @@ async function pollLoop(): Promise<void> {
   while (running) {
     let updates: any[] = []
     try {
+      // The client-side hard cap that bounds this call lives in grammY's
+      // client.timeoutSeconds (set from poll_hard_timeout_ms in initTelegram). A stuck
+      // getUpdates aborts there and lands in the catch below, which reconnects on the
+      // next iteration (offset NOT advanced → no message lost). Without it grammY would
+      // wait out its 500s default and hang inbound for ~8 min.
       updates = await bot.api.getUpdates({
         offset: state.offset,
         timeout: cfg.poll_timeout,
@@ -429,7 +440,14 @@ export function initTelegram() {
   // apiRoot override (env): prod unset → real api.telegram.org; e2e points it at a
   // mock Telegram Bot API for full black-box coverage without real Telegram.
   const apiRoot = process.env.TELEGRAM_API_ROOT
-  bot = apiRoot ? new Bot(TOKEN, { client: { apiRoot } }) : new Bot(TOKEN)
+  // grammY's default client.timeoutSeconds is 500 (~8m20s) — THE reason a half-dead
+  // socket hung inbound for ~9 min (grammY waited out its own 500s cap). Lower it to
+  // poll_hard_timeout_ms so a stuck request aborts (grammY's own AbortSignal) and the
+  // pollLoop's catch reconnects on the next iteration. 0 keeps grammY's 500s default.
+  const clientOpts: Record<string, any> = {}
+  if (apiRoot) clientOpts.apiRoot = apiRoot
+  if (cfg.poll_hard_timeout_ms > 0) clientOpts.timeoutSeconds = Math.ceil(cfg.poll_hard_timeout_ms / 1000)
+  bot = new Bot(TOKEN, { client: clientOpts })
 
   return {
     host: cfg.http_host,
