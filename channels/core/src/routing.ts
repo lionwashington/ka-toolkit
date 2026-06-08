@@ -3,18 +3,34 @@
 // from lark-channel). Shared by both platforms; no module-state dependency.
 
 // Lenient routing-prefix parser. Accepts:
-//   prefix `to` (case-insensitive) OR `2` (homophone), optional whitespace,
+//   prefix `to` (case-insensitive) OR `2` (homophone), then AT LEAST ONE space,
 //   a COMMA-SEPARATED LIST of target tokens (each a channel name OR number),
 //   optional colon `:`/`：` (parsed but with NO semantic), optional whitespace,
 //   then the body.
-// Examples: `to main` `to main:` `2main` → ['main']; `to main, ka-dev2` /
+// The mandatory space after the prefix is what stops false positives: `2fa`,
+//   `2024`, `2nd`, `tomorrow` are NOT routes (prefix glued to the next chars), while
+//   `to main` / `2 main` still route. Leading whitespace before the prefix is fine.
+// Quote escape: a message that (after leading spaces) STARTS WITH A QUOTE is literal
+//   content, never a route — the wrapping quote pair is stripped. So `"to main: x"`
+//   delivers `to main: x` to the sticky target instead of routing to main.
+// Examples: `to main` `to main:` `2 main` → ['main']; `to main, ka-dev2` /
 //   `to main,ka-dev2:` → ['main','ka-dev2']; `to 7, 3:` → ['7','3'];
 //   `to 7, main` → ['7','main']; `to a, b, c msg` → ['a','b','c'] + body 'msg'.
 // Tokens are lowercased, trimmed, empties dropped, duplicates removed (order kept).
 // Returns matched=false when the text is not a routing attempt at all.
+const QUOTES = `"'“”‘’`
 export function parseRoutingPrefix(text: string):
   { matched: boolean; rawTargets: string[]; body: string } {
-  const m = text.match(/^\s*(?:to|2)\s*([A-Za-z0-9_-]+(?:\s*,\s*[A-Za-z0-9_-]+)*)\s*[:：]?\s*/i)
+  // Quote escape: leading quote → literal content, strip the wrapping quote pair.
+  const q = text.match(new RegExp(`^\\s*([${QUOTES}])([\\s\\S]*)$`))
+  if (q) {
+    let body = q[2]
+    const close = body.match(new RegExp(`^([\\s\\S]*?)[${QUOTES}]\\s*$`))
+    if (close) body = close[1]
+    return { matched: false, rawTargets: [], body }
+  }
+  // `to`/`2` then a MANDATORY space (the fix for 2fa/2024/tomorrow), then targets.
+  const m = text.match(/^\s*(?:to|2)\s+([A-Za-z0-9_-]+(?:\s*,\s*[A-Za-z0-9_-]+)*)\s*[:：]?\s*/i)
   if (!m) return { matched: false, rawTargets: [], body: text }
   const seen = new Set<string>()
   const rawTargets: string[] = []

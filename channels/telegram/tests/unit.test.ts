@@ -68,8 +68,11 @@ describe('parseRoutingPrefix', () => {
     assert.deepEqual(parseRoutingPrefix('to main'),
       { matched: true, rawTargets: ['main'], body: '' })
   })
-  test('`2main` homophone prefix → [main]', () => {
-    assert.deepEqual(parseRoutingPrefix('2main').rawTargets, ['main'])
+  test('`2 main` homophone prefix (space now required) → [main]', () => {
+    assert.deepEqual(parseRoutingPrefix('2 main').rawTargets, ['main'])
+  })
+  test('`2main` glued (no space) → NOT a route anymore', () => {
+    assert.equal(parseRoutingPrefix('2main').matched, false)
   })
   test('numeric target `to 1: hi` → [1] + body', () => {
     assert.deepEqual(parseRoutingPrefix('to 1: hi'),
@@ -85,6 +88,30 @@ describe('parseRoutingPrefix', () => {
   })
   test('fullwidth colon ： accepted + ignored', () => {
     assert.equal(parseRoutingPrefix('to main：hi').body, 'hi')
+  })
+
+  // ---- prefix needs a trailing space: 2fa/2024/tomorrow are CONTENT, not routes ----
+  test('`2fa…` glued to letters → not a route (the 2fa bug)', () => {
+    const p = parseRoutingPrefix('2fa配置了。recovery codes')
+    assert.equal(p.matched, false); assert.equal(p.body, '2fa配置了。recovery codes')
+  })
+  test('`2024`/`2nd`/`tomorrow` glued → not routes', () => {
+    assert.equal(parseRoutingPrefix('2024年的事').matched, false)
+    assert.equal(parseRoutingPrefix('2nd round').matched, false)
+    assert.equal(parseRoutingPrefix('tomorrow plan').matched, false)
+  })
+  test('leading whitespace before the prefix is ignored (still a route)', () => {
+    assert.deepEqual(parseRoutingPrefix('   to main x').rawTargets, ['main'])
+  })
+
+  // ---- quote escape: a leading quote = literal content, wrapping quotes stripped ----
+  test('double-quoted `"to main: x"` → not a route, quotes stripped', () => {
+    const p = parseRoutingPrefix('"to main: x"')
+    assert.equal(p.matched, false); assert.equal(p.body, 'to main: x')
+  })
+  test('CJK-quoted `“to main 啥意思”` → not a route, quotes stripped', () => {
+    const p = parseRoutingPrefix('“to main 啥意思”')
+    assert.equal(p.matched, false); assert.equal(p.body, 'to main 啥意思')
   })
 
   // ---- multi-target list (comma-separated targets + edges) ----
