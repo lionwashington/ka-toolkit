@@ -299,7 +299,10 @@ async function handleUpdate(u: any): Promise<'ok' | 'stop'> {
   const p = parseRoutingPrefix(routingText)
   const sticky = applyStickyRouting(p, state.last_target)
   const rawTargets = sticky.rawTargets
-  let content = p.matched ? p.body : routingText
+  // p.body is the content to deliver in EVERY case: prefix-stripped (route), the original
+  // (bare), or unquoted (quote-escape). The old `matched ? body : routingText` dropped the
+  // quote-escape unwrap (delivered the literal with quotes still in it).
+  let content = p.body
   if (sticky.lastTarget !== state.last_target) {
     state.last_target = sticky.lastTarget
     saveState(state)

@@ -21,14 +21,13 @@
 const QUOTES = `"'“”‘’`
 export function parseRoutingPrefix(text: string):
   { matched: boolean; rawTargets: string[]; body: string } {
-  // Quote escape: leading quote → literal content, strip the wrapping quote pair.
-  const q = text.match(new RegExp(`^\\s*([${QUOTES}])([\\s\\S]*)$`))
-  if (q) {
-    let body = q[2]
-    const close = body.match(new RegExp(`^([\\s\\S]*?)[${QUOTES}]\\s*$`))
-    if (close) body = close[1]
-    return { matched: false, rawTargets: [], body }
-  }
+  // Quote escape: a leading quote → literal content, never a route. Strip the FIRST
+  // quoted span (the opening pair) so `"to main" rest` → `to main rest`; an opening
+  // quote with no close strips just that one.
+  const q = text.match(new RegExp(`^\\s*[${QUOTES}]([\\s\\S]*?)[${QUOTES}]([\\s\\S]*)$`))
+  if (q) return { matched: false, rawTargets: [], body: q[1] + q[2] }
+  const q1 = text.match(new RegExp(`^\\s*[${QUOTES}]([\\s\\S]*)$`))
+  if (q1) return { matched: false, rawTargets: [], body: q1[1] }
   // `to`/`2` then a MANDATORY space (the fix for 2fa/2024/tomorrow), then targets.
   const m = text.match(/^\s*(?:to|2)\s+([A-Za-z0-9_-]+(?:\s*,\s*[A-Za-z0-9_-]+)*)\s*[:：]?\s*/i)
   if (!m) return { matched: false, rawTargets: [], body: text }

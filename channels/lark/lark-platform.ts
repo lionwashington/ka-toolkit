@@ -376,7 +376,7 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
       const p = parseRoutingPrefix(q.text)
       const sticky = applyStickyRouting(p, state.last_target_by_chat?.[chatId])
       rawTargets = sticky.rawTargets
-      content = p.matched ? p.body : q.text
+      content = p.body  // deliver content in every case (route-stripped / bare / unquoted)
       const byChat = state.last_target_by_chat ?? (state.last_target_by_chat = {})
       if (sticky.lastTarget && sticky.lastTarget !== byChat[chatId]) {
         byChat[chatId] = sticky.lastTarget

@@ -113,6 +113,14 @@ describe('parseRoutingPrefix', () => {
     const p = parseRoutingPrefix('“to main 啥意思”')
     assert.equal(p.matched, false); assert.equal(p.body, 'to main 啥意思')
   })
+  test('quote-escape unwraps only the OPENING pair: `"to main" rest` → `to main rest`', () => {
+    const p = parseRoutingPrefix('"to main"  收到了么？')
+    assert.equal(p.matched, false); assert.equal(p.body, 'to main  收到了么？')
+  })
+  test('opening quote with no close → strip just the opening quote', () => {
+    const p = parseRoutingPrefix('"to main 收到')
+    assert.equal(p.matched, false); assert.equal(p.body, 'to main 收到')
+  })
 
   // ---- multi-target list (comma-separated targets + edges) ----
   test('`to main, ka-dev2` → [main, ka-dev2] (space after comma)', () => {
