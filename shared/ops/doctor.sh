@@ -50,7 +50,10 @@ else
 fi
 
 # 3. channel daemon health (daemon kind = KA_CHANNEL_KIND: lark→9876 / telegram→9877)
-if curl -sf --max-time 1 "http://127.0.0.1:$PORT/api/status" >/dev/null 2>&1; then
+# Capture the status BODY (not just exit) — section 4c reuses channels_online to
+# cross-check which panes actually hold a channel connection.
+_chan_json="$(curl -sf --max-time 1 "http://127.0.0.1:$PORT/api/status" 2>/dev/null)"
+if [ -n "$_chan_json" ]; then
     note_ok "$DKIND daemon: up (port $PORT)"
 else
     note_err "$DKIND daemon: down (port $PORT) — channels offline"
@@ -106,6 +109,66 @@ if tmux_has_session "$SESSION" 2>/dev/null; then
 else
     note_err "session: $SESSION not running"
     hint "bring the workshop up: ka workshop"
+fi
+
+# 4c. daemon connection coverage — every online pane SHOULD hold a live connection
+# to each resident daemon that serves it. A shortfall (more online panes than
+# daemon sessions) means a pane silently lost its connection and can't self-reconnect
+# (e.g. kb idle-eviction: the server closed the session, the CC dropped the tools and
+# has no way to re-init) → that pane's tools vanished until it is restarted. This is
+# the check that catches "4 panes online but only 2 on kb".
+if tmux_has_session "$SESSION" 2>/dev/null; then
+    # Ground truth = the online panes carrying an @ka_channel (bash 3.2: no mapfile).
+    declare -a PANES=()
+    while IFS= read -r _ch; do [ -n "$_ch" ] && PANES+=("$_ch"); done \
+        < <("$TMUX_BIN" list-panes -s -t "$SESSION" -F '#{@ka_channel}' 2>/dev/null | grep -v '^$' | sort -u)
+    _npanes=${#PANES[@]}
+
+    # --- channel daemon: it reports connected names (channels_online) → name the gap ---
+    if [ -n "${_chan_json:-}" ] && command -v python3 >/dev/null 2>&1; then
+        _conn_ch="$(printf '%s' "$_chan_json" | python3 -c 'import sys,json
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(0)
+print("\n".join((d.get("channels_online") or {}).keys()))' 2>/dev/null)"
+        _miss_ch=""
+        for _p in "${PANES[@]}"; do printf '%s\n' "$_conn_ch" | grep -qx "$_p" || _miss_ch="$_miss_ch $_p"; done
+        if [ -n "$_miss_ch" ]; then
+            note_err "channel coverage: $_npanes panes online, but NO channel connection from:$_miss_ch"
+            hint "those panes' inbound channel is dead (can't receive messages) — restart them"
+        else
+            note_ok "channel coverage: all $_npanes online panes connected"
+        fi
+    fi
+
+    # --- kb daemon: count DISTINCT panes holding a live TCP connection (a connected
+    #     pane always keeps its SSE stream open, so an 'established' socket reliably
+    #     means connected). We deliberately do NOT trust /api/status mcp_sessions:
+    #     it counts zombie/duplicate sessions (client gone but not yet idle-reaped)
+    #     and over-reports coverage. lsof client cwd → pane @ka_channel is the truth.
+    #     Assumption: kb is a USER-scope (global) MCP, so every pane should connect.
+    #     (If a pane ever opts out of kb, this would over-report — revisit then.)
+    if [ -n "${_kb_json:-}" ] && command -v lsof >/dev/null 2>&1 && [ "$_npanes" -gt 0 ]; then
+        _conn_kb=""
+        for _pid in $(lsof -nP -iTCP:"$KBPORT" 2>/dev/null | grep ESTABLISHED | grep -v "$KBPORT->" | awk '{print $2}' | sort -u); do
+            _cwd="$(lsof -a -p "$_pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
+            [ -n "$_cwd" ] || continue
+            _pch="$("$TMUX_BIN" list-panes -s -t "$SESSION" -F '#{pane_current_path}|#{@ka_channel}' 2>/dev/null \
+                | awk -F'|' -v c="$_cwd" '$1==c{print $2; exit}')"
+            [ -n "$_pch" ] && _conn_kb="$_conn_kb $_pch"   # dups OK: membership test below dedupes
+        done
+        _miss_kb=""; _nconn=0
+        for _p in "${PANES[@]}"; do
+            if printf '%s\n' $_conn_kb | grep -qx "$_p"; then _nconn=$((_nconn + 1)); else _miss_kb="$_miss_kb $_p"; fi
+        done
+        if [ -n "$_miss_kb" ]; then
+            note_warn "kb coverage: $_nconn/$_npanes panes connected — missing kb:$_miss_kb"
+            hint "kb is global → every pane should connect; a gap = idle-evict drop. restore: ka workshop restart <name>"
+        else
+            note_ok "kb coverage: all $_npanes panes connected to kb"
+        fi
+    elif [ -n "${_kb_json:-}" ]; then
+        note_ok "kb coverage: (lsof unavailable — per-pane check skipped)"
+    fi
 fi
 
 # 5. declared mates (yaml default=true) vs running (tmux panes)
