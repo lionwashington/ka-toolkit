@@ -148,3 +148,29 @@ ka_channel_port() {
     fi
     printf '%s' "$port"
 }
+
+# ── kb retrieval daemon resolution ──────────────────────────────────────────
+# The kb retrieval daemon (the LanceDB kb_search backend, the 2nd resident
+# daemon) binds the port from config.yaml `retrieval.daemon.port`, falling back
+# to 7705 when the key is absent (the daemon's own built-in default). Mirrors
+# ka_channel_port() so status/doctor probe both daemons the same way. The command
+# face is `ka kb`; the service id / config section keep the technical name
+# `retrieval` / `kb-retrieval`.
+ka_kb_retrieval_port() {
+    local cfg port
+    cfg="${KA_CONFIG:-$KA_CONFIG_DIR/config.yaml}"
+    port=""
+    if [ -f "$cfg" ]; then
+        port="$(awk '
+            { match($0, /^ */); ind = RLENGTH }
+            ind==0 { k=$0; sub(/:.*/,"",k); gsub(/[ \t]/,"",k); inr=(k=="retrieval"); ind2=0; next }
+            inr && ind==2 { k=$0; gsub(/^ +/,"",k); sub(/:.*/,"",k); gsub(/[ \t]/,"",k); ind2=(k=="daemon"); next }
+            inr && ind2 && ind>=4 && /port[ \t]*:/ {
+                v=$0; sub(/.*port[ \t]*:[ \t]*/,"",v); gsub(/[^0-9]/,"",v)
+                if (v!="") { print v; exit }
+            }
+        ' "$cfg")"
+    fi
+    [ -n "$port" ] || port=7705
+    printf '%s' "$port"
+}

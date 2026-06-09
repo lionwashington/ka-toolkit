@@ -72,7 +72,7 @@ of each CC spawning its own stdio server (which would load a multi-GB model per 
   incremental, serialized), `/api/shutdown`.
 - Singleton via fixed loopback port (`retrieval.daemon.{host,port}`, default
   `127.0.0.1:7705`) — a second daemon hits EADDRINUSE and exits cleanly.
-- CLI: `ka kb retrieval [start|stop|restart|status]`, `ka kb reindex [--full]`
+- CLI: `ka kb [start|stop|restart|status]`, `ka kb reindex [--full]`
   (a thin curl to `/api/reindex`).
 
 ## Deployment note (native deps)

@@ -2,8 +2,8 @@
 # ka — Knowledge Assistant CLI.
 #   ka workshop [start|stop|restart|spawn-mates] [name]   tmux panes / CCs
 #   ka workshop peek <name> [lines] | poke <name> <keys…>  inspect/unstick a pane (out-of-band)
-#   ka daemon   [start|stop|restart|status|config]        the active channel daemon
-#   ka kb retrieval [start|stop|restart|status]            shared LanceDB retrieval daemon
+#   ka channel  [start|stop|restart|status|config]        the channel daemon (telegram|lark)
+#   ka kb       [start|stop|restart|status]                the kb retrieval daemon (kb_search backend)
 #   ka kb reindex [--full]                                 (re)build the kb_search index
 #   ka kb distill [status]                                 background distillation
 #   ka status | doctor | cron … | help
@@ -33,10 +33,10 @@ case "$CMD" in
     workshop)        # tmux panes / CCs (no daemon ops)
         exec "$KA_WORKSHOP_DIR/workshop.sh" "$@"
         ;;
-    daemon)          # the active channel daemon
+    channel)         # the channel daemon (telegram|lark) — internal dir/script still daemon.sh
         exec "$KA_CHANNELS_DIR/daemon.sh" "$@"
         ;;
-    kb)              # knowledge-base ops cluster: kb retrieval … | kb reindex …
+    kb)              # knowledge-base ops cluster: kb daemon verbs | kb reindex | kb distill
         exec "$KA_KB_DIR/kb.sh" "$@"
         ;;
     cron)

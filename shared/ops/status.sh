@@ -114,6 +114,24 @@ else
     degraded=1
 fi
 
+# kb retrieval daemon health — the 2nd resident daemon (LanceDB kb_search backend,
+# port from retrieval.daemon.port, default 7705). Same HTTP-probe shape as the
+# channel daemon, plus a warm/ready distinction. (Only liveness/readiness is shown;
+# the daemon's knowledge_base_path is intentionally NOT printed.)
+_kbport="$(ka_kb_retrieval_port)"
+if _kb_json="$(curl -sf --max-time 1 "http://127.0.0.1:$_kbport/api/status" 2>/dev/null)"; then
+    _kb_ready="$(printf '%s' "$_kb_json" | sed -n 's/.*"ready":[[:space:]]*\([a-z]*\).*/\1/p')"
+    _kb_pid="$(printf '%s' "$_kb_json" | sed -n 's/.*"pid":[[:space:]]*\([0-9]*\).*/\1/p')"
+    if [ "$_kb_ready" = "true" ]; then
+        printf '  %s kb:        daemon up (port %s, pid %s, ready)\n' "$(glyph_ok)" "$_kbport" "${_kb_pid:-?}"
+    else
+        printf '  %s kb:        daemon up (port %s, pid %s — WARMING, not ready)\n' "$(glyph_warn)" "$_kbport" "${_kb_pid:-?}"
+    fi
+else
+    printf '  %s kb:        daemon down (port %s — kb_search offline)\n' "$(glyph_warn)" "$_kbport"
+    degraded=1
+fi
+
 # ──────────────────────────────────────────────────────────────────────────
 # RUNTIME-STATE DETAIL (informational — does not change broken/degraded above
 # unless a hard failure is detected). Each section degrades gracefully.

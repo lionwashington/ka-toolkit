@@ -26,7 +26,7 @@ orchestration / communication / scheduling) plus shared / config / tests:
 | `kb/adapter-cc` | Claude Code runtime adapter (capture hook, scheduler, install) |
 | `kb/ops` | Background distill worker scripts |
 | `channels/core` | **Communication.** Platform-independent MCP-over-HTTP daemon kernel (sessions, routing, dispatch, re-adopt self-heal) |
-| `channels/telegram`, `channels/lark` | Telegram / Lark platform adapters; `channels/ops/daemon.sh` is the `ka daemon` CLI |
+| `channels/telegram`, `channels/lark` | Telegram / Lark platform adapters; `channels/ops/daemon.sh` is the `ka channel` CLI |
 | `workshop/ops` | **Orchestration.** `ka workshop` (tmux panes / CCs) + start-pane / wait-ready / tmux & yaml helpers |
 | `cron/ops` | **Scheduling.** `ka cron` + the run / plist / crontab backend |
 | `shared/ops`, `shared/bin/ka` | Cross-cutting: the `ka` dispatcher + `common.sh` / `doctor` / `status` / `help` |

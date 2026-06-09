@@ -64,8 +64,9 @@ ka workshop stop   # wrap up
 | Stop a single mate | `ka workshop stop <name>` |
 | Restart a single stuck mate | `ka workshop restart <name>` |
 | Restart the whole workshop | `ka workshop restart` (run outside the session) |
-| Restart the channel daemon (CCs re-adopt) | `ka daemon restart` |
-| Check / edit the channel daemon | `ka daemon status` / `ka daemon config` |
+| Restart the channel daemon (CCs re-adopt) | `ka channel restart` |
+| Check / edit the channel daemon | `ka channel status` / `ka channel config` |
+| Check / restart the kb retrieval daemon | `ka kb status` / `ka kb restart` |
 | Something feels off (<1s) | `ka status` |
 | Deep consistency diagnostics | `ka doctor` |
 
@@ -74,7 +75,7 @@ ka workshop stop   # wrap up
 ## `ka workshop` — workshop lifecycle
 
 `ka workshop` is the sole entry point for managing the workshop panes. It reads `workshop.yaml`, warns
-if the channel daemon is down (it does not start it — see `ka daemon`), then pulls each CC into its own tmux pane (or window).
+if the channel daemon is down (it does not start it — see `ka channel`), then pulls each CC into its own tmux pane (or window).
 
 ```
 ka workshop [<verb>] [<name> [<workdir>]] [flags]
@@ -90,7 +91,7 @@ ka workshop [<verb>] [<name> [<workdir>]] [flags]
 | `ka workshop restart [<name>]` | no name → restart the **whole** workshop (stop all → start all; run from a plain terminal); `<name>` → restart a single mate's pane. ⚠️ See the warning below |
 | `ka workshop spawn-mates <name> [<workdir>]` | with `<workdir>` → register and start; without → equivalent to `start <name>` |
 
-`ka workshop` does **not** manage the channel daemon — it only warns if the daemon is down (the panes don't depend on it to launch). Daemon lifecycle lives in [`ka daemon`](#ka-daemon--the-active-channel-daemon).
+`ka workshop` does **not** manage the channel daemon — it only warns if the daemon is down (the panes don't depend on it to launch). Daemon lifecycle lives in [`ka channel`](#ka-channel--the-channel-daemon).
 
 **Flags** (shared by all verbs):
 
@@ -154,10 +155,27 @@ To restart the **whole** workshop use `ka workshop restart` (no name) — run it
 
 ---
 
-## `ka daemon` — the active channel daemon
+## Two resident daemons
 
-All channel-daemon operations live here (they used to be `ka workshop --restart-daemon`).
-`ka daemon` always acts on the **active** daemon — the kind comes from `config/config.yaml`
+The system runs **two** long-lived daemons, each addressed as `ka <subsystem> start|stop|restart|status`:
+
+| Subsystem | Daemon | Port | Command | Config key |
+|---|---|---|---|---|
+| `ka channel` | telegram/lark comms bus (every CC↔CC and CC↔user message) | `9877` | `ka channel …` | `channels.<kind>.port` |
+| `ka kb` | LanceDB retrieval engine (the `kb_search` backend) | `7705` | `ka kb …` | `retrieval.daemon.port` |
+
+Both appear in `ka status` and `ka doctor`. Neither auto-starts: `ka workshop` ensures the channel
+daemon at startup; the kb daemon is started manually (`ka kb start`) and watched via status/doctor.
+
+> The command face drops the word "retrieval": `ka kb start|stop|restart|status`. The internals keep
+> their technical names — config section `retrieval:`, service id `kb-retrieval` in `/api/status`.
+
+---
+
+## `ka channel` — the channel daemon
+
+All channel-daemon operations live here (formerly `ka daemon`; before that `ka workshop --restart-daemon`).
+`ka channel` always acts on the **active** daemon — the kind comes from `config/config.yaml`
 `channel_kind` (telegram | lark) and the port from that file's
 `channels.<kind>.port`. There is no per-command kind override;
 to switch kinds, run `./install.sh --channel-kind=telegram|lark` (or edit `config/config.yaml`)
@@ -165,24 +183,56 @@ and restart.
 
 | Verb | Effect |
 |---|---|
-| `ka daemon start` | start the active daemon (idempotent) |
-| `ka daemon stop` | stop it |
-| `ka daemon restart` | restart it — every CC **re-adopts automatically** (~2s blip, no relaunch needed) |
-| `ka daemon status` | health check; prints kind + port |
-| `ka daemon config` | open `config/config.yaml` + `config/secrets.yaml` in `$EDITOR` (bot token / webhook in secrets, port in config); apply with `ka daemon restart` |
+| `ka channel start` | start the active daemon (idempotent) |
+| `ka channel stop` | stop it |
+| `ka channel restart` | restart it — every CC **re-adopts automatically** (~2s blip, no relaunch needed) |
+| `ka channel status` | health check; prints kind + port |
+| `ka channel config` | open `config/config.yaml` + `config/secrets.yaml` in `$EDITOR` (bot token / webhook in secrets, port in config); apply with `ka channel restart` |
 
 ```bash
-ka daemon status          # is the active daemon up?
-ka daemon config          # edit credentials/port, then:
-ka daemon restart         # reload (CCs re-adopt)
+ka channel status          # is the active daemon up?
+ka channel config          # edit credentials/port, then:
+ka channel restart         # reload (CCs re-adopt)
 ```
 
-> Use `ka daemon restart` after deploying new daemon code (`./install.sh --only daemon`).
+> Use `ka channel restart` after deploying new daemon code (`./install.sh --only daemon`).
 > The CCs are **not** relaunched — channel-core re-adopts each CC's reconnect (no 404),
 > so inbound+outbound recover within the SSE retry window.
 
-> **Top-level `ka start` / `ka stop` / `ka restart` / `ka spawn-mates` are gone** — use
-> the `ka workshop` verbs. `ka kb distill status` is now `ka kb distill status`.
+> **`ka daemon` is gone** (renamed to `ka channel`, no alias) — "daemon" was too generic once a
+> second daemon (`ka kb`) existed. **Top-level `ka start` / `ka stop` / `ka restart` / `ka spawn-mates`
+> are also gone** — use the `ka workshop` verbs.
+
+---
+
+## `ka kb` — the kb retrieval daemon (+ index / distill)
+
+`ka kb start|stop|restart|status` operate the shared **LanceDB retrieval daemon** — the resident process
+that holds the LanceDB connection and the embedding model (loaded once, shared by every CC), backing the
+`kb_search` MCP tool over HTTP on port `7705` (`retrieval.daemon.port`, default 7705).
+
+| Verb | Effect |
+|---|---|
+| `ka kb start` | start the kb retrieval daemon (cold start warms the model ~10–50s) |
+| `ka kb stop` | stop it |
+| `ka kb restart` | stop + start |
+| `ka kb status` | health check (`/api/status`: pid / ready / engine) |
+
+```bash
+ka kb status               # is the kb retrieval daemon up & ready?
+ka kb restart              # reload it (warmup ~10-50s on cold start)
+```
+
+> No auto-start / supervisor (same as the channel daemon). If it dies, `ka status` / `ka doctor` show it
+> **down** and you bring it back with `ka kb start`. The daemon + its launch scripts are deployed under
+> `~/.knowledge-assistant/kb/mcp/kb` by `./install.sh --only node-mcp`.
+
+The same cluster also holds the index + distillation ops:
+
+| Command | Effect |
+|---|---|
+| `ka kb reindex [--full]` | (re)build the `kb_search` index — incremental, or `--full` for a full rebuild |
+| `ka kb distill [status]` | background distillation (see the dedicated section below) |
 
 ---
 
@@ -215,7 +265,8 @@ ka status
 | runtime | the `runtime:` field of `workshop.yaml` (default cc) | informational only, doesn't change the exit code |
 | session | `tmux has-session` | broken |
 | mates | the `default=true` declared in `workshop.yaml` vs the actually-running `@ka_channel` panes (excluding main) | degraded |
-| telegram | daemon liveness probe `http://127.0.0.1:9877/api/status` | degraded |
+| telegram (channel daemon) | daemon liveness probe `http://127.0.0.1:9877/api/status` | degraded |
+| kb (retrieval daemon) | daemon liveness probe `http://127.0.0.1:7705/api/status` (ready/warming) | degraded |
 
 **Output example (healthy)**:
 
@@ -229,6 +280,7 @@ ka status
              - freelancer
              - work-assistant
   ✔ telegram:  daemon up (port 9877)
+  ✔ kb:        daemon up (port 7705, pid 23778, ready)
 
  overall: ✅ healthy
 ```
@@ -263,7 +315,8 @@ Checks:
 
 1. **config** exists
 2. whether **runtime** is cc (the only implemented adapter; codex/gemini are reserved names only)
-3. whether the **telegram daemon** is up on port 9877
+3. whether the **channel daemon** is up on port 9877 (telegram/lark)
+3b. whether the **kb retrieval daemon** is up on port 7705 (ready / warming / `warm_error`); down ⇒ error with a `ka kb start` hint
 4. **session + per-pane invariants**:
    - **channel uniqueness** — two panes sharing one channel will cross-talk
    - whether each pane's cwd exists

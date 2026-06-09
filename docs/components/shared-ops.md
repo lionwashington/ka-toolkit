@@ -13,7 +13,7 @@ canonical entry point is `ka workshop`. The whole tree is deployed to
 | Path                          | Purpose                                                                          |
 | ----------------------------- | -------------------------------------------------------------------------------- |
 | `cli/workshop.sh`             | Single entry for `ka workshop` (`start` / `stop` / `restart` / `spawn-mates`).   |
-| `cli/daemon.sh`               | `ka daemon` (`start`/`stop`/`restart`/`status`/`config`) — the active channel daemon. |
+| `cli/daemon.sh`               | `ka channel` (`start`/`stop`/`restart`/`status`/`config`) — the channel daemon (internal script keeps the daemon.sh name). |
 | `cli/status.sh`               | `ka status` — <1s health summary (config / session / mates / daemon).            |
 | `cli/doctor.sh`               | `ka doctor` — deeper consistency diagnostics + fix hints.                        |
 | `cli/wait-ready.sh`           | Internal: poll a tmux pane until its CC runtime is idle-ready (not a `ka` verb). |
@@ -54,7 +54,7 @@ ka status
 ```
 
 `ka workshop` reads `workshop.yaml`, warns if the channel daemon is down (it does
-NOT start it — that's `ka daemon start`), then launches each CC into its own tmux
+NOT start it — that's `ka channel start`), then launches each CC into its own tmux
 pane (or window with `--window`). The owner routes from Telegram with `to <name>:`
 (no prefix → `main`).
 
@@ -109,7 +109,7 @@ The bot token lives **only** in the daemon; no CC process ever touches it.
 `start-pane.sh` binds each pane to its channel by registering a project-local
 `telegram-channel` MCP server pointing at `…/mcp?name=$KA_CHANNEL`. `ka workshop`
 does NOT manage the daemon (it only warns if it's down); daemon lifecycle is
-`ka daemon start|stop|restart|status|config`. Full design:
+`ka channel start|stop|restart|status|config`. Full design:
 `docs/channels/telegram/ARCHITECTURE.md`. Live state: the `/telegram-channel` skill.
 
 ## Three-layer cwd guarantee

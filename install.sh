@@ -178,7 +178,7 @@ deploy_kb_mcp() {        # kb (knowledge-assistant) MCP + kb-retrieval daemon �
   #      .node files resolve next to the bundle (no pnpm symlink farm, no repo pointer).
   # Entries: dist/index.mjs (stdio MCP) + dist/daemon.mjs (the kb-retrieval HTTP daemon).
   # 🔴 Non-disruptive: only lays down the artifact. Does NOT register the MCP
-  #    (register_mcp, --switch) and does NOT start the daemon (ka kb retrieval start /
+  #    (register_mcp, --switch) and does NOT start the daemon (ka kb start /
   #    阶段B). A plain install never changes a running CC.
   local src="$REPO_ROOT/kb/mcp-server" dest="$RUNTIME/kb/mcp/kb"
   log "kb MCP + kb-retrieval daemon → ${dest} (esbuild self-contained + npm install natives)"
@@ -202,7 +202,7 @@ deploy_kb_mcp() {        # kb (knowledge-assistant) MCP + kb-retrieval daemon �
     rm -rf "$bak"; mkdir -p "$bak"
     cp -a "$dest/dist" "$bak/dist" 2>/dev/null || true
     cp -a "$dest"/*.sh "$bak/" 2>/dev/null || true
-    log "  🔒 backed up current dist+scripts → ${bak}  (rollback: ka kb retrieval stop; restore dist/*.sh; ka kb retrieval start)"
+    log "  🔒 backed up current dist+scripts → ${bak}  (rollback: ka kb stop; restore dist/*.sh; ka kb start)"
   fi
   # 3) esbuild both entries → self-contained .mjs (natives external).
   mkdir -p "$dest/dist"

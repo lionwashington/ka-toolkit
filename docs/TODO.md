@@ -6,7 +6,7 @@
 session replied over Telegram:
 
 1. **Silent drop.** Several replies never reached the owner, yet the `reply`
-   tool returned success and `ka daemon status` counted `replies N (0 failed)`.
+   tool returned success and `ka channel status` counted `replies N (0 failed)`.
    `sendToTelegram` (`channels/telegram/telegram-platform.ts`) sends plain text
    (no parse_mode), chunked at 4096 — so it is NOT a markdown-parse failure. On
    `bot.api.sendMessage` error it returns an error string, but the MCP `reply`

@@ -21,7 +21,7 @@ The full suite lives in `tests/cases/<NN>-*.sh` (17 cases). A few examples:
 | 01-yaml-parse                 | `workshop/ops/yaml-parse.sh` emits correct flat records.  |
 | 03-inject-prompt              | `workshop/ops/inject-prompt.sh` delivers text into fake claude. |
 | 26-channel-kind               | daemon port/kind resolution from `config.yaml` + fail-closed. |
-| 27-ka-daemon                  | `ka daemon` verbs / status / kind targeting.              |
+| 27-ka-channel                 | `ka channel` verbs / status / kind targeting.             |
 | 28-distill-chunk              | chunked distill over an oversized snapshot (bounded memory). |
 
 ## Fake claude

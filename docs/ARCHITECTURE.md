@@ -144,7 +144,7 @@ deployed runtime) is organized by since gen3.
 ```
 
 The `ka` CLI (`shared/bin/ka`) is cross-cutting, not a fifth part — its verbs map
-onto the parts (`ka workshop`→2, `ka daemon`→3, `ka cron`→4, `ka kb distill`→1).
+onto the parts (`ka workshop`→2, `ka channel`→3, `ka cron`→4, `ka kb`→1).
 
 ### Repo / runtime structure (organized by the four parts)
 
@@ -226,7 +226,7 @@ For implementation-level details see `docs/channels/telegram/ARCHITECTURE.md`. K
   seamlessly reconnect with the **same session-id** via SSE retry; only a truly dead one (>60s unreachable) gets evicted. This both cures the half-open deadlock
   and avoids leaking zombie sessions.
 - **Supervision**: the `* * * * * start.sh` installed by `ka cron` self-heals (brings it back up within ≤60s if it dies). To upgrade the daemon code,
-  `./install.sh --only daemon` then `ka daemon restart` (every CC re-adopts automatically).
+  `./install.sh --only daemon` then `ka channel restart` (every CC re-adopts automatically).
 
 ### §3.2 ka workshop (orchestrating independent CC processes)
 
@@ -274,11 +274,13 @@ whether it is `default`.
 | Command | Description |
 |---|---|
 | `ka workshop [start\|stop\|restart\|spawn-mates] [name]` | workshop lifecycle / tmux panes (see §3.2); restart with no name = whole workshop |
-| `ka daemon [start\|stop\|restart\|status\|config]` | the active channel daemon (kind from `config.yaml channel_kind`) |
-| `ka status` | <1s health summary (config / session / daemon / channels / cron) |
-| `ka doctor` | deeper read-only consistency diagnostics + fix hints |
-| `ka cron` | declarative scheduled jobs (see §5) |
+| `ka channel [start\|stop\|restart\|status\|config]` | the channel daemon (kind from `config.yaml channel_kind`) — 1st resident daemon |
+| `ka kb [start\|stop\|restart\|status]` | the kb retrieval daemon (LanceDB `kb_search` backend, port 7705) — 2nd resident daemon |
+| `ka kb reindex [--full]` | (re)build the `kb_search` index (incremental \| full) |
 | `ka kb distill [status]` | trigger background distillation / show its progress (foreground is inside `/kb distill`) |
+| `ka status` | <1s health summary (config / session / both daemons / channels / cron) |
+| `ka doctor` | deeper read-only consistency diagnostics + fix hints (both daemons) |
+| `ka cron` | declarative scheduled jobs (see §5) |
 
 > The `ka logs` / `ka mate` / `ka patch-apply` / `ka install-crons` that were planned in old docs but **never shipped**
 > do not exist and have been removed from this document.

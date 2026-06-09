@@ -6,7 +6,7 @@
 # Verbs (P2 startup convergence, docs/P2_STARTUP_CONVERGENCE.md §6):
 #   ka workshop [--pane|--window]
 #       bare = `ka workshop start` (no name): launch every mate with default=true.
-#   (daemon lifecycle is NOT here — use `ka daemon start|stop|restart|status`.)
+#   (daemon lifecycle is NOT here — use `ka channel start|stop|restart|status`.)
 #   ka workshop start [<name>]
 #       no name  → launch all default=true.
 #       <name>   → not in yaml: report missing; in yaml: launch into tmux if not
@@ -331,16 +331,16 @@ cmd_start() {
     fi
 
     # ---- channel daemon: detect + warn only (workshop does NOT manage it) ---
-    # Daemon lifecycle now lives entirely in `ka daemon`. The panes/CCs don't
+    # Daemon lifecycle now lives entirely in `ka channel`. The panes/CCs don't
     # depend on the daemon being up to launch — each CC connects (and re-adopts)
     # whenever the daemon is up — so workshop only WARNS if it's down, and never
     # starts / stops / restarts it. (--skip-daemon suppresses even the check.)
     if [ "$SKIP_DAEMON" -eq 0 ] && [ "$DRY_RUN" != "1" ]; then
         if ! curl -sf --max-time 1 "http://127.0.0.1:$PORT/api/status" >/dev/null 2>&1; then
-            log_warn "${CHANNEL_KIND} daemon not running (port $PORT) — channels won't connect until it's up. Start it: ka daemon start"
+            log_warn "${CHANNEL_KIND} daemon not running (port $PORT) — channels won't connect until it's up. Start it: ka channel start"
         fi
     elif [ "$SKIP_DAEMON" -eq 0 ] && [ "$DRY_RUN" = "1" ]; then
-        echo "[dry-run] check ${CHANNEL_KIND} daemon on port $PORT; warn (only) if down — workshop does not start it (use: ka daemon start)"
+        echo "[dry-run] check ${CHANNEL_KIND} daemon on port $PORT; warn (only) if down — workshop does not start it (use: ka channel start)"
     fi
 
     # ---- cwd existence check ------------------------------------------------

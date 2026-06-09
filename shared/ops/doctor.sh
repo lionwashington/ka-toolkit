@@ -58,6 +58,26 @@ else
     hint "start: $_ds   (or just run ka workshop, which ensures the daemon is up)"
 fi
 
+# 3b. kb retrieval daemon health — the 2nd resident daemon (LanceDB kb_search
+# backend, port from retrieval.daemon.port, default 7705). No auto-start (matches
+# the channel daemon), so visibility here is how a dead one gets noticed.
+KBPORT="$(ka_kb_retrieval_port)"
+if _kb_json="$(curl -sf --max-time 1 "http://127.0.0.1:$KBPORT/api/status" 2>/dev/null)"; then
+    if printf '%s' "$_kb_json" | grep -q '"ready"[[:space:]]*:[[:space:]]*true'; then
+        note_ok "kb daemon: up (port $KBPORT, ready)"
+    else
+        note_warn "kb daemon: up but not ready (model still warming, port $KBPORT)"
+        hint "wait ~10-50s for warmup, then re-check: ka kb status"
+    fi
+    if printf '%s' "$_kb_json" | grep -qE '"warm_error"[[:space:]]*:[[:space:]]*"'; then
+        note_err "kb daemon: warm_error set — retrieval degraded"
+        hint "inspect: ka kb status;  restart: ka kb restart"
+    fi
+else
+    note_err "kb daemon: down (port $KBPORT) — kb_search offline"
+    hint "start: ka kb start   (cold start warms the model ~10-50s)"
+fi
+
 # 4. workshop session + per-pane invariants
 if tmux_has_session "$SESSION" 2>/dev/null; then
     pc="$(tmux_pane_count "$SESSION")"

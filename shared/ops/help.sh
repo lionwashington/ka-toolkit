@@ -12,7 +12,7 @@ COMMANDS
     workshop        Manage the workshop — independent CC processes, each in its
                     own tmux pane + cwd, talking to you via the channel daemon
                     (route with 'to <name>:' in Telegram). Does NOT manage the
-                    daemon (that's `ka daemon`); only warns if it's down. Verbs:
+                    daemon (that's `ka channel`); only warns if it's down. Verbs:
                       ka workshop [--pane|--window]
                           Start every mate with default=true (default layout:
                           pane / split-screen; --window = one window per CC).
@@ -29,20 +29,27 @@ COMMANDS
                           (default=false) and launch it. Without: alias for
                           `start <name>`. Already running → left untouched.
                     Flags: --dry-run, --all, --only NAME[,...], --skip-daemon
-    daemon          Operate on the ACTIVE channel daemon (telegram|lark, from
-                    config.yaml channel_kind; port from channels.<kind>.port). Verbs:
-                      ka daemon start | stop | restart | status | config
+    channel         Operate on the channel daemon (telegram|lark, from config.yaml
+                    channel_kind; port from channels.<kind>.port). Verbs:
+                      ka channel start | stop | restart | status | config
                     `restart` re-adopts every CC automatically (~2s blip);
                     `config` opens config.yaml + secrets.yaml in $EDITOR.
-    status          Print a <1s health summary (tmux / channel daemon / mates).
-    doctor          Deeper consistency diagnostics + fix hints (daemon / channel
-                    uniqueness / pane cwd / mates / cron). Exit 1 if issues found.
+    kb              Knowledge-base subsystem. Verbs:
+                      ka kb start | stop | restart | status
+                          The shared LanceDB retrieval daemon (kb_search backend,
+                          port 7705) — the 2nd resident daemon; shown by status/doctor.
+                      ka kb reindex [--full]
+                          (Re)build the kb_search index (incremental | full).
+                      ka kb distill [status]
+                          Spawn a background Opus /kb distill worker; `status` shows
+                          the last run. Full form:
+                          ka kb distill --jsonl <abs path> [--session-id <uuid>] [--dry-run]
+    status          Print a <1s health summary (tmux / channel + kb daemons / mates).
+    doctor          Deeper consistency diagnostics + fix hints (channel + kb daemons /
+                    channel uniqueness / pane cwd / mates / cron). Exit 1 if issues found.
     cron            Manage declarative cron jobs (~/.knowledge-assistant/cron.yaml).
                     Subcommands: list, add, remove, enable, disable, run,
                                  install, uninstall, import, status. See `ka cron help`.
-    distill         Spawn a background Opus /kb distill worker (snapshot-bound).
-                      ka kb distill --jsonl <abs path> [--session-id <uuid>] [--dry-run]
-                      ka kb distill status [--json]    # state of the last/current run
     help, -h        Show this help.
 
 ENVIRONMENT
@@ -54,7 +61,7 @@ ENVIRONMENT
     ./install.sh --channel-kind=telegram|lark).
 
 DESIGN
-    docs/KA_CLI_USAGE.md   (full ka command manual: workshop verbs, daemon, cron, doctor)
+    docs/KA_CLI_USAGE.md   (full ka command manual: workshop verbs, channel, kb, cron, doctor)
     docs/ARCHITECTURE.md   (as-built architecture: daemon + workshop, design/runtime boundary)
 
 EXAMPLES
@@ -62,7 +69,8 @@ EXAMPLES
     ka workshop spawn-mates dev2 ~/work/x  # register + launch a new mate
     ka workshop stop dev2                  # stop one mate
     ka workshop restart                    # reset the whole workshop cleanly
-    ka daemon status                       # is the active channel daemon up?
-    ka daemon restart                      # reload the daemon (CCs re-adopt)
-    ka status                              # quick health check
+    ka channel status                      # is the channel daemon up?
+    ka channel restart                     # reload the channel daemon (CCs re-adopt)
+    ka kb status                           # is the kb retrieval daemon up?
+    ka status                              # quick health check (both daemons)
 EOF

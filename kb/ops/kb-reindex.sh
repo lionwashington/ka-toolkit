@@ -25,5 +25,5 @@ if [ -n "$r" ]; then
   echo "$r"
   echo "$r" | grep -q '"ok":true' && exit 0 || exit 1
 fi
-echo '{"ok":false,"error":"kb-retrieval daemon not reachable — start it: ka kb retrieval start"}'
+echo '{"ok":false,"error":"kb-retrieval daemon not reachable — start it: ka kb start"}'
 exit 1

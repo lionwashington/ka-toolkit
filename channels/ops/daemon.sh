@@ -1,5 +1,5 @@
 #!/bin/bash
-# ka daemon — operate on the ACTIVE channel daemon. Which daemon (telegram|lark)
+# ka channel — operate on the channel daemon (telegram|lark). Which daemon
 # and its port come from the single source of truth: config.yaml channel_kind +
 # config.yaml channels.<kind>.port (resolved in common.sh). There is no
 # per-command kind override — to switch kinds, edit config.yaml (or re-run
@@ -43,7 +43,7 @@ case "$VERB" in
     status)
         resp="$(curl -sf --max-time 2 "http://$HOST:$PORT/api/status" 2>/dev/null || true)"
         if [ -z "$resp" ]; then
-            log_warn "$KIND daemon down (port $PORT) — start with: ka daemon start"
+            log_warn "$KIND daemon down (port $PORT) — start with: ka channel start"
             exit 1
         fi
         log_ok "$KIND daemon up (port $PORT, dir $(basename "$DIR"))"
@@ -76,19 +76,19 @@ PY
         cfg="${KA_CONFIG:-$KA_CONFIG_DIR/config.yaml}"
         secrets="$KA_CONFIG_DIR/secrets.yaml"
         [ -f "$cfg" ] || { log_err "no config.yaml at $cfg (run ./install.sh --only config first)"; exit 1; }
-        log_info "editing $KIND daemon config: $cfg + $secrets (channels.$KIND; apply with: ka daemon restart)"
+        log_info "editing $KIND daemon config: $cfg + $secrets (channels.$KIND; apply with: ka channel restart)"
         exec "${EDITOR:-vi}" "$cfg" "$secrets"
         ;;
     -h|--help|help|'')
         cat <<EOF
-ka daemon — operate on the active channel daemon ($KIND, from config.yaml channel_kind)
-  ka daemon start      start the daemon
-  ka daemon stop       stop the daemon
-  ka daemon restart    restart it (CCs re-adopt automatically, ~2s blip)
-  ka daemon status     health check (shows kind + port)
-  ka daemon config     edit config.yaml + secrets.yaml (\$EDITOR), then: ka daemon restart
+ka channel — operate on the channel daemon ($KIND, from config.yaml channel_kind)
+  ka channel start      start the daemon
+  ka channel stop       stop the daemon
+  ka channel restart    restart it (CCs re-adopt automatically, ~2s blip)
+  ka channel status     health check (shows kind + port)
+  ka channel config     edit config.yaml + secrets.yaml (\$EDITOR), then: ka channel restart
 EOF
         ;;
     *)
-        log_err "unknown: ka daemon '$VERB' (try: ka daemon help)"; exit 2 ;;
+        log_err "unknown: ka channel '$VERB' (try: ka channel help)"; exit 2 ;;
 esac
