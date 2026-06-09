@@ -19,7 +19,7 @@
  * daemon until the cutover (阶段B). Building/deploying it changes no live CC.
  */
 import express from 'express'
-import type { Server } from 'node:http'
+import type { Server, ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -33,16 +33,29 @@ import { createMcpServer } from './index.js'
 interface Session {
   transport: StreamableHTTPServerTransport
   lastSeen: number
+  // Open long-lived responses for this session — chiefly the GET SSE stream a
+  // connected client holds open for server→client messages. A session with ≥1
+  // open stream is LIVE (the client is still there, just idle) and must never be
+  // idle-evicted; the socket's 'close' event is the reliable disconnect signal.
+  streams: Set<ServerResponse>
 }
 
 // Session hygiene: HTTP MCP clients (a CC's kb connection) often vanish without a
 // clean DELETE, so transport.onclose never fires and sessions pile up forever
-// (observed 54 inits / 0 closes → the daemon's event loop eventually jammed). Evict
-// sessions idle beyond the TTL, and hard-cap the total. A CC whose session was
-// reaped just re-initializes on its next call (cheap).
-const SESSION_IDLE_TTL_MS = 15 * 60_000
-const SESSION_MAX = 48
-const SESSION_SWEEP_MS = 60_000
+// (observed 54 inits / 0 closes → the daemon's event loop eventually jammed). We
+// reap zombies, but ONLY ones that are genuinely gone — never a live-but-idle CC.
+//
+// The original code idle-evicted purely on a wall-clock TTL, on the assumption a
+// reaped CC "just re-initializes on its next call". That assumption is FALSE for
+// Claude Code: when the server closes its session, the client marks the MCP server
+// disconnected and DROPS its tools from the list — so the CC can't make a "next
+// call" to trigger re-init, and kb_search silently stays gone until the pane is
+// restarted. A connected client keeps a GET SSE stream open; we track those open
+// streams per session and only idle-evict a session with ZERO open streams (its
+// socket actually closed → reliably gone). Live idle panes are kept indefinitely.
+const SESSION_IDLE_TTL_MS = Number(process.env.KB_SESSION_IDLE_TTL_MS) || 15 * 60_000
+const SESSION_MAX = Number(process.env.KB_SESSION_MAX) || 48
+const SESSION_SWEEP_MS = Number(process.env.KB_SESSION_SWEEP_MS) || 60_000
 
 function makeLogger(stateDir: string): (msg: string) => void {
   const logFile = join(stateDir, 'kb-retrieval.log')
@@ -92,13 +105,19 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
     const s = sessions.get(id)
     if (!s) return
     sessions.delete(id)
+    for (const r of s.streams) { try { r.end() } catch { /* best-effort */ } }
+    s.streams.clear()
     try { void s.transport.close() } catch { /* best-effort */ }
     log(`mcp session evicted ${id} (${why}, sessions=${sessions.size})`)
   }
-  // Periodic hygiene sweep: drop idle sessions + enforce the cap (oldest-first).
+  // Periodic hygiene sweep: drop idle-AND-disconnected sessions + enforce the cap
+  // (oldest-first). A session with ≥1 open stream is a live client (idle, but still
+  // connected) and is never idle-evicted — only ones whose sockets have all closed.
   const sweep = setInterval(() => {
     const now = Date.now()
-    for (const [id, s] of sessions) if (now - s.lastSeen > SESSION_IDLE_TTL_MS) closeSession(id, 'idle')
+    for (const [id, s] of sessions) {
+      if (s.streams.size === 0 && now - s.lastSeen > SESSION_IDLE_TTL_MS) closeSession(id, 'idle')
+    }
     if (sessions.size > SESSION_MAX) {
       const oldest = [...sessions.entries()].sort((a, b) => a[1].lastSeen - b[1].lastSeen)
       for (const [id] of oldest.slice(0, sessions.size - SESSION_MAX)) closeSession(id, 'over-cap')
@@ -114,6 +133,13 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
     const existing = sessionId ? sessions.get(sessionId) : undefined
     if (existing) {
       existing.lastSeen = Date.now()
+      // Track this response as an open stream: a held-open GET SSE stream keeps the
+      // session LIVE (never idle-evicted); short POSTs close right away and drop out.
+      // The socket 'close' event is the reliable disconnect signal the SDK's onclose
+      // misses for clients that vanish without a clean DELETE.
+      const stream = res as unknown as ServerResponse
+      existing.streams.add(stream)
+      res.on('close', () => existing.streams.delete(stream))
       await existing.transport.handleRequest(req as any, res as any, req.body)
       return
     }
@@ -124,7 +150,7 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
-          sessions.set(id, { transport, lastSeen: Date.now() })
+          sessions.set(id, { transport, lastSeen: Date.now(), streams: new Set() })
           log(`mcp session init ${id} (sessions=${sessions.size})`)
         },
       })
