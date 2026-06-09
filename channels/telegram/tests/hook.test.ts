@@ -1,8 +1,10 @@
-// e2e for the reply-safety Stop hook (channels/ops/reply-safety-hook.py). Two branches:
-//  · LEAK: a reply leaked as <invoke> TEXT → re-sent via daemon /api/send, once, skipped
-//    when a real reply already went out.
-//  · FORGOT: an owner channel message answered in terminal text with no reply → emits a
-//    decision:block nudge, at most once per owner message; excludes parse-error/leak turns.
+// e2e for the reply-safety Stop hook (channels/ops/reply-safety-hook.py). 3 layers:
+//  · LEAK: a WELL-FORMED reply leaked as <invoke> TEXT → re-sent via daemon /api/send,
+//    once, skipped when a real reply already went out. Counts as answered.
+//  · NUDGE: an owner message with no successful reply → decision:block to re-engage the
+//    model. Budget is per failure TYPE: forgot/silent = 2, malformed-reply/parse-error = 1.
+//  · NOTICE: once the nudge budget is exhausted, the hook itself POSTs a FIXED, type-specific
+//    notice to /api/send (model-independent floor) so the owner is NEVER left in silence.
 // Pure deterministic, no LLM. Run: node --experimental-strip-types --test tests/hook.test.ts
 import { test, before, after, describe } from 'node:test'
 import assert from 'node:assert/strict'
@@ -110,17 +112,33 @@ describe('reply-safety hook — forgot-reply nudge branch', () => {
     assert.match(d.reason, /reply/, 'reason instructs using the reply tool')
   })
 
-  test('nudge fires at most once per owner message (no loop)', async () => {
+  test('forgot: nudge x2 then ONE fixed notice, then idempotent (bounded, no loop)', async () => {
     const home = mkdtempSync(join(tmpdir(), 'hook-home-'))
     const d1 = decision(await runHook([ownerMsg('q', 'mf2'), asstText(ANSWER)], { home }))
     const d2 = decision(await runHook([ownerMsg('q', 'mf2'), asstText(ANSWER)], { home }))
-    assert.equal(d1.decision, 'block', 'first fires')
-    assert.equal(d2.decision, undefined, 'second gives up (no loop)')
+    assert.equal(d1.decision, 'block', 'nudge #1')
+    assert.equal(d2.decision, 'block', 'nudge #2 (forgot budget = 2)')
+    const before = mock.sent().length
+    const d3 = decision(await runHook([ownerMsg('q', 'mf2'), asstText(ANSWER)], { home }))
+    assert.equal(d3.decision, undefined, 'budget exhausted → no more block')
+    const noticed = await waitFor(() => mock.sent().slice(before).some(m => /compact/.test(m.text)))
+    assert.ok(noticed, 'a fixed notice is sent to the owner after the nudges fail (north star: never silent)')
+    const before2 = mock.sent().length
+    await runHook([ownerMsg('q', 'mf2'), asstText(ANSWER)], { home })
+    await waitFor(async () => false, 300).catch(() => {})
+    assert.equal(mock.sent().slice(before2).length, 0, 'notice fires exactly once (idempotent)')
   })
 
-  test('parse-error turn (not a forget) → no nudge', async () => {
-    const out = await runHook([ownerMsg('q', 'mf3'), asstText("The model's tool call could not be parsed (retry also failed).")])
-    assert.equal(decision(out).decision, undefined)
+  test('parse-error turn → nudge ONCE (budget 1) then a parse-error notice', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'hook-home-'))
+    const lines = [ownerMsg('q', 'mf3'), asstText("The model's tool call could not be parsed (retry also failed).")]
+    const d1 = decision(await runHook(lines, { home }))
+    assert.equal(d1.decision, 'block', 'parse-error now DOES nudge (was the silent-drop gap)')
+    const before = mock.sent().length
+    const d2 = decision(await runHook(lines, { home }))
+    assert.equal(d2.decision, undefined, 'budget 1 → no 2nd nudge')
+    const noticed = await waitFor(() => mock.sent().slice(before).some(m => /parse error/.test(m.text)))
+    assert.ok(noticed, 'a parse-error notice reaches the owner after the single nudge')
   })
 
   test('non-reply tool leaked as text (Bash) + owner msg ignored → STILL nudges (2026-06-08 gap)', async () => {
@@ -141,9 +159,11 @@ describe('reply-safety hook — forgot-reply nudge branch', () => {
     assert.equal(decision(out).decision, undefined)
   })
 
-  test('owner msg + only short text (<30 chars) → no nudge', async () => {
+  test('owner msg + only short text (<30 chars) = SILENT → nudges (never leave the owner empty)', async () => {
+    // Old behavior bailed here ("nothing substantive"); the north star forbids silence —
+    // a turn that answered the owner with nothing still escalates (nudge → notice).
     const out = await runHook([ownerMsg('q', 'mf5'), asstText('好的')])
-    assert.equal(decision(out).decision, undefined)
+    assert.equal(decision(out).decision, 'block', 'a silent turn must nudge, not bail')
   })
 
   test('cc message (not owner) answered in terminal → no nudge', async () => {
