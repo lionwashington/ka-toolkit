@@ -74,6 +74,10 @@ of each CC spawning its own stdio server (which would load a multi-GB model per 
   `127.0.0.1:7705`) — a second daemon hits EADDRINUSE and exits cleanly.
 - CLI: `ka kb [start|stop|restart|status]`, `ka kb reindex [--full]`
   (a thin curl to `/api/reindex`).
+- **Session liveness**: a connected CC holds a GET SSE stream open; the daemon idle-evicts
+  only sessions whose streams have ALL closed (genuinely disconnected), never a live-but-idle
+  CC. This matters because a wrongly-evicted Claude Code drops `kb_search` from its tool list
+  and can't re-init until the pane restarts — `ka doctor` flags such coverage gaps.
 
 ## Deployment note (native deps)
 

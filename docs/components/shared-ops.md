@@ -15,7 +15,7 @@ canonical entry point is `ka workshop`. The whole tree is deployed to
 | `cli/workshop.sh`             | Single entry for `ka workshop` (`start` / `stop` / `restart` / `spawn-mates`).   |
 | `cli/daemon.sh`               | `ka channel` (`start`/`stop`/`restart`/`status`/`config`) — the channel daemon (internal script keeps the daemon.sh name). |
 | `cli/status.sh`               | `ka status` — <1s health summary (config / session / mates / daemon).            |
-| `cli/doctor.sh`               | `ka doctor` — deeper consistency diagnostics + fix hints.                        |
+| `cli/doctor.sh`               | `ka doctor` — deeper consistency diagnostics + fix hints (incl. daemon connection coverage: online panes vs who's actually connected to the channel / kb daemons). |
 | `cli/wait-ready.sh`           | Internal: poll a tmux pane until its CC runtime is idle-ready (not a `ka` verb). |
 | `cli/cron.sh` + `cli/cron/`   | `ka cron` — declarative cron (list/add/remove/enable/disable/run/install/…).     |
 | `kb/distill-bg.sh`           | `ka distill` — spawn a headless `/kb distill` worker.               |
