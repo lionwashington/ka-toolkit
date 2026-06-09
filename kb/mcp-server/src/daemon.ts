@@ -205,13 +205,32 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
     reindexing = true
     try {
       const r = await retriever.reindex({ full: !!full })
-      log(`reindex (${full ? 'full' : 'incremental'}): changed=${r.changedPaths?.length ?? r.docCount ?? 0} removed=${r.removedPaths?.length ?? 0} rows=${r.rowCount ?? 0}`)
+      log(`reindex (${full ? 'full' : 'incremental'}): changed=${r.changedPaths?.length ?? r.docCount ?? 0} removed=${r.removedPaths?.length ?? 0} rows=${r.rowCount ?? 0} optimized=${r.optimized ?? false}${r.optimizeError ? ` optimizeError=${r.optimizeError}` : ''}`)
       res.json({ ok: true, ...r })
     } catch (e: any) {
       log(`reindex failed: ${e?.message ?? e}`)
       res.json({ ok: false, error: e?.message ?? String(e) })
     } finally {
       reindexing = false
+    }
+  })
+
+  // Compact + prune the index out-of-band (reclaim append/MVCC churn). Goes through
+  // the engine's write gate so it's serialized with reindex + searches wait it out —
+  // online-safe, no daemon stop needed. Used by the one-time cleanup and any cron.
+  app.post('/api/optimize', async (req, res) => {
+    if (!retriever.optimize) { res.status(400).json({ ok: false, error: 'optimize not supported by engine' }); return }
+    // Optional ?retention_ms overrides the version-retention margin (0 = deepest clean,
+    // for the one-time cleanup; omit → engine default margin, safe for routine compaction).
+    const rm = Number((req.query as any)?.retention_ms)
+    const retentionMs = Number.isFinite(rm) ? rm : undefined
+    try {
+      const stats = await retriever.optimize(retentionMs)
+      log(`optimize (retention_ms=${retentionMs ?? 'default'}): ${JSON.stringify(stats)}`)
+      res.json({ ok: true, stats })
+    } catch (e: any) {
+      log(`optimize failed: ${e?.message ?? e}`)
+      res.json({ ok: false, error: e?.message ?? String(e) })
     }
   })
 

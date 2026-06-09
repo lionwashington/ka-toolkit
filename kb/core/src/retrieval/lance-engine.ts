@@ -54,6 +54,14 @@ export interface RebuildMeta {
 /** Per-kind weight in the fusion — conversations rank below topic files. */
 const KIND_WEIGHT: Record<string, number> = { parent: 1, sub: 1, conversation: 0.5 }
 const RRF_K = 60
+/**
+ * optimize() prunes table versions older than this. LanceDB is append + MVCC: every
+ * incremental upsert appends a fragment, tombstones old rows, and rebuilds the FTS
+ * index, leaving superseded fragments + orphaned index builds + old version manifests
+ * that are never reclaimed without an explicit optimize. The retention margin keeps a
+ * slow concurrent reader from being pruned mid-query. Configurable for tuning/tests.
+ */
+const OPTIMIZE_RETENTION_MS = Number(process.env.KB_OPTIMIZE_RETENTION_MS) || 10 * 60_000
 
 export class LanceEngine {
   private db: lancedb.Connection | null = null
@@ -221,6 +229,28 @@ export class LanceEngine {
       })
       throw e
     }
+  }
+
+  /**
+   * Compact the table + prune old versions/fragments (reclaim the append+MVCC churn
+   * that incremental upserts accumulate — superseded data fragments, orphaned FTS index
+   * builds, stale version manifests). Runs as the EXCLUSIVE writer so it never collides
+   * with a rebuild/upsert, and searches wait it out via the write gate. `cleanupOlderThan`
+   * keeps a retention margin so a slow concurrent reader isn't pruned mid-query. No-op if
+   * the table doesn't exist yet. Online-safe: optimize commits a new compacted version;
+   * the next access re-opens it.
+   */
+  async optimize(retentionMs = OPTIMIZE_RETENTION_MS): Promise<unknown> {
+    return this.withWrite(() => this._optimize(retentionMs))
+  }
+  private async _optimize(retentionMs: number): Promise<unknown> {
+    if (!readManifest(this.manifestPath)) return null
+    const db = await this.conn()
+    if (!(await db.tableNames()).includes(this.tableName)) return null
+    const tbl = await db.openTable(this.tableName)
+    const stats = await tbl.optimize({ cleanupOlderThan: new Date(Date.now() - retentionMs) })
+    this.tbl = null // force a clean re-open of the compacted table on next access
+    return stats ?? null
   }
 
   /** The current manifest (null if the index was never built). */

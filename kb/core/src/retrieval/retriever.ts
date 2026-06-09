@@ -14,6 +14,10 @@ export interface ReindexResult {
   rowCount?: number
   docCount?: number
   sourceMtimeMax?: number
+  /** Whether a post-reindex compaction ran (B1 auto-optimize). */
+  optimized?: boolean
+  /** Non-fatal optimize failure message, if compaction threw (the index stays valid). */
+  optimizeError?: string
 }
 
 export interface Retriever {
@@ -21,6 +25,10 @@ export interface Retriever {
   indexAll(): Promise<void>
   /** (Re)build the index. Optional — only the LanceDB retriever supports it. */
   reindex?(opts?: { full?: boolean }): Promise<ReindexResult>
+  /** Compact + prune the index (reclaim append/MVCC churn). Optional — LanceDB only.
+   * `retentionMs` overrides the version-retention margin (0 = deepest clean; used by the
+   * one-time cleanup — the default margin keeps a safety window for ongoing compaction). */
+  optimize?(retentionMs?: number): Promise<unknown>
   /** Index freshness manifest (version/built_at/counts/status). Optional. */
   indexStatus?(): Promise<import('./manifest.js').IndexManifest | null>
 }
@@ -88,10 +96,32 @@ export class LanceRetriever implements Retriever {
     const { reindex, incrementalReindex } = await import('./indexer.js')
     if (opts.full) {
       const b = await reindex(engine, this.kbPath, emb)
-      return { full: true, rowCount: b.rows.length, docCount: b.docCount, sourceMtimeMax: b.sourceMtimeMax }
+      const opt = await this.runOptimize(engine)
+      return { full: true, rowCount: b.rows.length, docCount: b.docCount, sourceMtimeMax: b.sourceMtimeMax, ...opt }
     }
     const r = await incrementalReindex(engine, this.kbPath, emb)
-    return { full: false, changedPaths: r.changedPaths, removedPaths: r.removedPaths, rowCount: r.rowCount, sourceMtimeMax: r.sourceMtimeMax }
+    // B1: only compact when the upsert actually mutated rows (skip the common no-op
+    // incremental where nothing changed → nothing to reclaim).
+    const changed = (r.changedPaths?.length ?? 0) + (r.removedPaths?.length ?? 0) > 0
+    const opt = changed ? await this.runOptimize(engine) : {}
+    return { full: false, changedPaths: r.changedPaths, removedPaths: r.removedPaths, rowCount: r.rowCount, sourceMtimeMax: r.sourceMtimeMax, ...opt }
+  }
+
+  /** Compact after a mutating reindex (B1). Non-fatal: a failed optimize leaves the
+   * index valid (just un-compacted), so we report it instead of failing the reindex. */
+  private async runOptimize(engine: LanceEngine): Promise<{ optimized?: boolean; optimizeError?: string }> {
+    try {
+      await engine.optimize()
+      return { optimized: true }
+    } catch (e) {
+      return { optimized: false, optimizeError: e instanceof Error ? e.message : String(e) }
+    }
+  }
+
+  /** Public compaction entry (daemon /api/optimize + the one-time cleanup). */
+  async optimize(retentionMs?: number): Promise<unknown> {
+    const engine = await this.engine()
+    return engine.optimize(retentionMs)
   }
 
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
