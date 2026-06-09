@@ -204,11 +204,29 @@ h, rem = divmod(int(up), 3600); m = rem // 60
 ready = d.get("ready")
 print(f"    uptime:     {h}h{m:02d}m   pid {d.get('pid','?')}")
 print(f"    engine:     {d.get('engine','?')}   ready: {'yes' if ready else 'no (warming)'}")
-print(f"    sessions:   {d.get('mcp_sessions','?')} mcp")
+print(f"    sessions:   {d.get('mcp_sessions','?')} mcp (raw, incl. not-yet-reaped)")
 we = d.get("warm_error")
 if we:
     print(f"    warm_error: {we}")
 PY
+    # Per-pane real connections: the daemon's mcp_sessions is anonymous + zombie-inflated, so
+    # resolve who's actually connected by mapping each kb client socket's cwd → pane @ka_channel
+    # (same technique as `ka doctor` kb-coverage). Shows MISSING for a pane that lost kb.
+    if command -v lsof >/dev/null 2>&1 && tmux_has_session "$SESSION" 2>/dev/null; then
+        _kb_conn=""
+        for _pid in $(lsof -nP -iTCP:"$_kbport" 2>/dev/null | grep ESTABLISHED | grep -v "$_kbport->" | awk '{print $2}' | sort -u); do
+            _cwd="$(lsof -a -p "$_pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
+            [ -n "$_cwd" ] || continue
+            _pch="$("$TMUX_BIN" list-panes -s -t "$SESSION" -F '#{pane_current_path}|#{@ka_channel}' 2>/dev/null \
+                | awk -F'|' -v c="$_cwd" '$1==c{print $2; exit}')"
+            [ -n "$_pch" ] && _kb_conn="$_kb_conn $_pch"
+        done
+        printf '    %-14s %s\n' "CHANNEL" "KB"
+        "$TMUX_BIN" list-panes -s -t "$SESSION" -F '#{@ka_channel}' 2>/dev/null | grep -v '^$' | sort -u | while IFS= read -r _p; do
+            if printf '%s\n' $_kb_conn | grep -qx "$_p"; then _st="ok"; else _st="MISSING"; fi
+            printf '    %-14s %s\n' "$_p" "$_st"
+        done
+    fi
 else
     printf '  %s(kb daemon down — no runtime detail)%s\n' "$C_DIM" "$C_RST"
 fi
