@@ -71,18 +71,22 @@ if [ -n "$CONFIG" ] && [ -f "$CONFIG" ]; then
 fi
 declared_n="${#DECLARED_NAMES[@]}"
 
-# Running mates = independent CC panes tagged with @ka_channel (P2: no CC team
-# registry anymore; a mate is just a tmux pane). Exclude the main pane.
+# Running agents = all CC panes tagged with @ka_channel (P2: no CC team registry
+# anymore; an agent is just a tmux pane). INCLUDES the main pane — main is the lead
+# (one of the agents), so the count reflects every running CC, not just non-lead mates.
 running_names=""
 if tmux_has_session "$SESSION" 2>/dev/null; then
     running_names="$("$TMUX_BIN" list-panes -s -t "$SESSION" -F '#{@ka_channel}' 2>/dev/null \
-        | grep -vx main | grep -v '^$' | sort -u)"
+        | grep -v '^$' | sort -u)"
 fi
 if [ -n "$running_names" ]; then
     mate_count="$(printf '%s\n' "$running_names" | grep -c .)"
-    printf '  %s mates:     %s running (declared default: %s)\n' \
-        "$(glyph_ok)" "$mate_count" "$declared_n"
-    printf '%s\n' "$running_names" | sed 's/^/             - /'
+    printf '  %s mates:     %s running (incl. main)\n' "$(glyph_ok)" "$mate_count"
+    # List the lead (main) first with a (lead) marker, then the rest in order.
+    if printf '%s\n' "$running_names" | grep -qx main; then
+        printf '             - %-13s(lead)\n' "main"
+    fi
+    printf '%s\n' "$running_names" | grep -vx main | sed 's/^/             - /'
     # Flag declared-but-not-running mates.
     if [ "$declared_n" -gt 0 ]; then
         missing=""
@@ -152,9 +156,9 @@ else
     printf '  %s(session not running)%s\n' "$C_DIM" "$C_RST"
 fi
 
-# c. daemon: channels_online + per-channel session count + key counters + uptime
+# c. channel daemon: channels_online + per-channel session count + key counters + uptime
 echo ""
-printf '%s── daemon ──%s\n' "$C_DIM" "$C_RST"
+printf '%s── channel daemon ──%s\n' "$C_DIM" "$C_RST"
 if [ -n "$_daemon_json" ] && command -v python3 >/dev/null 2>&1; then
     KA_DAEMON_JSON="$_daemon_json" python3 - <<'PY' 2>/dev/null || printf '  (could not parse daemon status)\n'
 import json, os, sys
@@ -182,6 +186,31 @@ print(f"    probes_sent={g('probes_sent_total')} probe_fail={g('probe_failures_t
 PY
 else
     printf '  %s(daemon down — no runtime counters)%s\n' "$C_DIM" "$C_RST"
+fi
+
+# d. kb daemon: liveness / readiness / session count / uptime (the 2nd resident
+# daemon; reuses _kb_json fetched above). knowledge_base_path is intentionally NOT shown.
+echo ""
+printf '%s── kb daemon ──%s\n' "$C_DIM" "$C_RST"
+if [ -n "$_kb_json" ] && command -v python3 >/dev/null 2>&1; then
+    KA_KB_JSON="$_kb_json" python3 - <<'PY' 2>/dev/null || printf '  (could not parse kb status)\n'
+import json, os, sys
+try:
+    d = json.loads(os.environ.get("KA_KB_JSON", ""))
+except Exception:
+    sys.exit(1)
+up = d.get("uptime_seconds", 0) or 0
+h, rem = divmod(int(up), 3600); m = rem // 60
+ready = d.get("ready")
+print(f"    uptime:     {h}h{m:02d}m   pid {d.get('pid','?')}")
+print(f"    engine:     {d.get('engine','?')}   ready: {'yes' if ready else 'no (warming)'}")
+print(f"    sessions:   {d.get('mcp_sessions','?')} mcp")
+we = d.get("warm_error")
+if we:
+    print(f"    warm_error: {we}")
+PY
+else
+    printf '  %s(kb daemon down — no runtime detail)%s\n' "$C_DIM" "$C_RST"
 fi
 
 # e. distill: last run verdict + time + last-run stats

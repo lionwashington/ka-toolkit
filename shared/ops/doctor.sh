@@ -317,10 +317,9 @@ echo ""
 printf '%s── hooks (settings.json) ──%s\n' "$C_DIM" "$C_RST"
 SETTINGS="$HOME/.claude/settings.json"
 if [ -f "$SETTINGS" ] && command -v python3 >/dev/null 2>&1; then
-    runtime_hooks_dir="$KA_HOME/kb/hooks"
-    hook_rows="$(python3 - "$SETTINGS" "$runtime_hooks_dir" "$KA_HOME" <<'PY' 2>/dev/null
+    hook_rows="$(python3 - "$SETTINGS" "$KA_HOME" <<'PY' 2>/dev/null
 import json, sys
-settings, rt_dir, repo = sys.argv[1], sys.argv[2], sys.argv[3]
+settings, rt_root = sys.argv[1], sys.argv[2]
 try:
     with open(settings) as f:
         hooks = json.load(f).get("hooks", {})
@@ -331,26 +330,24 @@ for event in sorted(hooks):
     for group in hooks[event]:
         for h in group.get("hooks", []):
             cmd = h.get("command", "")
-            if rt_dir in cmd:
-                origin = "runtime"
-            elif repo and repo in cmd:
-                origin = "repo"
-            else:
-                origin = "other"
+            # runtime = the command lives anywhere under the deployed runtime root ($KA_HOME)
+            # — NOT just kb/hooks (hooks also live in channels/ops, etc.). external = it points
+            # outside $KA_HOME (a repo checkout / hand-wired path) → redeploy via install.sh.
+            origin = "runtime" if rt_root and rt_root in cmd else "external"
             rows.append(f"{event}\t{origin}\t{cmd}")
 print("\n".join(rows))
 PY
 )"
     if [ -n "$hook_rows" ]; then
         printf '    %-14s %-8s %s\n' "EVENT" "ORIGIN" "COMMAND"
-        repo_warned=0
+        ext_warned=0
         while IFS=$'\t' read -r ev origin cmd; do
             [ -z "$ev" ] && continue
             printf '    %-14s %-8s %s\n' "$ev" "$origin" "$cmd"
-            [ "$origin" = "repo" ] && repo_warned=1
+            [ "$origin" = "external" ] && ext_warned=1
         done <<<"$hook_rows"
-        if [ "$repo_warned" = 1 ]; then
-            printf '    %s↳ a hook points at the repo, not runtime/ — run ./install.sh to deploy%s\n' "$C_DIM" "$C_RST"
+        if [ "$ext_warned" = 1 ]; then
+            printf '    %s↳ a hook points outside the runtime root — likely a repo checkout; run ./install.sh to deploy%s\n' "$C_DIM" "$C_RST"
         fi
     else
         printf '  (no hooks configured in settings.json)\n'
