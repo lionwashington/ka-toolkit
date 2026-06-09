@@ -209,9 +209,11 @@ we = d.get("warm_error")
 if we:
     print(f"    warm_error: {we}")
 PY
-    # Per-pane real connections: the daemon's mcp_sessions is anonymous + zombie-inflated, so
-    # resolve who's actually connected by mapping each kb client socket's cwd → pane @ka_channel
-    # (same technique as `ka doctor` kb-coverage). Shows MISSING for a pane that lost kb.
+    # Per-pane kb stream: map each kb client socket's cwd → pane @ka_channel (mcp_sessions
+    # is anonymous + zombie-inflated, so lsof held streams are the real signal). NOTE: a
+    # connected CC holds its stream open, but after a kb daemon RESTART a pane re-attaches
+    # only on its NEXT kb call — so 'idle' means "no held stream right now" (just-restarted /
+    # not querying), NOT lost kb. The tools aren't dropped (old idle-evict bug, now fixed).
     if command -v lsof >/dev/null 2>&1 && tmux_has_session "$SESSION" 2>/dev/null; then
         _kb_conn=""
         for _pid in $(lsof -nP -iTCP:"$_kbport" 2>/dev/null | grep ESTABLISHED | grep -v "$_kbport->" | awk '{print $2}' | sort -u); do
@@ -221,9 +223,9 @@ PY
                 | awk -F'|' -v c="$_cwd" '$1==c{print $2; exit}')"
             [ -n "$_pch" ] && _kb_conn="$_kb_conn $_pch"
         done
-        printf '    %-14s %s\n' "CHANNEL" "KB"
+        printf '    %-14s %s\n' "CHANNEL" "STREAM"
         "$TMUX_BIN" list-panes -s -t "$SESSION" -F '#{@ka_channel}' 2>/dev/null | grep -v '^$' | sort -u | while IFS= read -r _p; do
-            if printf '%s\n' $_kb_conn | grep -qx "$_p"; then _st="ok"; else _st="MISSING"; fi
+            if printf '%s\n' $_kb_conn | grep -qx "$_p"; then _st="live"; else _st="idle"; fi
             printf '    %-14s %s\n' "$_p" "$_st"
         done
     fi

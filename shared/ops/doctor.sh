@@ -111,12 +111,14 @@ else
     hint "bring the workshop up: ka workshop"
 fi
 
-# 4c. daemon connection coverage — every online pane SHOULD hold a live connection
-# to each resident daemon that serves it. A shortfall (more online panes than
-# daemon sessions) means a pane silently lost its connection and can't self-reconnect
-# (e.g. kb idle-eviction: the server closed the session, the CC dropped the tools and
-# has no way to re-init) → that pane's tools vanished until it is restarted. This is
-# the check that catches "4 panes online but only 2 on kb".
+# 4c. daemon connection coverage.
+#  · channel: AUTHORITATIVE — the daemon's channels_online names every pane it can route
+#    to; a pane missing from it genuinely can't receive owner/cc messages → real fault.
+#  · kb: ACTIVITY ONLY, not health. A connected CC holds its kb SSE stream open while it
+#    has kb, but after a kb daemon RESTART the stream breaks and a pane re-attaches on its
+#    NEXT kb call (the tools are NOT dropped — that was the old idle-evict bug, now fixed).
+#    So "no held stream" = idle / just-restarted, NOT lost kb. kb REACHABILITY is already
+#    covered by the daemon-up check above; here we only surface who's actively connected.
 if tmux_has_session "$SESSION" 2>/dev/null; then
     # Ground truth = the online panes carrying an @ka_channel (bash 3.2: no mapfile).
     declare -a PANES=()
@@ -140,13 +142,10 @@ print("\n".join((d.get("channels_online") or {}).keys()))' 2>/dev/null)"
         fi
     fi
 
-    # --- kb daemon: count DISTINCT panes holding a live TCP connection (a connected
-    #     pane always keeps its SSE stream open, so an 'established' socket reliably
-    #     means connected). We deliberately do NOT trust /api/status mcp_sessions:
-    #     it counts zombie/duplicate sessions (client gone but not yet idle-reaped)
-    #     and over-reports coverage. lsof client cwd → pane @ka_channel is the truth.
-    #     Assumption: kb is a USER-scope (global) MCP, so every pane should connect.
-    #     (If a pane ever opts out of kb, this would over-report — revisit then.)
+    # --- kb daemon: which panes CURRENTLY hold a live kb stream (lsof client cwd → pane).
+    #     This is activity, not health (see 4c header): "no held stream" = idle / not-yet-
+    #     re-attached after a restart, NOT lost kb — so it is reported as info, never a fault.
+    #     mcp_sessions from /api/status is not used (it over-counts not-yet-reaped zombies).
     if [ -n "${_kb_json:-}" ] && command -v lsof >/dev/null 2>&1 && [ "$_npanes" -gt 0 ]; then
         _conn_kb=""
         for _pid in $(lsof -nP -iTCP:"$KBPORT" 2>/dev/null | grep ESTABLISHED | grep -v "$KBPORT->" | awk '{print $2}' | sort -u); do
@@ -156,15 +155,14 @@ print("\n".join((d.get("channels_online") or {}).keys()))' 2>/dev/null)"
                 | awk -F'|' -v c="$_cwd" '$1==c{print $2; exit}')"
             [ -n "$_pch" ] && _conn_kb="$_conn_kb $_pch"   # dups OK: membership test below dedupes
         done
-        _miss_kb=""; _nconn=0
+        _idle_kb=""; _nconn=0
         for _p in "${PANES[@]}"; do
-            if printf '%s\n' $_conn_kb | grep -qx "$_p"; then _nconn=$((_nconn + 1)); else _miss_kb="$_miss_kb $_p"; fi
+            if printf '%s\n' $_conn_kb | grep -qx "$_p"; then _nconn=$((_nconn + 1)); else _idle_kb="$_idle_kb $_p"; fi
         done
-        if [ -n "$_miss_kb" ]; then
-            note_warn "kb coverage: $_nconn/$_npanes panes connected — missing kb:$_miss_kb"
-            hint "kb is global → every pane should connect; a gap = idle-evict drop. restore: ka workshop restart <name>"
+        if [ -n "$_idle_kb" ]; then
+            note_ok "kb streams: $_nconn/$_npanes panes hold a live stream (idle:$_idle_kb — re-attach on next kb use, not a fault)"
         else
-            note_ok "kb coverage: all $_npanes panes connected to kb"
+            note_ok "kb streams: all $_npanes panes hold a live kb stream"
         fi
     elif [ -n "${_kb_json:-}" ]; then
         note_ok "kb coverage: (lsof unavailable — per-pane check skipped)"
