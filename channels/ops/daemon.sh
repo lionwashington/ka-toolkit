@@ -79,14 +79,20 @@ PY
         log_info "editing $KIND daemon config: $cfg + $secrets (channels.$KIND; apply with: ka channel restart)"
         exec "${EDITOR:-vi}" "$cfg" "$secrets"
         ;;
+    hook-report)
+        # reply-safety hook monitor — per-pane summary (re-sends/nudges/notices/errors)
+        # over a time window. Pure read-only; reads $KA_HOME/reply-safety-hook.log.
+        exec python3 "$KA_HOME/channels/ops/reply-safety-report.py" "$@"
+        ;;
     -h|--help|help|'')
         cat <<EOF
 ka channel — operate on the channel daemon ($KIND, from config.yaml channel_kind)
-  ka channel start      start the daemon
-  ka channel stop       stop the daemon
-  ka channel restart    restart it (CCs re-adopt automatically, ~2s blip)
-  ka channel status     health check (shows kind + port)
-  ka channel config     edit config.yaml + secrets.yaml (\$EDITOR), then: ka channel restart
+  ka channel start        start the daemon
+  ka channel stop         stop the daemon
+  ka channel restart      restart it (CCs re-adopt automatically, ~2s blip)
+  ka channel status       health check (shows kind + port)
+  ka channel config       edit config.yaml + secrets.yaml (\$EDITOR), then: ka channel restart
+  ka channel hook-report  reply-safety hook activity per pane (--hours N | --since "Y-M-D H:M")
 EOF
         ;;
     *)
