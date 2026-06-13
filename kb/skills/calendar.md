@@ -19,21 +19,21 @@ Parse the user's input after `/calendar` to determine the action:
 ### `/calendar` or `/calendar today`
 Show today's events:
 ```bash
-gog -a <account> calendar events list --cal <account> --from <today_YYYY-MM-DD> --to <tomorrow_YYYY-MM-DD>
+gog -a <account> calendar events --from <today_YYYY-MM-DD> --to <tomorrow_YYYY-MM-DD>
 ```
 Calculate actual dates from the system clock.
 
 ### `/calendar tomorrow`
 Show tomorrow's events:
 ```bash
-gog -a <account> calendar events list --cal <account> --from <tomorrow_YYYY-MM-DD> --to <day_after_tomorrow_YYYY-MM-DD>
+gog -a <account> calendar events --from <tomorrow_YYYY-MM-DD> --to <day_after_tomorrow_YYYY-MM-DD>
 ```
 Calculate actual dates from the system clock.
 
 ### `/calendar week`
 Show this week's events:
 ```bash
-gog -a <account> calendar events list --cal <account> --from <today_YYYY-MM-DD> --to <7_days_later_YYYY-MM-DD>
+gog -a <account> calendar events --from <today_YYYY-MM-DD> --to <7_days_later_YYYY-MM-DD>
 ```
 Calculate actual dates from the system clock.
 
@@ -48,10 +48,18 @@ gog -a <account> calendar create <account> --summary "<title>" --from "<start_ti
 If the user only gives a start time, default to 1 hour duration.
 **Always confirm with the user before creating.**
 
+### `/calendar update <event_id>`
+Modify an existing event (time and/or title). Pass only the fields you want to change. Confirm before updating:
+```bash
+gog -a <account> calendar update <account> <event_id> --from "<start_time>" --to "<end_time>" --summary "<title>"
+```
+Times are RFC3339 with timezone (e.g. `2026-09-30T10:00:00+08:00`). Omit any flag you are not changing.
+**Always confirm with the user before updating.**
+
 ### `/calendar delete <event_id>`
 Delete an event. Confirm before deleting:
 ```bash
-gog -a <account> calendar delete <account> <event_id>
+gog -a <account> calendar delete <account> <event_id> --force
 ```
 **Always confirm with the user before deleting.**
 

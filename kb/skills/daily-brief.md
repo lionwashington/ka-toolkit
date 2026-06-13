@@ -31,7 +31,7 @@ Collect data in parallel where possible:
 ### 2. Calendar
 Run `gog auth list` to find accounts, then for the calendar account:
 ```bash
-gog -a <calendar_account> calendar events list --cal <calendar_account> --from <today> --to <tomorrow>
+gog -a <calendar_account> calendar events --from <today> --to <tomorrow>
 ```
 Show: time, title, location. Highlight conflicts.
 
