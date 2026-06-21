@@ -144,6 +144,49 @@ describe('inbound: Telegram → MCP notification (sticky routing)', () => {
     assert.equal(readFileSync(n.meta.attachment_path, 'utf8'), 'MOCKIMGBYTES', 'file downloaded to disk')
   })
 
+  test('voice attachment: download fails twice then succeeds → retry delivers path', async () => {
+    main.received.length = 0  // last_target=main → bare voice sticks to main
+    mock.failNextDownloads(2)  // first 2 file-fetches reset the socket ("fetch failed"); 3rd succeeds
+    updateId += 1
+    mock.push({
+      update_id: updateId,
+      message: {
+        message_id: updateId,
+        from: { id: Number(OWNER), first_name: 'Owner' },
+        chat: { id: Number(OWNER) },
+        date: Math.floor(Date.now() / 1000),
+        voice: { file_id: 'voicefid', file_unique_id: 'vuq', duration: 3 },
+      },
+    })
+    const ok = await waitFor(() => main.received.some(r => r.meta.attachment_path), 8000)
+    assert.ok(ok, 'voice should be delivered with attachment_path after 2 retries')
+    const n = main.received.find(r => r.meta.attachment_path)!
+    assert.equal(n.content, '[voice]', 'no caption → [voice] placeholder')
+    assert.equal(readFileSync(n.meta.attachment_path, 'utf8'), 'MOCKIMGBYTES', 'file saved on the 3rd attempt')
+  })
+
+  test('voice attachment: all attempts fail → text-only fail-safe (no path, notice appended)', async () => {
+    main.received.length = 0
+    mock.failNextDownloads(99)  // exhaust every retry
+    updateId += 1
+    mock.push({
+      update_id: updateId,
+      message: {
+        message_id: updateId,
+        from: { id: Number(OWNER), first_name: 'Owner' },
+        chat: { id: Number(OWNER) },
+        date: Math.floor(Date.now() / 1000),
+        voice: { file_id: 'voicefid2', file_unique_id: 'vuq2', duration: 3 },
+      },
+    })
+    const ok = await waitFor(() => main.received.some(r => r.content.includes('[voice]')), 8000)
+    assert.ok(ok, 'voice still delivered as text even when download fails')
+    const n = main.received.find(r => r.content.includes('[voice]'))!
+    assert.ok(!n.meta.attachment_path, 'no attachment_path on total failure')
+    assert.match(n.content, /attachment download failed; text only/, 'fail-safe notice appended')
+    mock.failNextDownloads(0)  // reset so later tests download normally
+  })
+
   test('routing `to ka:` delivers to ka only, not main, and re-points sticky to ka', async () => {
     main.received.length = 0
     ka.received.length = 0

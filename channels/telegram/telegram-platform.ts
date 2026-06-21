@@ -220,14 +220,26 @@ function attachmentPlaceholder(kind: string, fileName: string): string {
 // Resolve file_id → temporary Telegram file_path → download bytes to ATTACH_DIR.
 // Returns the local absolute path, or '' on any failure (caller degrades to
 // text-only delivery). The bot TOKEN never leaves the daemon.
-// 🔴 Hard timeout (DOWNLOAD_TIMEOUT_MS): a slow/stuck fetch must NOT hang the
-// single-threaded getUpdates pollLoop (the inbound critical path awaits this). On
-// timeout we abort and return '' → text-only delivery (message never dropped);
-// offset is already advanced before download so replay/dedup is unaffected.
-const DOWNLOAD_TIMEOUT_MS = 12000
-async function downloadAttachment(fileId: string, fileName: string, updateId: number, kind: string): Promise<string> {
+// 🔴 Bounded retry that does NOT grow the poll budget. getFile/file-fetch hits a
+// ~10% transient network "fetch failed" (all attachment kinds — NOT voice-
+// specific). A single try silently lost the file; worst for voice, which the
+// owner can't naturally re-send (a one-shot spoken utterance is gone for good).
+// So we retry — but split the OLD single-try cap into several short tries so the
+// single-threaded getUpdates pollLoop (which awaits this on the inbound critical
+// path) is not hung any longer than before:
+//   old: 1 try × 12s              = 12.0s worst case
+//   new: 3 tries × 4s + backoff   = 13.3s worst case  (≈ unchanged)
+// A healthy download returns on attempt 1 in <1s — retries only cost wall-clock
+// when the network is actually flapping. HTTP 4xx (file gone/too big) is
+// permanent → no retry. On total failure we still return '' → text-only delivery
+// (message never dropped); offset is already advanced so replay/dedup is intact.
+const ATTEMPT_TIMEOUT_MS = 4000
+const MAX_DOWNLOAD_ATTEMPTS = 3
+const RETRY_BACKOFF_MS = [400, 900]  // wait between attempt 1→2, then 2→3
+
+async function downloadOnce(fileId: string, fileName: string, updateId: number, kind: string): Promise<string> {
   const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), DOWNLOAD_TIMEOUT_MS)
+  const timer = setTimeout(() => ctrl.abort(), ATTEMPT_TIMEOUT_MS)
   try {
     const file = await bot.api.getFile(fileId, ctrl.signal)
     if (!file.file_path) throw new Error('getFile returned no file_path')
@@ -236,7 +248,11 @@ async function downloadAttachment(fileId: string, fileName: string, updateId: nu
     const fileBase = process.env.TELEGRAM_API_ROOT || 'https://api.telegram.org'
     const url = `${fileBase}/file/bot${TOKEN}/${file.file_path}`
     const res = await fetch(url, { signal: ctrl.signal })
-    if (!res.ok) throw new Error(`download http ${res.status}`)
+    if (!res.ok) {
+      const err: any = new Error(`download http ${res.status}`)
+      err.permanent = res.status >= 400 && res.status < 500  // 4xx: file gone/too big — don't retry
+      throw err
+    }
     const buf = Buffer.from(await res.arrayBuffer())
     mkdirSync(ATTACH_DIR, { recursive: true })
     const safe = fileName.replace(/[^A-Za-z0-9._-]/g, '_').slice(-100) || 'file'
@@ -244,12 +260,28 @@ async function downloadAttachment(fileId: string, fileName: string, updateId: nu
     writeFileSync(dest, buf)
     log(`attachment saved (${kind}, ${buf.length}B): ${dest}`)
     return dest
-  } catch (e: any) {
-    log(`attachment download failed/timeout (${kind}, ${DOWNLOAD_TIMEOUT_MS}ms cap): ${e?.message ?? e}`)
-    return ''
   } finally {
     clearTimeout(timer)
   }
+}
+
+async function downloadAttachment(fileId: string, fileName: string, updateId: number, kind: string): Promise<string> {
+  let lastErr: any
+  for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
+    try {
+      return await downloadOnce(fileId, fileName, updateId, kind)
+    } catch (e: any) {
+      lastErr = e
+      const permanent = e?.permanent === true
+      const willRetry = attempt < MAX_DOWNLOAD_ATTEMPTS && !permanent
+      log(`attachment download attempt ${attempt}/${MAX_DOWNLOAD_ATTEMPTS} failed (${kind}, ${ATTEMPT_TIMEOUT_MS}ms cap): ${e?.message ?? e}`
+        + (permanent ? ' [permanent — no retry]' : willRetry ? ' [will retry]' : ''))
+      if (!willRetry) break
+      await sleep(RETRY_BACKOFF_MS[attempt - 1] ?? 1000)
+    }
+  }
+  log(`attachment download gave up (${kind}) after ${MAX_DOWNLOAD_ATTEMPTS} attempt(s): ${lastErr?.message ?? lastErr} → text-only`)
+  return ''
 }
 
 // ─────────────────────────── inbound: getUpdates long-poll (B1/B3/B4) ───────────

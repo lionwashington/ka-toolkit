@@ -29,6 +29,8 @@ export interface MockTelegram {
   setHang(on: boolean): void
   /** How many getUpdates requests the mock has received (a reconnect = a new request). */
   getUpdatesCount(): number
+  /** Make the next N file downloads fail with a socket reset (simulates the ~10% transient "fetch failed"). */
+  failNextDownloads(n: number): void
   close(): Promise<void>
 }
 
@@ -40,6 +42,7 @@ export async function startMockTelegram(): Promise<MockTelegram> {
   const actions: Array<{ chat_id: string; action: string }> = []
   let hang = false
   let getUpdatesCount = 0
+  let downloadFailures = 0  // when >0, the next N file downloads abort (transient-failure injection)
 
   // grammy posts to ${apiRoot}/bot<token>/<method>
   app.post('/bot:token/getUpdates', (req, res) => {
@@ -68,7 +71,14 @@ export async function startMockTelegram(): Promise<MockTelegram> {
     res.json({ ok: true, result: { file_id: req.body?.file_id, file_path: 'mock/file.bin' } })
   })
   // File download (apiRoot-routed when TELEGRAM_API_ROOT is set): return fixed bytes.
+  // Injection: while downloadFailures>0, reset the socket → the daemon's fetch()
+  // rejects with "fetch failed" (the exact transient symptom downloadAttachment retries on).
   app.get(/^\/file\/bot.*/, (_req, res) => {
+    if (downloadFailures > 0) {
+      downloadFailures--
+      res.destroy()
+      return
+    }
     res.setHeader('content-type', 'application/octet-stream')
     res.end(Buffer.from('MOCKIMGBYTES'))
   })
@@ -85,6 +95,7 @@ export async function startMockTelegram(): Promise<MockTelegram> {
     chatActions: () => actions,
     setHang: (on: boolean) => { hang = on },
     getUpdatesCount: () => getUpdatesCount,
+    failNextDownloads: (n: number) => { downloadFailures = n },
     close: () => new Promise<void>(r => http.close(() => r())),
   }
 }
