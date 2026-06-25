@@ -260,6 +260,11 @@ EOF
   fi
   local nmsz; nmsz="$(du -sh "$dest/node_modules" 2>/dev/null | cut -f1)"
   log "  OK ${dest} (dist[index.mjs+daemon.mjs] + node_modules[${nmsz}, natives only] + scripts; deployed, NOT registered/started)"
+  # Autostart / keepalive is NOT a custom plist here — it is a `ka cron` job
+  # (kb-retrieval-keepalive: `ka kb start` on a short interval, a no-op when the daemon
+  # is already up via the port singleton). That reuses the cron launchd plumbing
+  # (cron-run.sh sets PATH so node resolves — a bare LaunchAgent's minimal PATH does
+  # NOT) and self-heals a mid-session death, not just reboot. See cron.yaml.
 }
 
 deploy_opennutrition() { # P1.4: node MCP special case (native better-sqlite3 + compressed dataset)

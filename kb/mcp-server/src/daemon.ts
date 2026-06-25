@@ -191,7 +191,10 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
   app.post('/api/shutdown', (_req, res) => {
     log('received /api/shutdown')
     res.json({ ok: true, shutting_down: true })
-    setTimeout(() => process.exit(0), 200)
+    // Same as the signal handlers: hard-exit past the onnxruntime/@lancedb atexit
+    // destructors (they throw `mutex lock failed` on every shutdown). The 200ms lets
+    // the response above flush to the `ka kb stop` caller first.
+    setTimeout(() => process.kill(process.pid, 'SIGKILL'), 200)
   })
 
   // (Re)build the index using the ALREADY-LOADED model (no 2GB reload). Default
@@ -279,7 +282,13 @@ function installSignalHandlers(log: (msg: string) => void): void {
   for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGPIPE', 'SIGQUIT'] as const) {
     process.on(sig, () => {
       log(`received ${sig}, exiting`)
-      process.exit(0)
+      // Hard-exit past native teardown. process.exit(0) runs the onnxruntime /
+      // @lancedb atexit destructors, which throw `libc++abi: mutex lock failed:
+      // Invalid argument` on every shutdown (observed each SIGTERM). This daemon is
+      // stateless — the LanceDB index is on disk, MCP sessions are transient, and the
+      // log write above is synchronous (appendFileSync) — so there is nothing to
+      // flush; SIGKILL self to die immediately without running those destructors.
+      process.kill(process.pid, 'SIGKILL')
     })
   }
   process.on('uncaughtException', (e: any) => {
