@@ -41,6 +41,11 @@ WORKSPACE_CWD=""
 DISTILL_MODEL="${KA_DISTILL_MODEL:-claude-opus-4-8}"
 DISTILL_MAX_ATTEMPTS="${KA_DISTILL_MAX_ATTEMPTS:-3}"
 DISTILL_RETRY_BASE_SEC="${KA_DISTILL_RETRY_BASE_SEC:-5}"
+# Backlog self-heal: each run also drains up to N OLDEST stranded distilled:false raws
+# (left by a past distill outage — the per-session worker otherwise never revisits them,
+# so a stall strands them permanently; see the 2026-05-27→06-06 incident). BOUNDED so a
+# large backlog never balloons one run; it drains gradually across runs. 0 disables.
+DISTILL_BACKLOG_MAX="${KA_DISTILL_BACKLOG_MAX:-3}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -193,6 +198,11 @@ When calling ka-jsonl-reader you MUST pass:
 3. Append markdownDelta to the end of the raw file body; update the 4 frontmatter fields; keep distilled false
 4. Phase 1: read the raw delta, match topics, append to conversations/<date>.md (TL;DR protocol) + run daily-log-splitter-cli to see if a split is needed + append to topics/<name>.md
 5. **End of Phase 1**: markDistilled on every raw file you processed (set distilled: true + the topics array) — this step must NEVER be skipped, or the next run will treat them as un-distilled and reprocess them
+6. Phase 2 — backlog drain (BOUNDED, self-heal): after the current session above, list raw/*.md whose frontmatter has \`distilled: false\` that you did NOT just process (stranded by a past distill outage). Take AT MOST the ${DISTILL_BACKLOG_MAX} OLDEST by filename date. (If ${DISTILL_BACKLOG_MAX} is 0, or there are none, skip Phase 2 entirely.) For EACH of those (≤${DISTILL_BACKLOG_MAX}):
+   - Read the raw file fully. Classify: NOISE = a teammate spawn/handshake (<teammate-message> brief + "Acknowledged / Standing by / 收到待命"), an empty/aborted/trivial-test session, or pure boilerplate. SUBSTANTIVE = real reusable knowledge.
+   - NOISE → set its frontmatter \`distilled: true\` and \`topics: [noise-spawn-handshake]\` (this is the archival sink for non-knowledge raws); do nothing else for it.
+   - SUBSTANTIVE → distill it like Phase 1: identify the topic(s) it belongs to, READ those topic files first and append ONLY genuinely net-new knowledge (the main session often already logged it in real time — do not duplicate), optionally update conversations/<that raw's date>.md, then set \`distilled: true\` + the real topics array.
+   - Do NOT exceed ${DISTILL_BACKLOG_MAX} backlog raws in one run — leave the rest for the next run (gradual drain). Count these toward your stats (raw_added / topics_files etc.) the same as Phase 1.
 
 [Output contract (mandatory — not following it = failure case)]
 
