@@ -11,6 +11,7 @@ SUB="${1:-}"; [ $# -gt 0 ] && shift || true
 case "$SUB" in
     start|stop|restart|status) exec "$OPS/kb-retrieval.sh" "$SUB" "$@" ;;
     reindex)   exec "$OPS/kb-reindex.sh" "$@" ;;
+    lint)      exec "$OPS/kb-lint.sh" "$@" ;;
     distill)
         # Background distill is the only mode (synchronous distill lives inside
         # /kb distill --foreground). `ka kb distill status` shows the last run.
@@ -28,9 +29,10 @@ case "$SUB" in
         echo "  ka kb start|stop|restart|status   the kb retrieval daemon (kb_search backend)"
         echo "  ka kb reindex [--full]             (re)build the kb_search index"
         echo "  ka kb distill [status]             background distillation"
+        echo "  ka kb lint [--json|--fix]          read-only KB self-check (dead links / orphans / frontmatter)"
         ;;
     *)
-        echo "ka kb: unknown subcommand '$SUB' (start|stop|restart|status|reindex|distill)" >&2
+        echo "ka kb: unknown subcommand '$SUB' (start|stop|restart|status|reindex|distill|lint)" >&2
         exit 2
         ;;
 esac
