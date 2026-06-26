@@ -5,9 +5,17 @@ contradictions, stale claims, orphan pages, broken cross-references). Our KB has
 two pillars (raw/synthesized separation + LLM-maintained ingest) but no self-check layer.
 This plan closes that gap in three independent, sequenced steps.
 
-Status: Step 1 **built + unit-tested** (16/16; full core suite 137/137, no regression;
-CLI smoke-tested against a synthetic KB). Pending: deploy to runtime
-(`install.sh --only core-cli`) + a run against the real KB + commit. Steps 2–3 not started.
+Status (2026-06-26):
+- **Step 1 — detection: DONE + shipped.** `ka kb lint` built, unit-tested, deployed; run
+  against the real KB; cross-validated (an independent count matched all 10 metrics).
+- **Step 2 — remediation: DONE.** The initial debt was cleared — dead links / orphans /
+  bad frontmatter hand-fixed, and the 110 missing/invalid `topics:` back-refs backfilled by
+  an Opus pass (noise → `noise-spawn-handshake`, substantive → real topics). KB now reports
+  201/201 distilled, 0 dead links, 0 orphans (non-meta/noise) — lint clean.
+- **Step 3 — prevention: PARTIAL.** Standing guardrails landed (the bounded distill
+  backlog-drain; `raw-undistilled` lint check). **Still pending:** distill-prompt hardening
+  (CN→stem + always-write `topics:`) and the semantic `--deep` contradiction check (check 6).
+
 Owner approved the 5 decision points and the 3-step structure.
 
 ---
