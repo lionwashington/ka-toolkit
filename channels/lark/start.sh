@@ -7,7 +7,7 @@
 set -u
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"  # launchd/cron PATH lacks Homebrew/nvm → else `node: not found` on keepalive cold-start
 
 HOST="127.0.0.1"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # canonical: ~/.knowledge-assistant/channels/lark-daemon
@@ -25,6 +25,15 @@ status_resp=$(curl -sf --max-time 2 "http://$HOST:$PORT/api/status" 2>/dev/null 
 if [ -n "$status_resp" ]; then
   echo "✓ already running"
   echo "$status_resp"
+  exit 0
+fi
+
+# Race guard (parity with kb-retrieval): a process LISTENING on the port IS the daemon
+# even if /api/status didn't answer in the brief startup window — don't let the cleanup
+# below kill it (macOS has no flock, so LOCKED_PID can be empty; the port bind is the
+# singleton). Cheap insurance; the channel daemon has no heavy warmup so it rarely matters.
+if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "✓ already running (port $PORT bound)"
   exit 0
 fi
 

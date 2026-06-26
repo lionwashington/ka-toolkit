@@ -12,9 +12,14 @@
 # lives at ./local_cache, and node resolves dist/daemon.js + the adjacent
 # node_modules (native @lancedb/lancedb + fastembed/onnxruntime) from here.
 set -u
+# launchd / cron invoke this with a MINIMAL PATH (/usr/bin:/bin:/usr/sbin:/sbin) that
+# lacks Homebrew (/opt/homebrew/bin on arm, /usr/local/bin on intel) and nvm — so the
+# `exec node` below dies "node: not found" and a keepalive can NEVER cold-start the
+# daemon (kb_search stayed offline 2026-06-22→26 exactly here). Source nvm + prepend
+# the common node install dirs so node resolves however it was installed.
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # $KA_HOME/kb/mcp/kb
 LOCK="$ROOT/.daemon.lock"

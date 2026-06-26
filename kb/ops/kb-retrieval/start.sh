@@ -4,9 +4,11 @@
 #   - Else: double-fork daemon.sh into background and detach
 # Singleton is enforced by daemon.sh (flock) / the daemon (port bind).
 set -u
+# Minimal launchd/cron PATH lacks Homebrew/nvm — keep this in sync with daemon.sh so
+# the forked daemon (and any node here) resolves under a keepalive env, not just a shell.
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 HOST="127.0.0.1"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # $KA_HOME/kb/mcp/kb
@@ -30,7 +32,20 @@ if [ -n "$status_resp" ]; then
   exit 0
 fi
 
-# Defensive cleanup: kill any orphan daemon node not under flock.
+# CRITICAL (race guard): /api/status can time out for MINUTES on cold start because
+# loading the 2.2GB e5 model blocks the event loop. A process LISTENING on the port is
+# the daemon (warming or ready) — treat it as up and DO NOT fall through to the kill +
+# restart below. Without this, a 1-min keepalive misreads "warming" as "down", the
+# defensive cleanup kills the warming daemon (on macOS there's no flock, so LOCKED_PID
+# is empty and the cleanup can't tell it apart), and the restart loops. The port bind
+# IS the macOS singleton — honor it here too.
+if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "✓ already running (port $PORT bound — daemon up, may still be warming)"
+  exit 0
+fi
+
+# Defensive cleanup: kill any orphan daemon node not under flock (only reached when the
+# port is genuinely free — no live daemon to protect).
 ENTRY="${KA_KB_DAEMON_ENTRY:-$ROOT/dist/daemon.mjs}"
 LOCKED_PID=$(/usr/bin/lsof -t -F p "$ROOT/.daemon.lock" 2>/dev/null | sed 's/^p//' | head -1 || true)
 for pid in $(pgrep -f "node $ENTRY" || true); do
