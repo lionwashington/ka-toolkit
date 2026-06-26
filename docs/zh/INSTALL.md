@@ -276,7 +276,7 @@ memory/ = knowledge_base_path/    # 默认 ~/knowledge-base/
 ├── conversations/            # 每日摘要（提炼输出）
 ├── topics/                   # 带 frontmatter 的结构化知识
 ├── pending-topics/           # 待审批的主题建议
-└── .vectors/                 # RAG 索引（自动生成）
+└── .vectors/lancedb/         # LanceDB 混合检索索引（自动生成）
 ```
 
 ## 自定义配置（可选）

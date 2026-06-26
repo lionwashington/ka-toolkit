@@ -346,7 +346,7 @@ memory/ = knowledge_base_path/    # ~/knowledge-base/ by default
 ├── conversations/            # daily summaries (distill output)
 ├── topics/                   # distilled knowledge with frontmatter
 ├── pending-topics/           # topic suggestions awaiting approval
-└── .vectors/                 # RAG index (auto-generated)
+└── .vectors/lancedb/         # LanceDB hybrid search index (auto-generated)
 ```
 
 ## Custom config (optional)

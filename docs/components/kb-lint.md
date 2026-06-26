@@ -1,9 +1,10 @@
-# KB self-check & repair — the 3-step plan
+# KB self-check (`ka kb lint`) & repair — as-built + remaining work
 
 Inspired by Karpathy's "LLM Wiki" third pillar (**lint** — periodic health checks for
 contradictions, stale claims, orphan pages, broken cross-references). Our KB has the first
-two pillars (raw/synthesized separation + LLM-maintained ingest) but no self-check layer.
-This plan closes that gap in three independent, sequenced steps.
+two pillars (raw/synthesized separation + LLM-maintained ingest) but lacked a self-check
+layer. This closed that gap in three steps; Steps 1–2 are DONE and shipped, Step 3 is
+partial (see Status). Below reads as the as-built design + the remaining Step-3 work.
 
 Status (2026-06-26):
 - **Step 1 — detection: DONE + shipped.** `ka kb lint` built, unit-tested, deployed; run
@@ -86,7 +87,7 @@ either way. Three complementary legs, executed as three steps:
 
 ---
 
-## STEP 1 — Detection: build `ka kb lint` (deterministic, no LLM)
+## STEP 1 — Detection: `ka kb lint` (deterministic, no LLM) ✅ DONE
 
 **Goal:** an ongoing, cheap, read-only self-check that surfaces every structural problem.
 
@@ -124,7 +125,7 @@ classes: `.md` suffix, CN name, `name:` vs `title:`, minimal vs catalog INDEX).
 
 ---
 
-## STEP 2 — Remediation: clear the existing debt (one-time, reviewed)
+## STEP 2 — Remediation: clear the existing debt (one-time, reviewed) ✅ DONE
 
 **Goal:** drive the 16+1+41+135 debt to ~0. Separate from Step-1 auto-`--fix`; tiered by
 safety. Re-run `ka kb lint` after to confirm.
@@ -142,7 +143,7 @@ safety. Re-run `ka kb lint` after to confirm.
 
 ---
 
-## STEP 3 — Prevention: stop new debt + semantic check + standing guardrails
+## STEP 3 — Prevention: stop new debt + semantic check + standing guardrails ◑ PARTIAL (guardrails done; distill-hardening + `--deep` pending)
 
 **Goal:** keep the debt at ~0 after Step 2, and add the semantic pillar.
 

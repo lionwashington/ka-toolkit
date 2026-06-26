@@ -164,8 +164,10 @@ The system runs **two** long-lived daemons, each addressed as `ka <subsystem> st
 | `ka channel` | telegram/lark comms bus (every CC↔CC and CC↔user message) | `9877` | `ka channel …` | `channels.<kind>.port` |
 | `ka kb` | LanceDB retrieval engine (the `kb_search` backend) | `7705` | `ka kb …` | `retrieval.daemon.port` |
 
-Both appear in `ka status` and `ka doctor`. Neither auto-starts: `ka workshop` ensures the channel
-daemon at startup; the kb daemon is started manually (`ka kb start`) and watched via status/doctor.
+Both appear in `ka status` and `ka doctor`. Both self-heal: a 1-minute `ka cron` keepalive
+(`channel-daemon-keepalive` / `kb-retrieval-keepalive`) re-runs `ka channel start` / `ka kb start`
+(no-ops when already up via the port singleton), so a daemon that dies is back within a minute;
+`ka workshop` also ensures the channel daemon at session startup.
 
 > The command face drops the word "retrieval": `ka kb start|stop|restart|status`. The internals keep
 > their technical names — config section `retrieval:`, service id `kb-retrieval` in `/api/status`.
@@ -217,15 +219,19 @@ that holds the LanceDB connection and the embedding model (loaded once, shared b
 | `ka kb stop` | stop it |
 | `ka kb restart` | stop + start |
 | `ka kb status` | health check (`/api/status`: pid / ready / engine) |
+| `ka kb reindex [--full]` | rebuild the search index (incremental by default; `--full` rebuilds everything) |
+| `ka kb lint [--json / --fix]` | read-only KB structural self-check (dead wikilinks / orphan topics / bad frontmatter / raw↔topic back-refs / undistilled backlog) + full-picture stats; `--fix` only regenerates a catalog INDEX |
 
 ```bash
 ka kb status               # is the kb retrieval daemon up & ready?
 ka kb restart              # reload it (warmup ~10-50s on cold start)
 ```
 
-> No auto-start / supervisor (same as the channel daemon). If it dies, `ka status` / `ka doctor` show it
-> **down** and you bring it back with `ka kb start`. The daemon + its launch scripts are deployed under
-> `~/.knowledge-assistant/kb/mcp/kb` by `./install.sh --only node-mcp`.
+> Self-heals via the 1-minute `ka cron` keepalive `kb-retrieval-keepalive` (re-runs `ka kb start`,
+> a no-op when already up); `ka status` / `ka doctor` also surface it when down. The daemon + its launch
+> scripts are deployed under `~/.knowledge-assistant/kb/mcp/kb` by `./install.sh --only node-mcp`.
+> Startup is non-blocking: it serves search as soon as the model loads and runs the index reindex in the
+> background (the reader hot-swaps on the manifest version bump).
 
 The same cluster also holds the index + distillation ops:
 
