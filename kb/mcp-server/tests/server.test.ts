@@ -38,7 +38,12 @@ vi.mock('@ka/core', () => {
   }
 
   return {
-    KnowledgeStore: vi.fn().mockReturnValue(mockStore),
+    // KnowledgeStore is called with `new` in createMcpServer. vitest 4.x invokes the
+    // mock impl AS a constructor (`new impl()`), so it must be `new`-able — an arrow
+    // function isn't ("not a constructor"). Use a regular function: returning an object
+    // from a constructor makes `new KnowledgeStore()` evaluate to mockStore (JS `new`
+    // semantics).
+    KnowledgeStore: vi.fn().mockImplementation(function () { return mockStore }),
     createRetriever: vi.fn().mockReturnValue(mockRetrieval),
     loadConfig: vi.fn().mockReturnValue({
       channel_kind: 'telegram',
