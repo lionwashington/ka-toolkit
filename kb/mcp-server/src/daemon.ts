@@ -241,26 +241,47 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
 
   const httpServer = app.listen(port, host, async () => {
     log(`kb-retrieval daemon listening on ${host}:${port}/mcp (pid=${process.pid}, engine=lancedb)`)
-    // Warm + self-heal: an incremental reindex on startup catches any files that
-    // changed while the daemon was down (a no-op is cheap and doesn't load the model;
-    // changed files get embedded). Then a warmup search loads the model. Serialized
-    // via `reindexing` so the /api/reindex endpoint can't race startup.
+    // Become searchable ASAP. The ONLY hard prerequisite for serving a search is the
+    // embedding model — load it (via a warmup search), flip ready, and serve against the
+    // EXISTING index. The startup incremental reindex is NOT on this path: it runs in the
+    // background below, so files changed while the daemon was down fold in when it
+    // finishes (the reader hot-swaps on the manifest version bump). Previously reindex +
+    // model ran serially BEFORE ready, blocking readiness for minutes (model + re-embedding
+    // changed topics) and making the keepalive misjudge the warming daemon as down.
+    let didInitialBuild = false
     try {
-      if (retriever.reindex) {
+      const manifest = retriever.indexStatus ? await retriever.indexStatus() : null
+      const hasIndex = !!manifest && manifest.version > 0 && manifest.status === 'ok' && manifest.chunk_count > 0
+      // Fresh KB with no usable index: there's nothing to serve, so build it ONCE
+      // synchronously (one-time cost; doesn't recur on normal restarts).
+      if (!hasIndex && retriever.reindex) {
         reindexing = true
         try {
           const r = await retriever.reindex()
-          log(`startup incremental reindex: changed=${r.changedPaths?.length ?? 0} removed=${r.removedPaths?.length ?? 0} rows=${r.rowCount ?? 0}`)
+          log(`initial index build: rows=${r.rowCount ?? 0}`)
+          didInitialBuild = true
         } finally {
           reindexing = false
         }
       }
-      await retriever.search('warmup', { maxResults: 1 })
+      await retriever.search('warmup', { maxResults: 1 }) // loads the embedding model
       ready = true
-      log('retriever warm — ready')
+      log(`retriever warm — ready (serving${didInitialBuild ? '' : '; startup reindex in background'})`)
     } catch (e: any) {
       warmError = e?.message ?? String(e)
       log(`retriever warmup failed: ${warmError}`)
+    }
+    // Background self-heal: fold in files changed while the daemon was down. NOT awaited —
+    // it does NOT gate readiness; searches serve the existing index until the reader
+    // hot-swaps on the version bump. Skipped right after an initial full build (nothing
+    // changed since) or if a reindex is already running. Serialized via `reindexing` so
+    // /api/reindex returns 409 while it runs.
+    if (retriever.reindex && !reindexing && !didInitialBuild) {
+      reindexing = true
+      void retriever.reindex()
+        .then((r) => log(`startup incremental reindex (background): changed=${r.changedPaths?.length ?? 0} removed=${r.removedPaths?.length ?? 0} rows=${r.rowCount ?? 0}`))
+        .catch((e: any) => log(`startup incremental reindex (background) failed: ${e?.message ?? e}`))
+        .finally(() => { reindexing = false })
     }
   })
 
