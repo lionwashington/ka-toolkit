@@ -30,25 +30,15 @@ if [ -n "$status_resp" ]; then
   exit 0
 fi
 
-# Race guard (parity with kb-retrieval): a process LISTENING on the port IS the daemon
-# even if /api/status didn't answer in the brief startup window — don't let the cleanup
-# below kill it (macOS has no flock, so LOCKED_PID can be empty; the port bind is the
-# singleton). Cheap insurance; the channel daemon has no heavy warmup so it rarely matters.
+# Race guard: a process LISTENING on the port IS the daemon (warming or ready) even if
+# /api/status didn't answer in the brief startup window — treat it as up. The port bind
+# is the singleton (macOS has no flock), and the daemon's own EADDRINUSE exit prevents
+# duplicates. No orphan-killing cleanup here: it was redundant with the port singleton and
+# caused a race where two concurrent `start` invocations killed each other's daemon.
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "✓ already running (port $PORT bound)"
   exit 0
 fi
-
-# 1b. Defensive cleanup: kill any orphan daemon node process not under flock.
-# D0: the daemon is the bundled `node … daemon.mjs` launched by daemon.sh.
-BUNDLE="${KA_DAEMON_BUNDLE:-$ROOT/daemon.mjs}"
-LOCKED_PID=$(/usr/bin/lsof -t -F p "$ROOT/.daemon.lock" 2>/dev/null | sed 's/^p//' | head -1 || true)
-for pid in $(pgrep -f "node $BUNDLE" || true); do
-  if [ "$pid" != "$LOCKED_PID" ] && [ "$pid" != "$$" ]; then
-    echo "killing orphan daemon pid=$pid (not under flock)"
-    kill "$pid" 2>/dev/null || true
-  fi
-done
 
 # 2. Not up — launch in background, detached from current terminal.
 # `setsid` detaches into a new session (Linux); macOS has no setsid, so fall

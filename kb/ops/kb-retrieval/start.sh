@@ -34,26 +34,15 @@ fi
 
 # CRITICAL (race guard): /api/status can time out for MINUTES on cold start because
 # loading the 2.2GB e5 model blocks the event loop. A process LISTENING on the port is
-# the daemon (warming or ready) — treat it as up and DO NOT fall through to the kill +
-# restart below. Without this, a 1-min keepalive misreads "warming" as "down", the
-# defensive cleanup kills the warming daemon (on macOS there's no flock, so LOCKED_PID
-# is empty and the cleanup can't tell it apart), and the restart loops. The port bind
-# IS the macOS singleton — honor it here too.
+# the daemon (warming or ready) — treat it as up. The port bind IS the macOS singleton
+# (no flock), and the daemon's own EADDRINUSE exit prevents duplicates. No orphan-killing
+# cleanup here: it was redundant with the port singleton and caused a race where two
+# concurrent `start` invocations (e.g. the 1-min keepalive overlapping a manual start)
+# killed each other's freshly-started daemon — the exact boot-time restart storm we hit.
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "✓ already running (port $PORT bound — daemon up, may still be warming)"
   exit 0
 fi
-
-# Defensive cleanup: kill any orphan daemon node not under flock (only reached when the
-# port is genuinely free — no live daemon to protect).
-ENTRY="${KA_KB_DAEMON_ENTRY:-$ROOT/dist/daemon.mjs}"
-LOCKED_PID=$(/usr/bin/lsof -t -F p "$ROOT/.daemon.lock" 2>/dev/null | sed 's/^p//' | head -1 || true)
-for pid in $(pgrep -f "node $ENTRY" || true); do
-  if [ "$pid" != "$LOCKED_PID" ] && [ "$pid" != "$$" ]; then
-    echo "killing orphan kb-retrieval pid=$pid (not under flock)"
-    kill "$pid" 2>/dev/null || true
-  fi
-done
 
 # Launch detached. The model loads on warmup (~10-50s first time) before /api/status
 # reports ready:true — so wait longer than a channel daemon.
