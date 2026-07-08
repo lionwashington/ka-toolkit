@@ -97,7 +97,8 @@ A single `pollLoop()`: a `bot.api.getUpdates({ offset, timeout: poll_timeout, al
 
 ## 5. Outbound Path
 
-Two outbound paths, corresponding to two tools (every per-session MCP server registers both tools).
+Two outbound paths (`reply`, `send_to_channel`) plus one read-only query tool (`list_channels`) —
+every per-session MCP server registers all three.
 
 ### 5a. `reply` → the user's Telegram
 
@@ -162,12 +163,28 @@ daemon  ── dispatch byName["main"], meta.from_channel="ka" ──▶ main CC
 
 **Delivery guarantee**: CC↔CC has no telegram offset persistence; it's immediate delivery. Messages during a daemon restart / target-CC reconnect window may be lost. A persistent queue is future work. CC↔CC currently does not carry attachments.
 
-The division of labor between the two tools:
+### 5c. `list_channels` → the live roster (read-only query)
+
+```
+list_channels()   // no arguments
+```
+
+- Returns every channel currently connected to this daemon, each with its stable **number**,
+  **name**, and **live status**. `alive` is sourced identically to `GET /api/status` — a probe
+  ping succeeded within `CHANNEL_FRESH_MS` (or the session is still in its creation grace) — so it
+  is **real-time liveness from the ~5s ping probe (§6)**, not an inference from logs.
+- A CC uses it to see who is online **before** `send_to_channel` / a broadcast. It is the only
+  in-MCP way to check the roster (before it, a CC had no tool for this — the info lived only in
+  `/api/status` / `ka channel status`).
+- Read-only: it never sends a message anywhere.
+
+The division of labor between the tools:
 
 | Tool | Destination | Use |
 |---|---|---|
 | `reply{chat_id,text}` | `bot.api.sendMessage` → **user Telegram** | CC replies to the user |
 | `send_to_channel{target,text}` | daemon `fanout` → **another CC channel** | CC ↔ CC |
+| `list_channels{}` | read-only (no send) | CC checks who is online (number / name / alive) |
 
 ---
 

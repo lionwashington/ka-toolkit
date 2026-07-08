@@ -216,7 +216,7 @@ For implementation-level details see `docs/channels/telegram/ARCHITECTURE.md`. K
 - **A standalone background daemon**: node + express, bound to `127.0.0.1:9877`, **MCP-over-HTTP**
   (`/mcp` SSE), **not a CC plugin and not relying on flock**. Singleton via port binding (`EADDRINUSE → exit 0`).
 - **The token lives only in the daemon**: the daemon holds the bot token exclusively to do `getUpdates` long-polling; **CC processes never touch the
-  token**, they only send/receive via MCP tools (`reply` / `send_to_channel`) — a single credential exit.
+  token**, they only send/receive/query via MCP tools (`reply`, `send_to_channel`, `list_channels`) — a single credential exit.
 - **Multi-channel routing**: in Telegram the user routes to a target channel with a `to <name|number>:` prefix
   (no prefix → `main`); each CC process is attached to a channel name (registration URL `?name=<X>`).
 - **CC↔CC communication**: via `send_to_channel` (cc2cc, see `docs/channels/telegram/ARCHITECTURE.md` §5),
@@ -273,7 +273,7 @@ whether it is `default`.
 
 | Command | Description |
 |---|---|
-| `ka workshop [start\|stop\|restart\|spawn-mates] [name]` | workshop lifecycle / tmux panes (see §3.2); restart with no name = whole workshop |
+| `ka workshop [start\|stop\|restart\|spawn-mates\|remove-mate] [name]` | workshop lifecycle / tmux panes (see §3.2); restart with no name = whole workshop; `remove-mate` deletes a mate from `workshop.yaml` (stops its pane first; refuses `main`) |
 | `ka channel [start\|stop\|restart\|status\|config]` | the channel daemon (kind from `config.yaml channel_kind`) — 1st resident daemon |
 | `ka kb [start\|stop\|restart\|status]` | the kb retrieval daemon (LanceDB `kb_search` backend, port 7705) — 2nd resident daemon |
 | `ka kb reindex [--full]` | (re)build the `kb_search` index (incremental \| full) |

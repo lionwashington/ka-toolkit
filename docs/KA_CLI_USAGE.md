@@ -90,6 +90,7 @@ ka workshop [<verb>] [<name> [<workdir>]] [flags]
 | `ka workshop stop [<name>]` | no name → stop the whole workshop (kill the session); `<name>` → stop only that pane |
 | `ka workshop restart [<name>]` | no name → restart the **whole** workshop (stop all → start all; run from a plain terminal); `<name>` → restart a single mate's pane. ⚠️ See the warning below |
 | `ka workshop spawn-mates <name> [<workdir>]` | with `<workdir>` → register and start; without → equivalent to `start <name>` |
+| `ka workshop remove-mate <name>` (alias `remove`) | the inverse of spawn-mates: stop the mate's pane if running, then delete its entry from `workshop.yaml`. Refuses the lead `main`; `--dry-run` previews; interactive `[y/N]` confirm unless `--yes` |
 
 `ka workshop` does **not** manage the channel daemon — it only warns if the daemon is down (the panes don't depend on it to launch). Daemon lifecycle lives in [`ka channel`](#ka-channel--the-channel-daemon).
 

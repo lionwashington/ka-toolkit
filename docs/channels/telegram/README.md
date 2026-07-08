@@ -76,7 +76,7 @@ curl -s 127.0.0.1:9877/api/status | python3 -m json.tool   # detailed status
 ```
 
 - **② Connection level / half-open self-heal (M6, 2026-05-31)** — when network jitter causes the CC↔daemon SSE to go one-way half-open (process hasn't crashed, TCP hasn't dropped, but CC isn't receiving dispatches), the daemon's ping probe detects it and automatically `closeStandaloneSSEStream()` (closes the notification stream, keeps the session), triggering CC to reconnect with the same session-id and seamlessly resume, **no manual intervention, no restart** (see `ARCHITECTURE.md` A4/A5).
-  - ⚠️ A daemon **process restart** (code upgrade) loses in-memory sessions; existing CCs reconnecting with old ids hit 404 and go idle — in this case **no need to restart the CC** (which would lose runtime context); manually have it call an MCP tool once in its window to trigger a re-init and resume.
+  - A daemon **process restart** (code upgrade) drops the in-memory sessions, but the daemon **re-adopts** each CC's reconnecting consumer SSE — it never 404s a reconnect that carries `?name` — so inbound/outbound **resume automatically: no manual trigger, no CC restart** (verified 2026-07-08: restarting the daemon under 6 live CCs, all re-adopted within ~2s). The ONE case that still needs a full CC restart is a change to the daemon's **MCP tool set**: a CC caches its tool list at init and a bare reconnect does not re-fetch it, so a newly-added tool (e.g. `list_channels`) reaches existing CCs only after they re-init.
 
 **Singleton**: a second daemon hitting port 9877 → `EADDRINUSE` → clean exit (exit 0).
 (`daemon.sh` also uses `flock` when present; macOS has no flock, falling back to port-binding for the singleton.)
@@ -98,7 +98,7 @@ TG_CHANNEL_PORT=9999 channels/telegram/tg-ch main   # change daemon port (defaul
 >
 > **Concurrency test conclusions (2026-05-29)**:
 > - ✅ **No cross-talk**: a CC caches the MCP config from startup; on a disconnect 404 reconnect it **returns to its own original channel**, not reading the "latest registered value". Verified: in the same cwd, `tg-ch test1`→`tg-ch test2` in sequence (the shared registration changed to `?name=test2`), restarting the daemon forced the test1 CC to reconnect, and **test1 still came back to test1** (not test2). So concurrent multi-channels are each independent and don't cross-talk.
-> - ⚠️ **A daemon restart silently drops all dev-channels consumers**: after the restart they don't auto-reconnect; you need to send the CC an operation (e.g. have it call a tool) to trigger a 404 reconnect, or just restart that CC (same lesson as lark). **Don't restart the daemon in daily use.**
+> - ⚠️ ~~A daemon restart silently drops all dev-channels consumers; they don't auto-reconnect — you must trigger a 404 reconnect or restart the CC.~~ **Superseded (2026-07-08)**: the daemon now **re-adopts** reconnecting consumers (no 404), so a restart auto-recovers every CC within ~2s with no manual trigger. Restarting the daemon in daily use is safe; a full CC restart is only needed to pick up a *new MCP tool set* (the tool list is cached at CC init).
 > - ⚠️ **Startup race**: the registration is the shared value at "the moment tg-ch is called", so **start them sequentially** (wait for one channel to connect before starting the next); don't concurrently start multiple tg-ch at once (they'd contend for the same registration).
 > - True concurrent multi-channel steady-state management (one pane per channel) is carried by the later spawn/start-pane path.
 >
