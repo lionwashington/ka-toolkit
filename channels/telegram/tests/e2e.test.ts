@@ -71,14 +71,25 @@ describe('HTTP /api/status', () => {
 })
 
 describe('MCP tools contract', () => {
-  test('ListTools exposes reply + send_to_channel', async () => {
+  test('ListTools exposes reply + send_to_channel + list_channels', async () => {
     const res = await main.client.listTools()
     const names = res.tools.map(t => t.name).sort()
-    assert.deepEqual(names, ['reply', 'send_to_channel'])
+    assert.deepEqual(names, ['list_channels', 'reply', 'send_to_channel'])
     const reply = res.tools.find(t => t.name === 'reply')!
     assert.deepEqual((reply.inputSchema as any).required, ['chat_id', 'text'])
     const stc = res.tools.find(t => t.name === 'send_to_channel')!
     assert.deepEqual((stc.inputSchema as any).required, ['target', 'text'])
+    const lc = res.tools.find(t => t.name === 'list_channels')!
+    assert.ok(lc, 'list_channels tool present')
+    assert.deepEqual((lc.inputSchema as any).required ?? [], [], 'list_channels takes no required args')
+  })
+
+  test('list_channels returns the live roster with numbers', async () => {
+    const res: any = await main.client.callTool({ name: 'list_channels', arguments: {} })
+    const text = res.content.map((c: any) => c.text).join('\n')
+    assert.match(text, /#1 main/, 'main listed as #1')
+    assert.match(text, /#2 ka/, 'ka listed as #2')
+    assert.match(text, /channel\(s\)/, 'has a header count')
   })
 })
 

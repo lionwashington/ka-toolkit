@@ -9,8 +9,9 @@ import { log } from './log.ts'
 import { counters } from './counters.ts'
 import { sanitizeChannelName } from './routing.ts'
 import {
-  channelNumberOf, sessionsOf, allSessions, onlineChannelListStr,
+  channelNumberOf, sessionsOf, allSessions, onlineChannelListStr, byName,
 } from './sessions.ts'
+import { CHANNEL_FRESH_MS, PROBE_GRACE_MS } from './probe.ts'
 import { ccLoopGuard, fanout } from './dispatch.ts'
 import type { Platform } from './platform.ts'
 
@@ -52,6 +53,15 @@ export function createMcpServer(channelName: string, platform: Platform): Server
           },
           required: ['target', 'text'],
         },
+      },
+      {
+        name: 'list_channels',
+        description:
+          'List every Claude Code session (channel) currently connected to this daemon, with its ' +
+          'stable number, name, and LIVE status. The daemon pings each session about every 5s, so ' +
+          '`alive` is real-time liveness (an actual recent ping succeeded) — not a guess from logs. ' +
+          'Use this to see who is online before send_to_channel or a broadcast. No arguments.',
+        inputSchema: { type: 'object', properties: {} },
       },
     ],
   }))
@@ -119,6 +129,29 @@ export function createMcpServer(channelName: string, platform: Platform): Server
       return {
         content: [{ type: 'text', text: `sent to "${target}" [${targets.length} sess] as from_channel=${channelName}` }],
       }
+    }
+
+    // ── list_channels → the live roster (number / name / alive) ──────────────
+    // Same source of truth as GET /api/status: `alive` = a probe ping succeeded
+    // within CHANNEL_FRESH_MS (or the session is still within its creation grace).
+    if (req.params.name === 'list_channels') {
+      const now = Date.now()
+      const rows = Array.from(byName.entries()).map(([name, list]) => ({
+        num: channelNumberOf(name),
+        name,
+        online: list.length > 0,
+        alive: list.some(sess =>
+          (sess.lastProbeOk > 0 && now - sess.lastProbeOk < CHANNEL_FRESH_MS) ||
+          (sess.lastProbeOk === 0 && now - sess.createdAt < PROBE_GRACE_MS)),
+      })).sort((a, b) => a.num - b.num)
+      const body = rows.length === 0
+        ? 'no channels connected'
+        : rows.map(r =>
+            `#${r.num} ${r.name}${r.name === channelName ? ' (you)' : ''} — ` +
+            `${r.alive ? 'alive' : (r.online ? 'online (no recent ping)' : 'offline')}`,
+          ).join('\n')
+      const header = `${rows.length} channel(s) — liveness from the daemon's ~5s ping probe:`
+      return { content: [{ type: 'text', text: `${header}\n${body}` }] }
     }
 
     return { content: [{ type: 'text', text: `unknown: ${req.params.name}` }], isError: true }
