@@ -25,6 +25,10 @@
 #   ka workshop spawn-mates <name> [<workdir>]
 #       with <workdir> = registrar (add/replace yaml + launch). [P2 step ②]
 #       without        = alias for `ka workshop start <name>`.
+#   ka workshop remove-mate <name> [--dry-run] [--yes]   (alias: remove)
+#       registrar removal — symmetric with spawn-mates: stop the mate's pane if
+#       it's running, then delete its entry from workshop.yaml. Refuses to remove
+#       the lead 'main'. --dry-run previews; interactive [y/N] confirm unless --yes.
 #   ka workshop peek <name> [lines]    capture-pane: see a pane's live screen (READ; safe)
 #   ka workshop poke <name> <keys…>    send-keys: unstick a hung pane (WRITE; recovery only)
 #       out-of-band fallback for when the channel can't reach a pane; normal comms = the channel.
@@ -61,12 +65,13 @@ DRY_RUN="${DRY_RUN:-0}"
 INCLUDE_OPTIONAL=0
 ONLY=""
 SKIP_DAEMON=0     # --skip-daemon → don't even check the daemon (workshop never manages it)
+ASSUME_YES=0      # --yes → skip the interactive confirm on remove-mate
 LAYOUT="pane"     # default (P2): all CCs as split-panes in ONE window (one screen).
                   # --window → one tmux window per CC (Ctrl-b 0/1/2/w to switch).
 
 VERB="start"
 case "${1:-}" in
-    start|stop|restart|spawn-mates|peek|poke) VERB="$1"; shift ;;
+    start|stop|restart|spawn-mates|peek|poke|remove-mate|remove) VERB="$1"; shift ;;
 esac
 
 declare -a POSITIONAL
@@ -78,6 +83,7 @@ for arg in "$@"; do
         --only=*)         ONLY="${arg#--only=}" ;;
         --only)           : ;;  # value picked up below
         --skip-daemon)    SKIP_DAEMON=1 ;;
+        --yes|-y)         ASSUME_YES=1 ;;
         --pane)           LAYOUT="pane" ;;
         --window)         LAYOUT="window" ;;
         --*)              log_warn "unknown flag: $arg" ;;
@@ -679,11 +685,95 @@ cmd_restart() {
     exec bash "$0" "${fwd[@]}"
 }
 
+# ============================================================================
+# cmd_remove_mate — registrar removal (symmetric with spawn-mates).
+#   Stop the mate's pane if running, then delete its entry from workshop.yaml.
+#   Refuses to remove the lead 'main'. --dry-run previews; confirm unless --yes.
+# ============================================================================
+cmd_remove_mate() {
+    if [ -z "$TARGET" ]; then
+        log_err "usage: ka workshop remove-mate <name> [--dry-run] [--yes]"
+        exit 2
+    fi
+    # must exist in the yaml (panes + mates); must NOT be the lead 'main'.
+    local found=0 is_main=0 j
+    for j in "${!PANE_NAMES[@]}"; do
+        if [ "${PANE_NAMES[$j]}" = "$TARGET" ]; then
+            found=1; [ "${PANE_MAINS[$j]}" = "1" ] && is_main=1
+        fi
+    done
+    if [ "${#MATE_NAMES[@]}" -gt 0 ]; then
+        for j in "${!MATE_NAMES[@]}"; do
+            [ "${MATE_NAMES[$j]}" = "$TARGET" ] && found=1
+        done
+    fi
+    if [ "$found" -eq 0 ]; then
+        log_err "'$TARGET' is not declared in workshop.yaml (session '$SESSION')"
+        exit 1
+    fi
+    if [ "$is_main" -eq 1 ]; then
+        log_err "refusing to remove '$TARGET': it is the workshop lead (main), not a removable mate"
+        exit 1
+    fi
+
+    # is its pane currently running?
+    local channel pane_id=""
+    channel="$(sanitize_channel "$TARGET")"
+    if "$TMUX_BIN" has-session -t "$SESSION" 2>/dev/null; then
+        pane_id="$(find_pane_by_channel "$channel")"
+    fi
+
+    local remover="$KA_WORKSHOP_DIR/yaml-remove-mate.py"
+    if [ "$DRY_RUN" = "1" ]; then
+        [ -n "$pane_id" ] && echo "[dry-run] would stop running pane for '$TARGET' (pane $pane_id, channel '$channel')"
+        echo "[dry-run] python3 $remover $CONFIG $TARGET   # delete the mate entry from workshop.yaml (refuses main)"
+        exit 0
+    fi
+
+    # confirm (interactive), unless --yes.
+    if [ "$ASSUME_YES" != "1" ]; then
+        if [ -t 0 ]; then
+            local extra=""; [ -n "$pane_id" ] && extra=" (and stop its running pane)"
+            printf "Remove mate '%s' from workshop.yaml%s? [y/N] " "$TARGET" "$extra"
+            local reply=""; read -r reply || true
+            case "$reply" in
+                [yY]|[yY][eE][sS]) ;;
+                *) log_dim "aborted — nothing changed"; exit 0 ;;
+            esac
+        else
+            log_err "refusing to remove '$TARGET' without confirmation — pass --yes (non-interactive stdin)"
+            exit 2
+        fi
+    fi
+
+    # stop the running pane first (inline; mirrors cmd_stop's single-pane path).
+    if [ -n "$pane_id" ]; then
+        log_info "stopping running pane for '$TARGET' (channel '$channel') before removing its config…"
+        "$TMUX_BIN" send-keys -t "$pane_id" C-c 2>/dev/null || true
+        sleep 1
+        if "$TMUX_BIN" list-panes -s -t "$SESSION" -F '#{pane_id}' 2>/dev/null | grep -qx "$pane_id"; then
+            "$TMUX_BIN" kill-pane -t "$pane_id" 2>/dev/null || true
+        fi
+        "$TMUX_BIN" select-layout -t "$SESSION:0" tiled >/dev/null 2>&1 || true
+        log_ok "stopped '$TARGET'"
+    fi
+
+    # delete the entry from workshop.yaml.
+    if python3 "$remover" "$CONFIG" "$TARGET"; then
+        log_ok "removed mate '$TARGET' from $CONFIG"
+        log_dim "re-add later with: ka workshop spawn-mates $TARGET <workdir>"
+    else
+        log_err "failed to remove mate '$TARGET' from $CONFIG (see message above)"
+        exit 1
+    fi
+}
+
 # ---- dispatch ---------------------------------------------------------------
 case "$VERB" in
-    start)       cmd_start ;;
-    stop)        cmd_stop ;;
-    restart)     cmd_restart ;;
-    spawn-mates) cmd_spawn_mates ;;
-    *)           log_err "unknown verb: $VERB"; exit 2 ;;
+    start)              cmd_start ;;
+    stop)               cmd_stop ;;
+    restart)            cmd_restart ;;
+    spawn-mates)        cmd_spawn_mates ;;
+    remove-mate|remove) cmd_remove_mate ;;
+    *)                  log_err "unknown verb: $VERB"; exit 2 ;;
 esac
