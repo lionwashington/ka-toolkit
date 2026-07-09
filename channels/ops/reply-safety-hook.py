@@ -59,20 +59,24 @@ TEXT_MIN = 30
 # Per-type nudge reasons (decision:block) and owner-facing notices (hook → /api/send;
 # the daemon adds the [#num-name] prefix, so these don't name the pane themselves).
 NUDGE_REASON = {
-    "forgot": ("你刚回答了主人,但没用 reply 工具发出去 —— 主人在 Telegram/Lark 收不到终端正文。"
-               "现在立刻用 reply 工具(带 chat_id)把你刚才那条答案发给主人。给主人的回复必须走 reply 工具。"),
-    "silent": ("主人发来了消息,但你这一轮结束时没有回复主人。现在用 reply 工具(带 chat_id)回复主人;"
-               "若你还在处理,也先发一句简短状态,别让主人空等。"),
-    "malformed": ("你上一轮回复主人时 reply 工具调用没能成功发出(畸形/解析失败)。现在重新用 reply 工具"
-                  "(带 chat_id)回复主人,内容尽量简短,以降低再次畸形的概率。"),
-    "parse_error": ("你上一轮的工具调用 parse error、没能发出。现在重新用 reply 工具(带 chat_id)回复主人,"
-                    "内容尽量简短,以降低再次畸形的概率。"),
+    "forgot": ("You just answered the owner but did not send it via the reply tool — the owner reads "
+               "Telegram/Lark, not this terminal, so terminal text never reaches them. Use the reply "
+               "tool now (with chat_id) to send your answer to the owner. Every reply to the owner MUST "
+               "go through the reply tool."),
+    "silent": ("The owner sent a message but you ended this turn without replying. Use the reply tool "
+               "now (with chat_id) to reply; if you are still working, at least send a short status so "
+               "they are not left waiting."),
+    "malformed": ("Your last reply to the owner failed to send — the reply tool call was malformed / "
+                  "unparseable. Re-send now with the reply tool (with chat_id), keeping it short to "
+                  "reduce the chance of another malformed call."),
+    "parse_error": ("Your last tool call hit a parse error and did not send. Re-send now with the reply "
+                    "tool (with chat_id), keeping it short to reduce the chance of another malformed call."),
 }
 NOTICE = {
-    "malformed": "⚠️ 我回复你时 reply 工具调用畸形了,消息没能发出。先告诉你别漏掉 —— 建议 /compact 让我恢复。",
-    "parse_error": "⚠️ 我回复你时工具调用 parse error 了,消息没能发出。先告诉你别漏掉 —— 建议 /compact 让我恢复。",
-    "forgot": "⚠️ 你刚发的消息我回答了,但连续没能用 reply 工具发出。先告诉你别漏掉 —— 建议 /compact。",
-    "silent": "⚠️ 你刚发的消息我一直没能回复(工具调用故障)。先告诉你别漏掉 —— 建议 /compact。",
+    "malformed": "⚠️ My reply-tool call to you was malformed, so the message did not send. Flagging it so you don't miss it — a /compact should help me recover.",
+    "parse_error": "⚠️ My tool call to you hit a parse error, so the message did not send. Flagging it so you don't miss it — a /compact should help me recover.",
+    "forgot": "⚠️ I answered your last message but repeatedly failed to send it via the reply tool. Flagging it so you don't miss it — /compact suggested.",
+    "silent": "⚠️ I never managed to reply to your last message (tool-call failure). Flagging it so you don't miss it — /compact suggested.",
 }
 NUDGE_BUDGET = {"forgot": 2, "silent": 2, "malformed": 1, "parse_error": 1}
 
