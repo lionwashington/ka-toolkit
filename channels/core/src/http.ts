@@ -189,11 +189,13 @@ export function createHttpApp(platform: Platform, runtimeManager?: CodexRuntimeM
     const name = sanitizeChannelName(rawName)
     const cwd = String(req.body?.cwd ?? '')
     const socketPath = String(req.body?.socket_path ?? '')
-    if (!rawName || !cwd || !socketPath.startsWith('/')) {
-      res.status(400).json({ ok: false, error: 'name, cwd, and absolute socket_path are required' }); return
+    const endpoint = String(req.body?.endpoint ?? '')
+    const validEndpoint = /^ws:\/\/127\.0\.0\.1:\d+$/.test(endpoint)
+    if (!rawName || !cwd || (!socketPath.startsWith('/') && !validEndpoint)) {
+      res.status(400).json({ ok: false, error: 'name, cwd, and a loopback endpoint or absolute socket_path are required' }); return
     }
     try {
-      await runtimeManager.register({ name, cwd, socketPath })
+      await runtimeManager.register({ name, cwd, endpoint: validEndpoint ? endpoint : undefined, socketPath: socketPath || undefined })
       res.json({ ok: true, name })
     } catch (error: any) {
       log(`Codex runtime registration failed (${name}): ${error?.message ?? error}`)

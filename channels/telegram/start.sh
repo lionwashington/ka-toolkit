@@ -41,10 +41,16 @@ if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
 fi
 
 # 2. Not up — launch in background, detached from current terminal.
-# `setsid` detaches into a new session (Linux); macOS has no setsid, so fall
-# back to plain nohup + disown (flock in daemon.sh still enforces singleton).
+# `setsid` detaches into a new session on Linux. On macOS, a child created by a
+# scheduled LaunchAgent remains in that job's process coalition and is killed
+# when the short-lived cron job exits, even with nohup/disown. Submit a separate
+# transient launchd job so the daemon has an independent lifecycle.
 if command -v setsid >/dev/null 2>&1; then
   nohup setsid bash "$ROOT/daemon.sh" </dev/null >>"$LOG" 2>&1 &
+elif command -v launchctl >/dev/null 2>&1; then
+  LABEL="com.knowledge-assistant.ka.channel.telegram"
+  launchctl remove "$LABEL" >/dev/null 2>&1 || true
+  launchctl submit -l "$LABEL" -o "$LOG" -e "$LOG" -- /bin/bash "$ROOT/daemon.sh"
 else
   nohup bash "$ROOT/daemon.sh" </dev/null >>"$LOG" 2>&1 &
 fi

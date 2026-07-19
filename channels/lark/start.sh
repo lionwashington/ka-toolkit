@@ -38,9 +38,15 @@ if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   exit 0
 fi
 
-# 2. Not up — launch in background, detached. setsid (Linux) or nohup+disown (macOS).
+# 2. Not up — launch detached. A macOS LaunchAgent cleans up child processes
+# in its own coalition when the job exits, so use a separate transient launchd
+# job instead of plain nohup when launchctl is available.
 if command -v setsid >/dev/null 2>&1; then
   nohup setsid bash "$ROOT/daemon.sh" </dev/null >>"$LOG" 2>&1 &
+elif command -v launchctl >/dev/null 2>&1; then
+  LABEL="com.knowledge-assistant.ka.channel.lark"
+  launchctl remove "$LABEL" >/dev/null 2>&1 || true
+  launchctl submit -l "$LABEL" -o "$LOG" -e "$LOG" -- /bin/bash "$ROOT/daemon.sh"
 else
   nohup bash "$ROOT/daemon.sh" </dev/null >>"$LOG" 2>&1 &
 fi

@@ -40,7 +40,7 @@ mates:
   #   description: example mate
   #   default: false
 
-  # Workshop starts a per-mate Codex App Server and registers its Unix socket
+  # Workshop starts a per-mate Codex App Server and registers its loopback endpoint
   # with the active Channel daemon. Channel never reads this file.
   # - name: codex-reviewer
   #   cwd: ~/workspace/your-workspace

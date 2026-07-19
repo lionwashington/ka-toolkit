@@ -9,7 +9,8 @@ import { log } from '../log.ts'
 export interface CodexRuntimeRegistration {
   name: string
   cwd: string
-  socketPath: string
+  endpoint?: string
+  socketPath?: string
 }
 
 export interface CodexRuntimeConfig {
@@ -39,6 +40,7 @@ export class CodexRuntimeManager {
   async register(item: CodexRuntimeRegistration): Promise<void> {
     await this.unregister(item.name)
     const client = new AppServerClient({
+      endpoint: item.endpoint,
       socketPath: item.socketPath,
       requestTimeoutMs: this.config.requestTimeoutMs,
       serverRequestHandler: request => this.handleServerRequest(request),
@@ -58,7 +60,7 @@ export class CodexRuntimeManager {
       await target.connect()
       registerRuntimeTarget(target)
       this.targets.set(item.name, { target, client })
-      log(`codex target registered: ${item.name} (${item.socketPath})`)
+      log(`codex target registered: ${item.name} (${item.endpoint ?? item.socketPath})`)
     } catch (error) {
       target.shutdown()
       await client.stop()

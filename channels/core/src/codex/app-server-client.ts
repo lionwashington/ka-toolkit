@@ -9,6 +9,7 @@ export interface AppServerClientOptions {
   command?: string
   args?: string[]
   socketPath?: string
+  endpoint?: string
   cwd?: string
   env?: NodeJS.ProcessEnv
   requestTimeoutMs?: number
@@ -31,6 +32,7 @@ export class AppServerClient extends EventEmitter {
   readonly serverRequestHandler?: (request: JsonObject) => Promise<unknown>
   private child: ChildProcessWithoutNullStreams | null = null
   private socket: Socket | null = null
+  private websocket: WebSocket | null = null
   private stopping = false
   private nextId = 1
   private readonly pending = new Map<number, PendingRequest>()
@@ -45,15 +47,21 @@ export class AppServerClient extends EventEmitter {
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10_000
     this.serverRequestHandler = options.serverRequestHandler
     this.socketPath = options.socketPath
+    this.endpoint = options.endpoint
   }
 
   readonly socketPath?: string
+  readonly endpoint?: string
 
-  get running(): boolean { return this.child !== null || this.socket !== null }
+  get running(): boolean { return this.child !== null || this.socket !== null || this.websocket !== null }
 
   async start(): Promise<void> {
     if (this.running) throw new Error('app-server client already started')
     this.stopping = false
+    if (this.endpoint) {
+      await this.connectWebSocket(this.endpoint)
+      return
+    }
     if (this.socketPath) {
       await this.connectSocket(this.socketPath)
       return
@@ -103,6 +111,14 @@ export class AppServerClient extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    if (this.websocket) {
+      this.stopping = true
+      const websocket = this.websocket
+      this.websocket = null
+      websocket.close()
+      this.failAll(new Error('app-server connection closed'))
+      return
+    }
     if (this.socket) {
       this.stopping = true
       const socket = this.socket
@@ -124,6 +140,7 @@ export class AppServerClient extends EventEmitter {
 
   private write(message: JsonObject): void {
     const line = `${JSON.stringify(message)}\n`
+    if (this.websocket?.readyState === WebSocket.OPEN) { this.websocket.send(JSON.stringify(message)); return }
     if (this.socket?.writable) { this.socket.write(line); return }
     if (this.child?.stdin.writable) { this.child.stdin.write(line); return }
     throw new Error('app-server transport is not writable')
@@ -148,6 +165,31 @@ export class AppServerClient extends EventEmitter {
       socket.once('close', () => {
         if (this.socket === socket) this.socket = null
         const error = new Error('app-server socket closed')
+        this.failAll(error)
+        this.emit('exit', { code: null, signal: null })
+      })
+    })
+  }
+
+  private connectWebSocket(endpoint: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const websocket = new WebSocket(endpoint)
+      let settled = false
+      websocket.addEventListener('open', () => {
+        settled = true
+        this.websocket = websocket
+        resolve()
+      }, { once: true })
+      websocket.addEventListener('message', event => this.onLine(String(event.data)))
+      websocket.addEventListener('error', () => {
+        const error = new Error(`app-server WebSocket failed: ${endpoint}`)
+        if (!settled) reject(error)
+        this.failAll(error)
+        this.emit('transport-error', error)
+      })
+      websocket.addEventListener('close', () => {
+        if (this.websocket === websocket) this.websocket = null
+        const error = new Error('app-server WebSocket closed')
         this.failAll(error)
         this.emit('exit', { code: null, signal: null })
       })

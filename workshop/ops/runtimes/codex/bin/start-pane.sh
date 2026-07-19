@@ -33,7 +33,7 @@ if ! command -v codex >/dev/null 2>&1; then
 fi
 
 # Workshop owns both processes for a Codex mate. The App Server is a sidecar
-# bound to a per-mate Unix socket; the TUI and Channel daemon are clients. The
+# bound to a per-mate loopback WebSocket; the TUI and Channel daemon are clients. The
 # registrar retries while the pane is alive so a later Channel start/restart is
 # healed without letting Channel read workshop.yaml or spawn runtime processes.
 SOCKET_DIR="$KA_STATE_DIR/codex-app-servers"
@@ -44,11 +44,11 @@ chmod 700 "$SOCKET_DIR" 2>/dev/null || true
 RUNTIME_NAME="${KA_CHANNEL:-$PANE_NAME}"
 SAFE_NAME="$(printf '%s' "$RUNTIME_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]//g')"
 [ -n "$SAFE_NAME" ] || SAFE_NAME="main"
-SOCKET_PATH="$SOCKET_DIR/$SAFE_NAME.sock"
 SERVER_LOG="$SOCKET_DIR/$SAFE_NAME.log"
-rm -f "$SOCKET_PATH"
+APP_SERVER_PORT="$(node -e 'const s=require("net").createServer();s.listen(0,"127.0.0.1",()=>{process.stdout.write(String(s.address().port));s.close()})')"
+APP_SERVER_ENDPOINT="ws://127.0.0.1:$APP_SERVER_PORT"
 
-codex app-server --listen "unix://$SOCKET_PATH" >>"$SERVER_LOG" 2>&1 &
+codex app-server --listen "$APP_SERVER_ENDPOINT" >>"$SERVER_LOG" 2>&1 &
 APP_SERVER_PID=$!
 
 cleanup() {
@@ -56,25 +56,24 @@ cleanup() {
     curl -sf -X DELETE "http://127.0.0.1:${KA_CHANNEL_PORT:-9877}/api/runtimes/codex/$SAFE_NAME" >/dev/null 2>&1 || true
     kill "$APP_SERVER_PID" 2>/dev/null || true
     wait "$APP_SERVER_PID" 2>/dev/null || true
-    rm -f "$SOCKET_PATH"
 }
 trap cleanup EXIT INT TERM HUP
 
 for _ in $(seq 1 100); do
-    [ -S "$SOCKET_PATH" ] && break
+    node -e 'const net=require("net");const s=net.connect(Number(process.argv[1]),"127.0.0.1",()=>{s.end();process.exit(0)});s.on("error",()=>process.exit(1))' "$APP_SERVER_PORT" >/dev/null 2>&1 && break
     kill -0 "$APP_SERVER_PID" 2>/dev/null || {
         echo "[start-pane:$PANE_NAME] ERROR: Codex App Server exited; see $SERVER_LOG"
         exit 1
     }
     sleep 0.1
 done
-[ -S "$SOCKET_PATH" ] || { echo "[start-pane:$PANE_NAME] ERROR: App Server socket was not created"; exit 1; }
+kill -0 "$APP_SERVER_PID" 2>/dev/null || { echo "[start-pane:$PANE_NAME] ERROR: App Server did not start"; exit 1; }
 
 register_loop() {
     local port="${KA_CHANNEL_PORT:-9877}"
     local status body
-    body="$(PANE_NAME="$SAFE_NAME" PANE_CWD="$EXPECTED_CWD" SOCKET_PATH="$SOCKET_PATH" node -e \
-        'process.stdout.write(JSON.stringify({name:process.env.PANE_NAME,cwd:process.env.PANE_CWD,socket_path:process.env.SOCKET_PATH}))')"
+    body="$(PANE_NAME="$SAFE_NAME" PANE_CWD="$EXPECTED_CWD" APP_SERVER_ENDPOINT="$APP_SERVER_ENDPOINT" node -e \
+        'process.stdout.write(JSON.stringify({name:process.env.PANE_NAME,cwd:process.env.PANE_CWD,endpoint:process.env.APP_SERVER_ENDPOINT}))')"
     while kill -0 "$APP_SERVER_PID" 2>/dev/null; do
         status="$(curl -sf --max-time 1 "http://127.0.0.1:$port/api/status" 2>/dev/null || true)"
         if ! printf '%s' "$status" | PANE_NAME="$SAFE_NAME" node -e \
@@ -90,7 +89,7 @@ register_loop &
 REGISTRAR_PID=$!
 
 run_codex() {
-    codex --remote "unix://$SOCKET_PATH" "$@"
+    codex --remote "$APP_SERVER_ENDPOINT" "$@"
 }
 
 # Explicit arguments are authoritative. This supports session IDs via

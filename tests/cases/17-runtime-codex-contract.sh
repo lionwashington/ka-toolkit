@@ -28,8 +28,9 @@ cat > "$tmp_root/bin/codex" <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "$FAKE_CODEX_CALLS"
 if [ "${1:-}" = app-server ]; then
-    socket="${3#unix://}"
-    exec python3 -c 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(); time.sleep(30)' "$socket"
+    endpoint="${3:-}"
+    port="${endpoint##*:}"
+    exec python3 -c 'import socket,sys,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(); time.sleep(30)' "$port"
 fi
 for arg in "$@"; do [ "$arg" = resume ] && exit 2; done
 exit 0
@@ -39,15 +40,15 @@ chmod +x "$tmp_root/bin/codex"
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" KA_CHANNEL=main \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" --model test-model >/dev/null 2>&1 \
     || fail "explicit Codex launch failed"
-grep -Eq -- '^--remote unix://.+/main\.sock --model test-model$' "$tmp_root/calls" || fail "channel-mapped socket or explicit args were changed"
+grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --model test-model$' "$tmp_root/calls" || fail "channel endpoint or explicit args were changed"
 
 : > "$tmp_root/calls"
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" >/dev/null 2>&1 \
     || fail "Codex resume fallback failed"
-grep -Eq -- '^--remote unix://.+/reviewer\.sock resume --last --sandbox workspace-write --ask-for-approval on-request$' "$tmp_root/calls" \
+grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ resume --last --sandbox workspace-write --ask-for-approval on-request$' "$tmp_root/calls" \
     || fail "default resume command missing"
-grep -Eq -- '^--remote unix://.+/reviewer\.sock --sandbox workspace-write --ask-for-approval on-request$' "$tmp_root/calls" \
+grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --sandbox workspace-write --ask-for-approval on-request$' "$tmp_root/calls" \
     || fail "fresh fallback command missing"
 rm -rf "$tmp_root"
 ok "Codex launch preserves args and falls back from empty resume"
