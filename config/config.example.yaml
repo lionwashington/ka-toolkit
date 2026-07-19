@@ -13,22 +13,11 @@ channels:
   telegram:
     port: 9877
     poll_timeout: 25            # getUpdates long-poll seconds
-    # Optional persistent Codex targets hosted inside the Telegram daemon.
-    # codex:
-    #   targets:
-    #     - name: codex-main
-    #       cwd: ~/workspace/your-workspace
   lark:
     port: 9876
     poll_interval_seconds: 1    # base poll tick (seconds)
     page_size: 10               # lark-cli chat-messages-list page size
     lark_cli_bin: lark-cli      # lark-cli binary (path or $PATH name)
-    # Optional Codex targets. `group` matches a group name in secrets.yaml.
-    # codex:
-    #   targets:
-    #     - name: codex-reviewer
-    #       cwd: ~/workspace/reviewer
-    #       group: Example Group
 
 # Knowledge base location (absolute path)
 knowledge_base_path: ~/knowledge-base/

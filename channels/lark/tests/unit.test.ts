@@ -8,24 +8,7 @@
 // Run: node --experimental-strip-types --test tests/unit.test.ts
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { extractText, parseLarkTime, rememberMsgId, extractLarkAttachment, attachmentPlaceholder, normalizeLarkCodexTargets } from '../lark-platform.ts'
-
-describe('normalizeLarkCodexTargets', () => {
-  const groups = { oc_team: { name: 'Team', webhook_url: 'test' } }
-  test('resolves a non-secret group name to its configured chat id', () => {
-    assert.deepEqual(normalizeLarkCodexTargets([
-      { name: 'Codex.Reviewer', cwd: '~/review', group: 'Team' },
-    ], groups, '/home/test'), [
-      { name: 'codexreviewer', cwd: '/home/test/review', externalChatId: 'oc_team' },
-    ])
-  })
-  test('ignores malformed entries and unknown groups', () => {
-    assert.deepEqual(normalizeLarkCodexTargets([
-      { name: 'missing', cwd: '/tmp', group: 'Unknown' },
-      { name: 'invalid' },
-    ], groups, '/home/test'), [])
-  })
-})
+import { extractText, parseLarkTime, rememberMsgId, extractLarkAttachment, attachmentPlaceholder } from '../lark-platform.ts'
 
 describe('extractText', () => {
   test('plain text → trimmed', () => {

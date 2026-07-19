@@ -25,6 +25,7 @@ import { parseRoutingPrefix, applyStickyRouting } from '../core/src/routing.ts'
 import { resolveTargetToName } from '../core/src/sessions.ts'
 import { totalTargetCount } from '../core/src/targets.ts'
 import type { Platform, InboundDispatch } from '../core/src/platform.ts'
+import { normalizeWorkshopCodexTargets } from '../core/src/workshop-targets.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 // Data dir holds state.json / channel.log / daemon.pid / attachments/ — the
@@ -47,6 +48,7 @@ const CONFIG_DIR = process.env.KA_CONFIG_DIR
   || join(process.env.KA_HOME || join(homedir(), '.knowledge-assistant'), 'config')
 const CONFIG_YAML = join(CONFIG_DIR, 'config.yaml')
 const SECRETS_YAML = join(CONFIG_DIR, 'secrets.yaml')
+const WORKSHOP_YAML = process.env.OPS_CONFIG || join(CONFIG_DIR, 'workshop.yaml')
 
 type Config = {
   http_host: string
@@ -76,16 +78,6 @@ function readYaml(path: string): any {
   try { return parseYaml(readFileSync(path, 'utf-8')) ?? {} } catch { return {} }
 }
 
-export function normalizeCodexTargets(raw: unknown, home = homedir()): Array<{ name: string; cwd: string }> {
-  if (!Array.isArray(raw)) return []
-  return raw
-    .filter((item: any) => item && typeof item.name === 'string' && typeof item.cwd === 'string')
-    .map((item: any) => ({
-      name: String(item.name).toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'main',
-      cwd: String(item.cwd).replace(/^~(?=\/|$)/, home),
-    }))
-}
-
 function loadConfig(): Config {
   const pub = readYaml(CONFIG_YAML)?.channels?.telegram ?? {}
   const sec = readYaml(SECRETS_YAML)?.channels?.telegram ?? {}
@@ -103,7 +95,7 @@ function loadConfig(): Config {
     // is fail-closed in initTelegram (the daemon refuses to start).
     token: String(sec.token ?? ''),
     owner_chat_id: String(sec.owner_chat_id ?? ''),
-    codex_targets: normalizeCodexTargets(pub.codex?.targets),
+    codex_targets: normalizeWorkshopCodexTargets(readYaml(WORKSHOP_YAML)),
   }
 }
 

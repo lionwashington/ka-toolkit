@@ -10,8 +10,8 @@
 session: workshop
 
 # Agent runtime for every entry unless overridden per-entry.
-# Currently only `cc` (Claude Code) is implemented — `codex` and `gemini`
-# are reserved names for future adapters, see docs/KA_CLI_RUNTIME_DESIGN.md.
+# Supported runtimes are `cc` (Claude Code) and `codex`. `gemini` remains
+# reserved and fails closed, see docs/KA_CLI_RUNTIME_DESIGN.md.
 # Omit this key to accept the default (cc).
 # runtime: cc
 
@@ -38,4 +38,12 @@ mates:
   # - name: helper
   #   cwd: ~/workspace/helper
   #   description: example mate
+  #   default: false
+
+  # Codex mates are also discovered by the active Telegram/Lark channel daemon;
+  # channel configuration contains transport settings only and never repeats the
+  # mate name or cwd.
+  # - name: codex-reviewer
+  #   cwd: ~/workspace/your-workspace
+  #   runtime: codex
   #   default: false

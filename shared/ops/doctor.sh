@@ -37,16 +37,16 @@ else
     hint "create ~/.knowledge-assistant/workshop.yaml (or set OPS_CONFIG)"
 fi
 
-# 2. runtime is cc (only implemented adapter)
+# 2. default runtime has an installed adapter
 rt_default="cc"
 if [ -n "$CONFIG" ] && [ -f "$CONFIG" ]; then
     rt_default="$(runtime_default_from_config "$CONFIG" 2>/dev/null || echo cc)"
 fi
-if [ "$rt_default" = "cc" ]; then
-    note_ok "runtime: cc"
+if runtime_load "$rt_default" 2>/dev/null; then
+    note_ok "runtime: $rt_default"
 else
-    note_warn "runtime: $rt_default — only 'cc' is implemented (codex/gemini reserved)"
-    hint "set 'runtime: cc' in workshop.yaml, or expect adapter-missing warnings"
+    note_warn "runtime: $rt_default — adapter unavailable"
+    hint "set runtime to cc or codex in workshop.yaml"
 fi
 
 # 3. channel daemon health (daemon kind = KA_CHANNEL_KIND: lark→9876 / telegram→9877)

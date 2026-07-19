@@ -80,13 +80,13 @@ export async function startDaemon(opts: {
   // Two-bucket data, same as prod: config.yaml (non-secret) + secrets.yaml
   // (self_open_id + group webhooks) in the config dir the daemon resolves via
   // KA_CONFIG_DIR. state.json/log/pid stay in KA_DAEMON_DATA_DIR; both = dataDir.
-  const codexLines = opts.codexTarget
-    ? `    codex:\n      targets:\n        - name: ${opts.codexTarget.name}\n          cwd: ${opts.codexTarget.cwd}\n          group: Test Group\n`
-    : ''
   writeFileSync(join(dataDir, 'config.yaml'),
     `channels:\n  lark:\n    port: ${port}\n` +
     `    poll_interval_seconds: ${opts.pollIntervalSeconds ?? 1}\n` +
-    `    page_size: 20\n    lark_cli_bin: "${fakeCli}"\n${codexLines}`)
+    `    page_size: 20\n    lark_cli_bin: "${fakeCli}"\n`)
+  writeFileSync(join(dataDir, 'workshop.yaml'), opts.codexTarget
+    ? `session: workshop\nmates:\n  - name: ${opts.codexTarget.name}\n    cwd: ${opts.codexTarget.cwd}\n    runtime: codex\n`
+    : 'session: workshop\nmates: []\n')
   writeFileSync(join(dataDir, 'secrets.yaml'),
     `channels:\n  lark:\n    self_open_id: "${selfOpenId}"\n    groups:\n` +
     `      ${chatId}:\n        name: "Test Group"\n        webhook_url: "${opts.webhookUrl}"\n`)

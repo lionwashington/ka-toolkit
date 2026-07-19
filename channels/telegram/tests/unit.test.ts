@@ -10,23 +10,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { parseRoutingPrefix, sanitizeChannelName, resolveTargetList, applyStickyRouting } from '../../core/src/routing.ts'
-import { chunk, extractAttachment, attachmentPlaceholder, normalizeCodexTargets } from '../telegram-platform.ts'
-
-describe('normalizeCodexTargets', () => {
-  test('is opt-in and ignores malformed entries', () => {
-    assert.deepEqual(normalizeCodexTargets(undefined, '/home/test'), [])
-    assert.deepEqual(normalizeCodexTargets([{ name: 'ok' }, null], '/home/test'), [])
-  })
-  test('sanitizes names and expands a leading home marker', () => {
-    assert.deepEqual(normalizeCodexTargets([
-      { name: 'Codex.Main', cwd: '~/work' },
-      { name: 'reviewer', cwd: '/srv/review' },
-    ], '/home/test'), [
-      { name: 'codexmain', cwd: '/home/test/work' },
-      { name: 'reviewer', cwd: '/srv/review' },
-    ])
-  })
-})
+import { chunk, extractAttachment, attachmentPlaceholder } from '../telegram-platform.ts'
 
 // NEW CONTRACT (multi-target): parseRoutingPrefix returns `rawTargets: string[]`
 // (comma-separated list, names+numbers mixable, deduped) and NO `hadColon` — the

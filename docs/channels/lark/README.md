@@ -82,6 +82,9 @@ identity. The app must have message-send and card create/update scopes. If CardK
 creation is unavailable, the daemon automatically sends the completed response
 through the configured group webhook instead.
 
+Codex mate names and working directories come exclusively from
+`config/workshop.yaml`; do not duplicate them under `channels.lark`.
+
 ## Start / Stop / Inspect the daemon
 
 ```bash

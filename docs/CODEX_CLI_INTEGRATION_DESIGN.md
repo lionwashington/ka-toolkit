@@ -195,6 +195,12 @@ interface RuntimeChannel {
 
 runtime event 在到达 Telegram/Lark 前规范化为 `turn-started`、`text-delta`、`activity`、`approval`、`final`、`error` 和 `turn-completed`。
 
+Channel transport configuration does not declare runtime targets. The daemon
+discovers every effective `runtime: codex` mate from the same `workshop.yaml`
+used by Workshop (including the top-level runtime default), then injects only
+the platform-specific reply address. Mate name and cwd therefore have one source
+of truth and are never repeated under `channels.telegram` or `channels.lark`.
+
 ### 3.6 持久化 binding
 
 ```ts
@@ -282,6 +288,9 @@ mates:
 ```
 
 runtime-specific 配置放在 `codex:` 或 `claude:` 下；通用 `args` 不得混入语义冲突的 runtime flag。
+
+The same Codex mate declarations are consumed by both Workshop orchestration and
+the Channel App Server bridge. Telegram/Lark configuration remains transport-only.
 
 ### 4.3 Codex mate 形态
 

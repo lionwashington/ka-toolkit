@@ -28,6 +28,7 @@ import { parseRoutingPrefix, applyStickyRouting } from '../core/src/routing.ts'
 import { resolveTargetToName } from '../core/src/sessions.ts'
 import { totalTargetCount } from '../core/src/targets.ts'
 import type { Platform, InboundDispatch } from '../core/src/platform.ts'
+import { normalizeWorkshopCodexTargets } from '../core/src/workshop-targets.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 // Data dir holds state.json / channel.log / daemon.pid / attachments/ — the
@@ -49,6 +50,7 @@ const CONFIG_DIR = process.env.KA_CONFIG_DIR
   || join(process.env.KA_HOME || join(homedir(), '.knowledge-assistant'), 'config')
 const CONFIG_YAML = join(CONFIG_DIR, 'config.yaml')
 const SECRETS_YAML = join(CONFIG_DIR, 'secrets.yaml')
+const WORKSHOP_YAML = process.env.OPS_CONFIG || join(CONFIG_DIR, 'workshop.yaml')
 
 type GroupConfig = {
   name: string                       // display name, e.g. "Team Group"
@@ -88,25 +90,6 @@ function readYaml(path: string): any {
   try { return parseYaml(readFileSync(path, 'utf-8')) ?? {} } catch { return {} }
 }
 
-export function normalizeLarkCodexTargets(
-  raw: unknown,
-  groups: Record<string, GroupConfig>,
-  home = homedir(),
-): Array<{ name: string; cwd: string; externalChatId: string }> {
-  if (!Array.isArray(raw)) return []
-  const chatIdByName = new Map(Object.entries(groups).map(([chatId, group]) => [group.name, chatId]))
-  return raw.flatMap((item: any) => {
-    if (!item || typeof item.name !== 'string' || typeof item.cwd !== 'string' || typeof item.group !== 'string') return []
-    const externalChatId = chatIdByName.get(item.group)
-    if (!externalChatId) return []
-    return [{
-      name: String(item.name).toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'main',
-      cwd: String(item.cwd).replace(/^~(?=\/|$)/, home),
-      externalChatId,
-    }]
-  })
-}
-
 function loadConfig(): Config {
   const pub = readYaml(CONFIG_YAML)?.channels?.lark ?? {}
   const sec = readYaml(SECRETS_YAML)?.channels?.lark ?? {}
@@ -122,7 +105,10 @@ function loadConfig(): Config {
     http_host: String(pub.host ?? '127.0.0.1'),
     http_port: Number(pub.port ?? 9876),
     groups,
-    codex_targets: normalizeLarkCodexTargets(pub.codex?.targets, groups),
+    codex_targets: normalizeWorkshopCodexTargets(readYaml(WORKSHOP_YAML)).map(target => ({
+      ...target,
+      externalChatId: Object.keys(groups)[0] ?? '',
+    })),
   }
 }
 
