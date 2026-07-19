@@ -27,7 +27,11 @@ mkdir -p "$tmp_root/bin" "$tmp_root/work"
 cat > "$tmp_root/bin/codex" <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "$FAKE_CODEX_CALLS"
-if [ "${1:-}" = resume ]; then exit 2; fi
+if [ "${1:-}" = app-server ]; then
+    socket="${3#unix://}"
+    exec python3 -c 'import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(); time.sleep(30)' "$socket"
+fi
+for arg in "$@"; do [ "$arg" = resume ] && exit 2; done
 exit 0
 SH
 chmod +x "$tmp_root/bin/codex"
@@ -35,15 +39,15 @@ chmod +x "$tmp_root/bin/codex"
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" --model test-model >/dev/null 2>&1 \
     || fail "explicit Codex launch failed"
-grep -qx -- '--model test-model' "$tmp_root/calls" || fail "explicit args were changed"
+grep -Eq -- '^--remote unix://.+/reviewer\.sock --model test-model$' "$tmp_root/calls" || fail "explicit args were changed"
 
 : > "$tmp_root/calls"
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" >/dev/null 2>&1 \
     || fail "Codex resume fallback failed"
-grep -qx -- 'resume --last --sandbox workspace-write --ask-for-approval on-request' "$tmp_root/calls" \
+grep -Eq -- '^--remote unix://.+/reviewer\.sock resume --last --sandbox workspace-write --ask-for-approval on-request$' "$tmp_root/calls" \
     || fail "default resume command missing"
-grep -qx -- '--sandbox workspace-write --ask-for-approval on-request' "$tmp_root/calls" \
+grep -Eq -- '^--remote unix://.+/reviewer\.sock --sandbox workspace-write --ask-for-approval on-request$' "$tmp_root/calls" \
     || fail "fresh fallback command missing"
 rm -rf "$tmp_root"
 ok "Codex launch preserves args and falls back from empty resume"
