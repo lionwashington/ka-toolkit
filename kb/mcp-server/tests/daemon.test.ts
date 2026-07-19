@@ -30,6 +30,38 @@ function freePort(): Promise<number> {
   })
 }
 
+async function waitUntilReady(port: number, timeoutMs = 45_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  let lastError: unknown
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/status`)
+      const status = await response.json() as { ready?: boolean; warm_error?: string | null }
+      if (status.ready) return
+      if (status.warm_error) throw new Error(`daemon warmup failed: ${status.warm_error}`)
+    } catch (error) {
+      lastError = error
+    }
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  throw new Error(`daemon did not become ready within ${timeoutMs}ms`, { cause: lastError })
+}
+
+async function removeTempDir(path: string): Promise<void> {
+  let lastError: unknown
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      rmSync(path, { recursive: true, force: true })
+      return
+    } catch (error: any) {
+      lastError = error
+      if (error?.code !== 'ENOTEMPTY' && error?.code !== 'EBUSY') throw error
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+  }
+  throw lastError
+}
+
 /**
  * Boot the daemon against a FRESH COPY of the corpus in a temp dir — never the
  * committed source (the store writes INDEX.md, the engine writes .vectors/).
@@ -64,13 +96,18 @@ async function withDaemon(
   const client = new Client({ name: 'daemon-test', version: '0.0.0' })
   try {
     server = await runRetrievalDaemon(configPath)
+    // runRetrievalDaemon resolves once HTTP is listening, while its initial index
+    // build/model warmup continues in the background. Connecting before readiness
+    // races that startup (ECONNRESET under the parallel monorepo suite), and tearing
+    // the temp dir down while it still writes can produce ENOTEMPTY.
+    await waitUntilReady(port)
     const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`))
     await client.connect(transport)
     await fn(client)
   } finally {
     await client.close().catch(() => {})
     if (server) await new Promise<void>((r) => server!.close(() => r()))
-    rmSync(home, { recursive: true, force: true })
+    await removeTempDir(home)
   }
 }
 

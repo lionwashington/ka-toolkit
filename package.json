@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "build": "pnpm -r build",
-    "test": "pnpm -r test",
+    "test": "pnpm -r test && node --test tests/codex-app-server/client.test.mjs",
     "lint": "pnpm -r lint"
   },
   "engines": {
