@@ -36,10 +36,10 @@ exit 0
 SH
 chmod +x "$tmp_root/bin/codex"
 
-FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
+FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" KA_CHANNEL=main \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" --model test-model >/dev/null 2>&1 \
     || fail "explicit Codex launch failed"
-grep -Eq -- '^--remote unix://.+/reviewer\.sock --model test-model$' "$tmp_root/calls" || fail "explicit args were changed"
+grep -Eq -- '^--remote unix://.+/main\.sock --model test-model$' "$tmp_root/calls" || fail "channel-mapped socket or explicit args were changed"
 
 : > "$tmp_root/calls"
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \

@@ -185,10 +185,11 @@ export function createHttpApp(platform: Platform, runtimeManager?: CodexRuntimeM
 
   app.post('/api/runtimes/codex', async (req, res) => {
     if (!runtimeManager) { res.status(503).json({ ok: false, error: 'Codex runtime routing is unavailable' }); return }
-    const name = sanitizeChannelName(req.body?.name)
+    const rawName = String(req.body?.name ?? '')
+    const name = sanitizeChannelName(rawName)
     const cwd = String(req.body?.cwd ?? '')
     const socketPath = String(req.body?.socket_path ?? '')
-    if (!name || !cwd || !socketPath.startsWith('/')) {
+    if (!rawName || !cwd || !socketPath.startsWith('/')) {
       res.status(400).json({ ok: false, error: 'name, cwd, and absolute socket_path are required' }); return
     }
     try {
