@@ -34,7 +34,7 @@ CC processes (started with claude-ch <name>)    Lark group (reply, auto-prefixed
 
 | File | Purpose |
 |---|---|
-| `lark-platform.ts` | the Lark platform adapter (per-group lark-cli polling, webhook send, identity/self-filter, attachment download), driven by the `channels/core` kernel |
+| `lark-platform.ts` | the Lark platform adapter (per-group polling, CardKit streaming with webhook fallback, identity/self-filter, attachment download), driven by the `channels/core` kernel |
 | `package.json` | dependencies: `@modelcontextprotocol/sdk` + `express` + `yaml` |
 | `daemon.sh` | foreground runner: resolves `KA_HOME` → runs the `daemon.mjs` bundle under `flock`. **Don't run directly**, use `start.sh` |
 | `start.sh` | idempotent launch: probe → orphan cleanup → background launch → wait ~5s |
@@ -76,6 +76,11 @@ See [`SETUP.md`](./SETUP.md) for the full credential-gathering walkthrough.
 > The non-secret **port** / poll tuning / page size / `lark_cli_bin` live in
 > `config.yaml channels.lark`. The daemon **fails closed**: an empty/missing
 > `self_open_id` means it refuses to start (no env fallback, no silent default).
+
+Codex replies use CardKit 2.0 streaming through the authenticated `lark-cli` bot
+identity. The app must have message-send and card create/update scopes. If CardKit
+creation is unavailable, the daemon automatically sends the completed response
+through the configured group webhook instead.
 
 ## Start / Stop / Inspect the daemon
 

@@ -247,6 +247,91 @@ async function postToLarkWebhook(target: string, text: string): Promise<string |
   }
 }
 
+type LarkStreamHandle = {
+  mode: 'card' | 'fallback'
+  target: string
+  cardId?: string
+  sequence: number
+  text: string
+  queue: Promise<string | null>
+}
+
+function streamingCard(text: string): Record<string, unknown> {
+  return {
+    schema: '2.0',
+    config: {
+      update_multi: true,
+      streaming_mode: true,
+      summary: { content: 'Generating response…' },
+      streaming_config: {
+        print_frequency_ms: { default: 70, android: 70, ios: 70, pc: 70 },
+        print_step: { default: 1, android: 1, ios: 1, pc: 1 },
+        print_strategy: 'fast',
+      },
+    },
+    body: { elements: [{ tag: 'markdown', element_id: 'content', content: text || '…' }] },
+  }
+}
+
+async function callLarkApi(method: string, path: string, data: unknown, params?: unknown): Promise<{ ok: boolean; data: any; error?: string }> {
+  const args = ['api', method, path, '--as', 'bot', '--format', 'json']
+  if (params !== undefined) args.push('--params', JSON.stringify(params))
+  args.push('--data', JSON.stringify(data))
+  const response = await runLarkCli(cfg.lark_cli_bin, args)
+  return {
+    ok: response.ok,
+    data: response.data?.data,
+    error: response.ok ? undefined : response.raw.slice(0, 300),
+  }
+}
+
+async function startCardStream(target: string, initialText: string): Promise<LarkStreamHandle> {
+  const fallback = (): LarkStreamHandle => ({ mode: 'fallback', target, sequence: 0, text: initialText, queue: Promise.resolve(null) })
+  const created = await callLarkApi('POST', '/open-apis/cardkit/v1/cards', {
+    type: 'card_json',
+    data: JSON.stringify(streamingCard(initialText)),
+  })
+  const cardId = String(created.data?.card_id ?? '')
+  if (!created.ok || !cardId) {
+    log(`CardKit create failed; using final webhook delivery: ${created.error ?? 'missing card_id'}`)
+    return fallback()
+  }
+  const sent = await callLarkApi('POST', '/open-apis/im/v1/messages', {
+    receive_id: target,
+    msg_type: 'interactive',
+    content: JSON.stringify({ type: 'card', data: { card_id: cardId } }),
+  }, { receive_id_type: 'chat_id' })
+  if (!sent.ok) {
+    log(`CardKit send failed; using final webhook delivery: ${sent.error ?? 'unknown error'}`)
+    return fallback()
+  }
+  return { mode: 'card', target, cardId, sequence: 0, text: initialText, queue: Promise.resolve(null) }
+}
+
+function enqueueCardUpdate(handle: LarkStreamHandle, text: string, finish: boolean): Promise<string | null> {
+  handle.text = text
+  handle.queue = handle.queue.catch(() => null).then(async () => {
+    if (handle.mode !== 'card' || !handle.cardId) {
+      return finish ? postToLarkWebhook(handle.target, text) : null
+    }
+    handle.sequence++
+    const updated = await callLarkApi('PUT',
+      `/open-apis/cardkit/v1/cards/${encodeURIComponent(handle.cardId)}/elements/content/content`,
+      { content: text || ' ', sequence: handle.sequence, uuid: `ka-${handle.cardId}-${handle.sequence}` })
+    if (!updated.ok) return `CardKit update failed: ${updated.error ?? 'unknown error'}`
+    if (!finish) return null
+    handle.sequence++
+    const closed = await callLarkApi('PATCH',
+      `/open-apis/cardkit/v1/cards/${encodeURIComponent(handle.cardId)}/settings`, {
+        settings: JSON.stringify({ config: { streaming_mode: false, summary: { content: text.replace(/\s+/g, ' ').slice(0, 80) || ' ' } } }),
+        sequence: handle.sequence,
+        uuid: `ka-${handle.cardId}-${handle.sequence}`,
+      })
+    return closed.ok ? null : `CardKit close failed: ${closed.error ?? 'unknown error'}`
+  })
+  return handle.queue
+}
+
 // ─────────────────────────── inbound attachments (image/file/audio/video) ───────
 
 // Lark attachment ref: image_key for images, file_key for file/audio/video.
@@ -444,6 +529,9 @@ function startPollScheduler(): void {
 export const larkPlatform: Platform = {
   name: 'lark',
   send: (target, text) => postToLarkWebhook(target, text),
+  startStream: (target, initialText) => startCardStream(target, initialText),
+  updateStream: (rawHandle, text) => enqueueCardUpdate(rawHandle as LarkStreamHandle, text, false),
+  finishStream: (rawHandle, text) => enqueueCardUpdate(rawHandle as LarkStreamHandle, text, true),
   // Multi-group policy: reply goes to the group the message came from, IFF it's a
   // configured group (only pre-configured groups are reachable). null → rejected.
   resolveReplyTarget(passedChatId: string): string | null {

@@ -7,7 +7,7 @@ Source-of-truth for the Lark channel daemon. The daemon is the `channels/core` k
 ## Contents (channels/lark/)
 | File | Description |
 |---|---|
-| lark-platform.ts | the Lark platform adapter (per-group lark-cli polling, webhook send, self-filter, attachment download), driven by the `channels/core` kernel |
+| lark-platform.ts | the Lark platform adapter (per-group polling, CardKit streaming with webhook fallback, self-filter, attachment download), driven by the `channels/core` kernel |
 | package.json | dependency manifest (`@modelcontextprotocol/sdk` + `express` + `yaml`) |
 | daemon.sh / start.sh / stop.sh / status.sh | lifecycle scripts (deployed alongside the bundle) |
 | tests/ | `pnpm test` — unit tests + e2e (fake lark-cli + mock webhook + real MCP client) |

@@ -6,7 +6,7 @@
 import express from 'express'
 import { createServer, type Server as HttpServer } from 'http'
 import { spawn, type ChildProcess } from 'child_process'
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, chmodSync } from 'fs'
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, chmodSync } from 'fs'
 import { join, dirname } from 'path'
 import { tmpdir } from 'os'
 import { fileURLToPath } from 'url'
@@ -48,6 +48,7 @@ export interface Daemon {
   baseUrl: string
   /** Queue lark-cli messages for a chat (the fake CLI emits them on next poll). */
   pushMessages(chatId: string, messages: any[]): void
+  apiCalls(): string
   stop(): Promise<void>
 }
 
@@ -64,6 +65,7 @@ export async function startDaemon(opts: {
   selfOpenId?: string
   chatId?: string
   pollIntervalSeconds?: number
+  cardKitFail?: boolean
   codexTarget?: { name: string; cwd: string; command: string; args: string[]; statePath: string }
 }): Promise<Daemon> {
   const dataDir = mkdtempSync(join(tmpdir(), 'lark-daemon-test-'))
@@ -101,6 +103,7 @@ export async function startDaemon(opts: {
     env.KA_CODEX_APP_SERVER_ARGS_JSON = JSON.stringify(opts.codexTarget.args)
     env.FAKE_CODEX_STATE = opts.codexTarget.statePath
   }
+  if (opts.cardKitFail) env.LARK_MOCK_CARDKIT_FAIL = '1'
   const bundle = process.env.KA_TEST_DAEMON_BUNDLE
   const cmd = bundle
     ? ['node', bundle]
@@ -120,6 +123,9 @@ export async function startDaemon(opts: {
     pushMessages: (chat: string, messages: any[]) => {
       // lark-cli shape: { ok, data: { messages: [...] } } (fetchChatMessages reads r.data.data.messages)
       writeFileSync(join(mockDir, `${chat}.json`), JSON.stringify({ ok: true, data: { messages } }))
+    },
+    apiCalls: () => {
+      try { return readFileSync(join(mockDir, 'api-calls.tsv'), 'utf8') } catch { return '' }
     },
     stop: () => new Promise<void>(resolve => {
       const finish = () => { try { rmSync(dataDir, { recursive: true, force: true }) } catch {}; resolve() }

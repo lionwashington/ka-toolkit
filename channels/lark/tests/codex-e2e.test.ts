@@ -39,7 +39,43 @@ test('Lark routes a configured group through the shared Codex runtime bridge', a
       text: 'to codex-reviewer: hello-lark',
       createTime: '2030-01-01 00:01',
     })])
-    assert.equal(await waitFor(() => webhook.sent().some(message => message.text.includes('echo:hello-lark')), 5_000), true)
+    assert.equal(await waitFor(() => daemon.apiCalls().includes('/settings'), 5_000), true)
+    const calls = daemon.apiCalls()
+    assert.match(calls, /POST\t\/open-apis\/cardkit\/v1\/cards/)
+    assert.match(calls, /POST\t\/open-apis\/im\/v1\/messages/)
+    assert.match(calls, /PUT\t\/open-apis\/cardkit\/v1\/cards\/card-1\/elements\/content\/content/)
+    assert.match(calls, /PATCH\t\/open-apis\/cardkit\/v1\/cards\/card-1\/settings/)
+  } finally {
+    await daemon.stop()
+    await webhook.close()
+  }
+})
+
+test('Lark falls back to final webhook delivery when CardKit is unavailable', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'ka-lark-codex-fallback-'))
+  const webhook = await startMockWebhook()
+  const daemon = await startDaemon({
+    webhookUrl: webhook.url,
+    pollIntervalSeconds: 0.05,
+    cardKitFail: true,
+    codexTarget: {
+      name: 'codex-reviewer',
+      cwd: workspace,
+      command: process.execPath,
+      args: [fake],
+      statePath: join(workspace, 'fake-state.json'),
+    },
+  })
+  try {
+    assert.equal(await waitForReady(daemon.baseUrl), true)
+    daemon.pushMessages('oc_test', [ownerMsg({
+      mid: 'om_fallback',
+      text: 'to codex-reviewer: fallback-check',
+      createTime: '2030-01-01 00:02',
+    })])
+    const delivered = await waitFor(() => webhook.sent().some(message => message.text.includes('echo:fallback-check')), 10_000)
+    assert.equal(delivered, true, `sent=${JSON.stringify(webhook.sent())}\napi=${daemon.apiCalls()}`)
+    assert.match(daemon.apiCalls(), /POST\t\/open-apis\/cardkit\/v1\/cards/)
   } finally {
     await daemon.stop()
     await webhook.close()
