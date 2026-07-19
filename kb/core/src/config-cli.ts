@@ -2,8 +2,8 @@ import { loadConfig, injectChannels } from './config.js'
 
 // config-cli — the single bash-facing reader for config.yaml channel settings.
 //
-// Usage:  config-cli.js <capture|inject>
-// Prints each configured channel name on its own line, then exits 0.
+// Usage:  config-cli.js <capture|inject|distill-runtime>
+// Lists print one value per line; scalar settings print one line.
 //
 // FAIL-CLOSED (better to do nothing than the wrong thing): any error, unknown key, or empty/missing
 // config yields NO output and exit 0. Callers (cron-run.sh, doctor.sh) treat
@@ -17,6 +17,10 @@ function main(): void {
     const config = loadConfig()
     if (key === 'capture') out = config.channels?.capture ?? []
     else if (key === 'inject') out = injectChannels(config)
+    else if (key === 'distill-runtime') {
+      process.stdout.write(config.distiller.runtime + '\n')
+      return
+    }
     // unknown key → out stays []
   } catch {
     out = [] // fail-closed: broken config → emit nothing

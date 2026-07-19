@@ -9,10 +9,11 @@ import { log } from './log.ts'
 import { counters } from './counters.ts'
 import { sanitizeChannelName } from './routing.ts'
 import {
-  channelNumberOf, sessionsOf, allSessions, onlineChannelListStr, byName,
+  channelNumberOf, sessionsOf,
 } from './sessions.ts'
+import { onlineTargetListStr, runtimeTargetEntries, targetCount, targetNames } from './targets.ts'
 import { CHANNEL_FRESH_MS, PROBE_GRACE_MS } from './probe.ts'
-import { ccLoopGuard, fanout } from './dispatch.ts'
+import { ccLoopGuard, deliverToTarget } from './dispatch.ts'
 import type { Platform } from './platform.ts'
 
 export function createMcpServer(channelName: string, platform: Platform): Server {
@@ -107,27 +108,28 @@ export function createMcpServer(channelName: string, platform: Platform): Server
       }
       const target = String(rawTarget).toLowerCase() === 'all' ? 'all' : sanitizeChannelName(rawTarget)
       // Broadcast EXCLUDES the sender's own channel sessions.
-      const targets = target === 'all'
-        ? allSessions().filter(sess => sess.name !== channelName)
-        : sessionsOf(target)
-      if (targets.length === 0) {
+      const names = target === 'all'
+        ? targetNames().filter(name => name !== channelName)
+        : [target]
+      const count = names.reduce((sum, name) => sum + targetCount(name), 0)
+      if (count === 0) {
         const msg = target === 'all'
-          ? `no other channel online to broadcast to. online: ${onlineChannelListStr()}`
-          : `channel "${target}" not online. online: ${onlineChannelListStr()}`
+          ? `no other channel online to broadcast to. online: ${onlineTargetListStr()}`
+          : `channel "${target}" not online. online: ${onlineTargetListStr()}`
         return { content: [{ type: 'text', text: msg }], isError: true }
       }
       counters.ccDispatches++
-      log(`cc-dispatch from=${channelName} to=${target} [${targets.length} sess]`)
+      log(`cc-dispatch from=${channelName} to=${target} [${count} targets]`)
       ccLoopGuard(channelName, target)
       // from_channel is the CALLER's daemon-assigned channel (closure-bound), NOT
       // self-reported → unspoofable.
-      await fanout(targets, text, {
-        source: 'cc',
-        from_channel: channelName,
-        ts: Math.floor(Date.now() / 1000),
-      }, target)
+      await Promise.allSettled(names.map(name => deliverToTarget(name, text, {
+          source: 'cc',
+          from_channel: channelName,
+          ts: Math.floor(Date.now() / 1000),
+        }, target)))
       return {
-        content: [{ type: 'text', text: `sent to "${target}" [${targets.length} sess] as from_channel=${channelName}` }],
+        content: [{ type: 'text', text: `sent to "${target}" [${count} targets] as from_channel=${channelName}` }],
       }
     }
 
@@ -136,18 +138,20 @@ export function createMcpServer(channelName: string, platform: Platform): Server
     // within CHANNEL_FRESH_MS (or the session is still within its creation grace).
     if (req.params.name === 'list_channels') {
       const now = Date.now()
-      const rows = Array.from(byName.entries()).map(([name, list]) => ({
+      const runtimeByName = new Map(runtimeTargetEntries())
+      const rows = targetNames().map(name => ({
         num: channelNumberOf(name),
         name,
-        online: list.length > 0,
-        alive: list.some(sess =>
+        runtime: runtimeByName.get(name)?.runtime ?? 'cc',
+        online: targetCount(name) > 0,
+        alive: (runtimeByName.get(name)?.isAlive?.() ?? runtimeByName.has(name)) || sessionsOf(name).some(sess =>
           (sess.lastProbeOk > 0 && now - sess.lastProbeOk < CHANNEL_FRESH_MS) ||
           (sess.lastProbeOk === 0 && now - sess.createdAt < PROBE_GRACE_MS)),
       })).sort((a, b) => a.num - b.num)
       const body = rows.length === 0
         ? 'no channels connected'
         : rows.map(r =>
-            `#${r.num} ${r.name}${r.name === channelName ? ' (you)' : ''} — ` +
+            `#${r.num} ${r.name}${r.name === channelName ? ' (you)' : ''} [${r.runtime}] — ` +
             `${r.alive ? 'alive' : (r.online ? 'online (no recent ping)' : 'offline')}`,
           ).join('\n')
       const header = `${rows.length} channel(s) — liveness from the daemon's ~5s ping probe:`

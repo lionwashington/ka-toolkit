@@ -22,6 +22,7 @@ channel_kind: lark
 knowledge_base_path: /tmp/my-kb
 distiller:
   interval: "1h"
+  runtime: codex
 retrieval:
   max_results: 10
 `)
@@ -31,6 +32,7 @@ retrieval:
     expect(config.knowledge_base_path).toBe('/tmp/my-kb')
     expect(config.channel_kind).toBe('lark')
     expect(config.distiller.interval).toBe('1h')
+    expect(config.distiller.runtime).toBe('codex')
     expect(config.state_dir).toBeDefined()
     expect(config.retrieval.max_results).toBe(10)
   })
@@ -41,7 +43,14 @@ retrieval:
     expect(config.knowledge_base_path).toBeDefined()
     expect(config.workspace_path).toBeDefined()
     expect(config.distiller.interval).toBeDefined()
+    expect(config.distiller.runtime).toBe('cc')
     expect(config.channel_kind).toBe('telegram')
+  })
+
+  it('rejects an unknown distill runtime', () => {
+    const configPath = join(tempDir, 'config.yaml')
+    writeFileSync(configPath, `distiller:\n  runtime: unknown\n`)
+    expect(() => loadConfig(configPath)).toThrow()
   })
 
   it('expands ~ in knowledge_base_path', () => {

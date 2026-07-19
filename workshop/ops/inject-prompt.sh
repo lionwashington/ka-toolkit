@@ -12,8 +12,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+: "${KA_HOME:=$HOME/.knowledge-assistant}"
+source "$KA_HOME/shared/ops/common.sh"
 # shellcheck source=tmux-helpers.sh
 source "$SCRIPT_DIR/tmux-helpers.sh"
+# shellcheck source=runtimes/dispatch.sh
+source "$KA_RUNTIMES_DIR/dispatch.sh"
 
 tmux_require
 
@@ -30,6 +34,11 @@ if ! tmux_pane_exists "$TARGET"; then
 fi
 
 log_ts "Injecting prompt into $TARGET: ${PROMPT:0:80}..."
-"$TMUX_BIN" send-keys -t "$TARGET" -l "$PROMPT"
-"$TMUX_BIN" send-keys -t "$TARGET" Enter
+RUNTIME="$("$TMUX_BIN" show-options -p -v -t "$TARGET" @ka_runtime 2>/dev/null || true)"
+[ -n "$RUNTIME" ] || RUNTIME="cc"
+runtime_load "$RUNTIME" || {
+    log_ts "ERROR: unsupported runtime '$RUNTIME' for pane $TARGET" >&2
+    exit 78
+}
+runtime::inject_prompt "$TARGET" "$PROMPT"
 log_ts "Prompt sent to $TARGET."

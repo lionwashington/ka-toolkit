@@ -47,6 +47,8 @@ set -euo pipefail
 source "$KA_HOME/shared/ops/common.sh"
 # shellcheck source=../lib/tmux-helpers.sh
 source "$KA_WORKSHOP_DIR/tmux-helpers.sh"
+# shellcheck source=runtimes/dispatch.sh
+source "$KA_RUNTIMES_DIR/dispatch.sh"
 
 YAML_PARSE="$KA_WORKSHOP_DIR/yaml-parse.sh"
 START_PANE="$KA_WORKSHOP_DIR/start-pane.sh"
@@ -138,73 +140,21 @@ sanitize_channel() {
     printf '%s' "$s"
 }
 
-# resume rule: respect an existing --resume; else default to latest.
-ensure_resume() {
-    RESUMED_ARGS=()
-    local has=0
-    local args=("$@")
-    local i=0 n=$#
-    while [ "$i" -lt "$n" ]; do
-        if [ "${args[$i]}" = "--resume" ]; then has=1; fi
-        RESUMED_ARGS+=("${args[$i]}"); i=$((i + 1))
-    done
-    if [ "$has" -eq 0 ]; then RESUMED_ARGS+=(--resume latest); fi
-}
-
-join_args() {
-    # join "$@" with '|' into JOINED (empty string if none)
-    JOINED=""
-    local a first=1
-    for a in "$@"; do
-        if [ "$first" -eq 1 ]; then JOINED="$a"; first=0; else JOINED="$JOINED|$a"; fi
-    done
-}
-
 run_tmux() {
     if [ "$DRY_RUN" = "1" ]; then echo "[dry-run] $TMUX_BIN $*"; else "$TMUX_BIN" "$@"; fi
 }
 
 # Build the shell command for one pane: KA_CHANNEL env + start-pane.sh + args.
 build_channel_cmd() {
-    local pane_name="$1" cwd="$2" channel="$3" raw_args="$4"
+    local runtime="$1" pane_name="$2" cwd="$3" channel="$4" raw_args="$5"
     local cmd
-    printf -v cmd 'KA_CHANNEL=%q KA_CHANNEL_PORT=%q KA_CHANNEL_KIND=%q %q %q %q' \
-        "$channel" "$PORT" "$CHANNEL_KIND" "$START_PANE" "$pane_name" "$cwd"
+    printf -v cmd 'KA_CHANNEL=%q KA_CHANNEL_PORT=%q KA_CHANNEL_KIND=%q %q %q %q %q' \
+        "$channel" "$PORT" "$CHANNEL_KIND" "$START_PANE" "$runtime" "$pane_name" "$cwd"
     if [ -n "$raw_args" ]; then
         local -a args; IFS='|' read -r -a args <<<"$raw_args"
         local a; for a in "${args[@]}"; do printf -v cmd '%s %q' "$cmd" "$a"; done
     fi
     printf '%s' "$cmd"
-}
-
-# ---- dev-channels confirmation gate auto-pass (bug1) ------------------------
-# claude 2.1.156 forces an interactive "Loading development channels" gate for
-# server: MCP channels (telegram-channel). No flag/env/config bypass exists. So
-# we auto-pass it CONDITION-BASED: poll capture-pane until the gate's own text
-# appears, THEN send Enter once (its default highlight is "1. I am using this for
-# local development", so a bare Enter confirms). We NEVER send a timed blind
-# Enter — detection of the gate text is the trigger. Markers are constants so
-# they survive claude rewording the gate.
-GATE_MARKER_PRIMARY="I am using this for local development"
-GATE_MARKER_FALLBACK="Enter to confirm"
-GATE_CONFIRM_TIMEOUT="${KA_GATE_TIMEOUT:-18}"   # seconds to watch one pane
-
-auto_confirm_dev_gate() {
-    local pane="$1" name="$2"
-    local waited=0 cap
-    while [ "$waited" -lt "$GATE_CONFIRM_TIMEOUT" ]; do
-        cap="$("$TMUX_BIN" capture-pane -p -t "$pane" 2>/dev/null || true)"
-        if printf '%s' "$cap" | grep -qF "$GATE_MARKER_PRIMARY" \
-           || printf '%s' "$cap" | grep -qF "$GATE_MARKER_FALLBACK"; then
-            "$TMUX_BIN" send-keys -t "$pane" Enter
-            log_ts "auto-confirmed dev-channels gate on pane $pane ($name)"
-            return 0
-        fi
-        sleep 1
-        waited=$((waited + 1))
-    done
-    log_warn "dev-channels gate not detected on pane $pane ($name) within ${GATE_CONFIRM_TIMEOUT}s — may not have appeared, already passed, or claude still starting; skipping (manual Enter may be needed)"
-    return 0
 }
 
 # ---- parse config (shared by all verbs) -------------------------------------
@@ -224,8 +174,9 @@ SESSION=""
 # Explicitly initialize as empty arrays: under set -u, `declare -a foo` (without
 # =()) still makes `${#foo[@]}` report "unbound variable" when never assigned
 # (e.g. workshop.yaml has no mate → MATE_NAMES is never appended to).
-declare -a PANE_NAMES=() PANE_CWDS=() PANE_MAINS=() PANE_ARGS=()
-declare -a MATE_NAMES=() MATE_CWDS=() MATE_DEFAULTS=() MATE_ARGS=()
+RUNTIME_DEFAULT="cc"
+declare -a PANE_NAMES=() PANE_CWDS=() PANE_MAINS=() PANE_ARGS=() PANE_RUNTIMES=()
+declare -a MATE_NAMES=() MATE_CWDS=() MATE_DEFAULTS=() MATE_ARGS=() MATE_RUNTIMES=()
 while IFS= read -r rec; do
     [ -z "$rec" ] && continue
     # tab is an IFS-whitespace char, so `read` folds consecutive tabs and drops
@@ -235,14 +186,19 @@ while IFS= read -r rec; do
     IFS=$'\x1f' read -r kind a b c d <<<"$rec_safe"
     case "$kind" in
         session) SESSION="$a" ;;
+        runtime_default) RUNTIME_DEFAULT="$a" ;;
         pane)
-            PANE_NAMES+=("$a"); PANE_CWDS+=("$b"); PANE_MAINS+=("$c"); PANE_ARGS+=("$d") ;;
+            PANE_NAMES+=("$a"); PANE_CWDS+=("$b"); PANE_MAINS+=("$c"); PANE_ARGS+=("$d"); PANE_RUNTIMES+=("$RUNTIME_DEFAULT") ;;
+        pane_runtime)
+            PANE_RUNTIMES[$(( ${#PANE_RUNTIMES[@]} - 1 ))]="$b" ;;
         mate)
             # Keep MATE_ARGS parallel; a following mate_args record fills it in.
-            MATE_NAMES+=("$a"); MATE_CWDS+=("$b"); MATE_DEFAULTS+=("$d"); MATE_ARGS+=("") ;;
+            MATE_NAMES+=("$a"); MATE_CWDS+=("$b"); MATE_DEFAULTS+=("$d"); MATE_ARGS+=(""); MATE_RUNTIMES+=("$RUNTIME_DEFAULT") ;;
         mate_args)
             # Emitted immediately after its own `mate` record → set the last slot.
             MATE_ARGS[$(( ${#MATE_NAMES[@]} - 1 ))]="$b" ;;
+        mate_runtime)
+            MATE_RUNTIMES[$(( ${#MATE_RUNTIMES[@]} - 1 ))]="$b" ;;
     esac
 done < <("$YAML_PARSE" "$CONFIG")
 
@@ -262,7 +218,7 @@ in_only_list() {
 # When TARGET is set, only that single mate/pane is kept (and forced in even if
 # default=false). Sets ENTRY_NAMES/ENTRY_CWDS/ENTRY_CHANNELS/ENTRY_ARGS + skipped_optional.
 build_entries() {
-    ENTRY_NAMES=(); ENTRY_CWDS=(); ENTRY_CHANNELS=(); ENTRY_ARGS=()
+    ENTRY_NAMES=(); ENTRY_CWDS=(); ENTRY_CHANNELS=(); ENTRY_ARGS=(); ENTRY_RUNTIMES=()
     skipped_optional=0
     # TARGET → force-include that mate via ONLY, then prune to it below.
     local only_eff="$ONLY"
@@ -273,13 +229,7 @@ build_entries() {
         name="${PANE_NAMES[$i]}"; cwd="${PANE_CWDS[$i]}"
         main="${PANE_MAINS[$i]}"; raw="${PANE_ARGS[$i]}"
         if [ "$main" = "1" ]; then channel="main"; else channel="$(sanitize_channel "$name")"; fi
-        # yaml args verbatim (yaml-parse no longer prepends --teammate-mode /
-        # --channels — P2 ④ retired the team mechanism), just apply resume rule.
-        local parsed=()
-        if [ -n "$raw" ]; then IFS='|' read -r -a parsed <<<"$raw"; fi
-        if [ "${#parsed[@]}" -gt 0 ]; then ensure_resume "${parsed[@]}"; else ensure_resume; fi
-        if [ "${#RESUMED_ARGS[@]}" -gt 0 ]; then join_args "${RESUMED_ARGS[@]}"; else join_args; fi
-        ENTRY_NAMES+=("$name"); ENTRY_CWDS+=("$cwd"); ENTRY_CHANNELS+=("$channel"); ENTRY_ARGS+=("$JOINED")
+        ENTRY_NAMES+=("$name"); ENTRY_CWDS+=("$cwd"); ENTRY_CHANNELS+=("$channel"); ENTRY_ARGS+=("$raw"); ENTRY_RUNTIMES+=("${PANE_RUNTIMES[$i]}")
     done
 
     if [ "${#MATE_NAMES[@]}" -gt 0 ]; then
@@ -292,13 +242,8 @@ build_entries() {
             elif [ "${MATE_DEFAULTS[$i]}" = "0" ] && [ "$INCLUDE_OPTIONAL" -eq 0 ]; then
                 skipped_optional=$((skipped_optional + 1)); continue
             fi
-            # yaml args verbatim (same rule as panes), then apply the resume rule.
             raw="${MATE_ARGS[$i]}"
-            local mparsed=()
-            if [ -n "$raw" ]; then IFS='|' read -r -a mparsed <<<"$raw"; fi
-            if [ "${#mparsed[@]}" -gt 0 ]; then ensure_resume "${mparsed[@]}"; else ensure_resume; fi
-            if [ "${#RESUMED_ARGS[@]}" -gt 0 ]; then join_args "${RESUMED_ARGS[@]}"; else join_args; fi
-            ENTRY_NAMES+=("$name"); ENTRY_CWDS+=("$cwd"); ENTRY_CHANNELS+=("$(sanitize_channel "$name")"); ENTRY_ARGS+=("$JOINED")
+            ENTRY_NAMES+=("$name"); ENTRY_CWDS+=("$cwd"); ENTRY_CHANNELS+=("$(sanitize_channel "$name")"); ENTRY_ARGS+=("$raw"); ENTRY_RUNTIMES+=("${MATE_RUNTIMES[$i]}")
         done
     fi
 
@@ -311,7 +256,7 @@ build_entries() {
             ENTRY_NAMES=(); return 0
         fi
         ENTRY_NAMES=("${ENTRY_NAMES[$keep]}"); ENTRY_CWDS=("${ENTRY_CWDS[$keep]}")
-        ENTRY_CHANNELS=("${ENTRY_CHANNELS[$keep]}"); ENTRY_ARGS=("${ENTRY_ARGS[$keep]}")
+        ENTRY_CHANNELS=("${ENTRY_CHANNELS[$keep]}"); ENTRY_ARGS=("${ENTRY_ARGS[$keep]}"); ENTRY_RUNTIMES=("${ENTRY_RUNTIMES[$keep]}")
     fi
 }
 
@@ -356,6 +301,10 @@ cmd_start() {
             log_err "entry '${ENTRY_NAMES[$i]}' cwd does not exist: ${ENTRY_CWDS[$i]}"
             exit 1
         fi
+        if ! (runtime_load "${ENTRY_RUNTIMES[$i]}" >/dev/null); then
+            log_err "entry '${ENTRY_NAMES[$i]}' uses unsupported runtime: ${ENTRY_RUNTIMES[$i]}"
+            exit 78
+        fi
     done
 
     # ---- safety: don't bootstrap the session we're attached to --------------
@@ -383,7 +332,7 @@ cmd_start() {
         session_exists=0
     fi
 
-    log_ts "ka workshop start: launching ${#ENTRY_NAMES[@]} CC(s) in session '$SESSION' [layout=$LAYOUT]$([ "${skipped_optional:-0}" -gt 0 ] && printf ' (skipped %s optional mate; --all to include)' "$skipped_optional")"
+    log_ts "ka workshop start: launching ${#ENTRY_NAMES[@]} agent(s) in session '$SESSION' [layout=$LAYOUT]$([ "${skipped_optional:-0}" -gt 0 ] && printf ' (skipped %s optional mate; --all to include)' "$skipped_optional")"
 
     # Idempotency keys per layout: pane → @ka_channel user-option; window → index.
     local existing_channels="" existing_windows=""
@@ -396,11 +345,12 @@ cmd_start() {
     fi
 
     local made_any=0
-    declare -a CONFIRM_PANES CONFIRM_NAMES
-    local name cwd channel args cmd new_pane_id
+    declare -a CONFIRM_PANES CONFIRM_NAMES CONFIRM_RUNTIMES
+    local name cwd channel runtime args cmd new_pane_id
     for i in "${!ENTRY_NAMES[@]}"; do
         name="${ENTRY_NAMES[$i]}"; cwd="${ENTRY_CWDS[$i]}"
         channel="${ENTRY_CHANNELS[$i]}"; args="${ENTRY_ARGS[$i]}"
+        runtime="${ENTRY_RUNTIMES[$i]}"
 
         if [ "$LAYOUT" = "pane" ]; then
             if printf '%s\n' "$existing_channels" | grep -qx "$channel"; then
@@ -412,7 +362,7 @@ cmd_start() {
             fi
         fi
 
-        cmd="$(build_channel_cmd "$name" "$cwd" "$channel" "$args")"
+        cmd="$(build_channel_cmd "$runtime" "$name" "$cwd" "$channel" "$args")"
         new_pane_id=""
         if [ "$LAYOUT" = "pane" ]; then
             if [ "$i" = "0" ] && [ "$session_exists" = "0" ]; then
@@ -464,9 +414,10 @@ cmd_start() {
         fi
         if [ -n "$new_pane_id" ]; then
             "$TMUX_BIN" set-option -p -t "$new_pane_id" @ka_channel "$channel" 2>/dev/null || true
-            CONFIRM_PANES+=("$new_pane_id"); CONFIRM_NAMES+=("$name")
+            "$TMUX_BIN" set-option -p -t "$new_pane_id" @ka_runtime "$runtime" 2>/dev/null || true
+            CONFIRM_PANES+=("$new_pane_id"); CONFIRM_NAMES+=("$name"); CONFIRM_RUNTIMES+=("$runtime")
         elif [ "$DRY_RUN" = "1" ]; then
-            echo "[dry-run] would auto-confirm dev-channels gate for $name once its gate appears"
+            echo "[dry-run] would run $runtime post-launch hook for $name"
         fi
         made_any=1
     done
@@ -478,11 +429,14 @@ cmd_start() {
         "$TMUX_BIN" set-option -w -t "$SESSION:0" pane-border-format ' #{@ka_channel} ' 2>/dev/null || true
     fi
 
-    # bug1: auto-pass the dev-channels gate on every freshly-created pane.
+    # Run the selected runtime's optional convergence hook.
     if [ "$DRY_RUN" != "1" ] && [ "${#CONFIRM_PANES[@]}" -gt 0 ]; then
         local ci
         for ci in "${!CONFIRM_PANES[@]}"; do
-            auto_confirm_dev_gate "${CONFIRM_PANES[$ci]}" "${CONFIRM_NAMES[$ci]}"
+            runtime_load "${CONFIRM_RUNTIMES[$ci]}" || continue
+            if runtime_has runtime::post_launch; then
+                runtime::post_launch "${CONFIRM_PANES[$ci]}" "${CONFIRM_NAMES[$ci]}"
+            fi
         done
     fi
 
@@ -492,8 +446,8 @@ cmd_start() {
         printf '  session: %s\n' "$SESSION"
         printf '  daemon : %s (port %s)\n' "$DAEMON_START" "$PORT"
         for i in "${!ENTRY_NAMES[@]}"; do
-            printf '  [%s] %-14s cwd=%s  channel=%s  args=[%s]\n' \
-                "$i" "${ENTRY_NAMES[$i]}" "${ENTRY_CWDS[$i]}" "${ENTRY_CHANNELS[$i]}" \
+            printf '  [%s] %-14s runtime=%s  cwd=%s  channel=%s  args=[%s]\n' \
+                "$i" "${ENTRY_NAMES[$i]}" "${ENTRY_RUNTIMES[$i]}" "${ENTRY_CWDS[$i]}" "${ENTRY_CHANNELS[$i]}" \
                 "$(printf '%s' "${ENTRY_ARGS[$i]}" | tr '|' ' ')"
         done
         exit 0

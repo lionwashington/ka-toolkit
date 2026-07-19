@@ -31,14 +31,14 @@ LOG_PATH=""
 STATUS_FILE=""
 WORKSPACE_CWD=""
 
-# Model + retry tuning. The headless `claude -p` run below intermittently hits
+# Runtime + retry tuning. The default cc executor intermittently hits
 # a CC 2.1.x bug — `400 ... thinking blocks ... cannot be modified` — when the
 # model replays a history assistant turn containing extended-thinking blocks.
 # It is non-deterministic, so a fresh re-spawn (we already pass
 # --no-session-persistence) usually succeeds. Retry up to DISTILL_MAX_ATTEMPTS
 # times with exponential backoff. All overridable via env so experiments (e.g.
 # trying claude-opus-4-8, tuning attempts) need no code edit.
-DISTILL_MODEL="${KA_DISTILL_MODEL:-claude-opus-4-8}"
+DISTILL_RUNTIME="${KA_DISTILL_RUNTIME:-cc}"
 DISTILL_MAX_ATTEMPTS="${KA_DISTILL_MAX_ATTEMPTS:-3}"
 DISTILL_RETRY_BASE_SEC="${KA_DISTILL_RETRY_BASE_SEC:-5}"
 # Backlog self-heal: each run also drains up to N OLDEST stranded distilled:false raws
@@ -69,6 +69,11 @@ done
 [ -n "$WORKSPACE_CWD" ]    || { echo "worker: --workspace-cwd required" >&2; exit 1; }
 
 PARSER_CLI="$KA_HOME/kb/core/dist/distill-result-parser-cli.js"
+DISTILL_RUNTIME_DISPATCH="${KA_DISTILL_RUNTIMES_DIR:-$KA_HOME/kb/ops/distill-runtimes}/dispatch.sh"
+[ -f "$DISTILL_RUNTIME_DISPATCH" ] || { echo "worker: distill runtime dispatch missing: $DISTILL_RUNTIME_DISPATCH" >&2; exit 78; }
+# shellcheck disable=SC1090
+source "$DISTILL_RUNTIME_DISPATCH"
+distill_runtime_load "$DISTILL_RUNTIME" || exit 78
 
 # Stats file the distill agent Writes its result JSON to — the parser's tier-0
 # (most reliable) source. Cleared up-front so we never read a previous run's file.
@@ -133,33 +138,6 @@ process.stdout.write(JSON.stringify({
         "$failure_file" >> "$LOG_PATH"
 }
 
-# Returns 0 (retriable) if the given file holds a claude --output-format json
-# result that is the intermittent CC headless "thinking block cannot be
-# modified" 400. Such runs are safe to retry with a fresh --no-session
-# spawn. Any other outcome (success, or a different error) returns non-zero.
-is_retriable_thinking_error() {
-    local out_file="$1"
-    node -e '
-const fs = require("fs");
-let txt = "";
-try { txt = fs.readFileSync(process.argv[1], "utf-8"); } catch { process.exit(1); }
-// The result object may be preceded by other log lines; scan for the last
-// JSON object whose type is "result".
-let obj = null;
-for (const line of txt.split("\n")) {
-  const t = line.trim();
-  if (!t.startsWith("{")) continue;
-  try { const o = JSON.parse(t); if (o && o.type === "result") obj = o; } catch {}
-}
-if (!obj) process.exit(1);
-const isErr = obj.is_error === true;
-const is400 = obj.api_error_status === 400;
-const result = typeof obj.result === "string" ? obj.result : "";
-const thinking = /thinking|redacted_thinking/i.test(result);
-process.exit(isErr && is400 && thinking ? 0 : 1);
-' "$out_file"
-}
-
 # ---------- prompt construction ----------
 # The distill agent runs in the workspace cwd, so the prompt must give it an
 # ABSOLUTE path to the CLI ($KA_HOME/kb/core/dist).
@@ -171,7 +149,7 @@ JSONL_READER_ABS="$KA_HOME/kb/core/dist/jsonl-reader-cli.js"
 build_prompt() {
   local PASS_UPPER="$1"
   cat <<EOF
-You are a background distiller worker. Run mode: headless Opus, no TTY interaction.
+You are a background distiller worker. Run mode: headless agent, no TTY interaction.
 
 [Task]
 Complete one incremental distill following the /kb distill --foreground workflow in kb/skills/kb.md.
@@ -219,7 +197,7 @@ Field meanings:
 - conversations_files: array of daily-log file basenames written or appended (including all parts after a split)
 - topics_files: array of changed topic file basenames
 
-**Why write a file instead of "saying it at the end"**: in headless mode you often finish with a tool call (markDistilled's Write/Edit), leaving claude's final message empty, so the reporter can't get exact numbers and has to degrade to guessing from file mtimes. Writing stats to the fixed file above is the most reliable — it doesn't depend on "what the last message was". Once you've written that file the distill is complete; earlier messages may contain prose diagnostics, but you do **not** need to repeat the JSON again.
+**Why write a file instead of "saying it at the end"**: a headless agent can finish with a tool call and no final message, so the reporter cannot reliably recover exact numbers. Writing stats to the fixed file is runtime-neutral and does not depend on the final response. Once the file is written the distill is complete; earlier messages may contain prose diagnostics, but you do **not** need to repeat the JSON again.
 
 If you hit an unrecoverable error, raise an exception (do NOT swallow it). The worker wrapper catches the non-zero exit and writes a failure sentinel (distill-last-failure.json), which the main session reads and then notifies the owner.
 EOF
@@ -240,20 +218,14 @@ run_distill_pass() {
         attempt=$((attempt + 1))
         : > "$CLAUDE_OUT"
         set +e
-        claude -p "$PROMPT" \
-            --model "$DISTILL_MODEL" \
-            --permission-mode bypassPermissions \
-            --setting-sources user \
-            --no-session-persistence \
-            --output-format json \
-            > "$CLAUDE_OUT" 2>> "$LOG_PATH"
+        distill_runtime_run "$PROMPT" "$CLAUDE_OUT" "$LOG_PATH"
         EXIT_CODE=$?
         set -e
         cat "$CLAUDE_OUT" >> "$LOG_PATH"
-        if [ "$attempt" -lt "$DISTILL_MAX_ATTEMPTS" ] && is_retriable_thinking_error "$CLAUDE_OUT"; then
+        if [ "$attempt" -lt "$DISTILL_MAX_ATTEMPTS" ] && distill_runtime_is_retriable "$CLAUDE_OUT"; then
             backoff=$(( DISTILL_RETRY_BASE_SEC * (2 ** (attempt - 1)) ))
-            printf '[distill-worker] attempt %d/%d hit intermittent thinking-block 400 (CC headless bug); retrying in %ds\n' \
-                "$attempt" "$DISTILL_MAX_ATTEMPTS" "$backoff" >> "$LOG_PATH"
+            printf '[distill-worker] runtime=%s attempt %d/%d hit a retriable failure; retrying in %ds\n' \
+                "$DISTILL_RUNTIME" "$attempt" "$DISTILL_MAX_ATTEMPTS" "$backoff" >> "$LOG_PATH"
             sleep "$backoff"
             continue
         fi
@@ -300,7 +272,7 @@ CUR_OFFSET="$(read_cur_offset)"
 EXIT_CODE=0
 if [ "$(( SNAPSHOT_OFFSET - CUR_OFFSET ))" -le "$CHUNK_BYTES" ]; then
     run_distill_pass "$SNAPSHOT_OFFSET"
-    [ "$EXIT_CODE" -ne 0 ] && { mark_failed "$EXIT_CODE" "claude headless exited non-zero"; exit "$EXIT_CODE"; }
+    [ "$EXIT_CODE" -ne 0 ] && { mark_failed "$EXIT_CODE" "$DISTILL_RUNTIME headless runtime exited non-zero"; exit "$EXIT_CODE"; }
 else
     pass=0
     while [ "$CUR_OFFSET" -lt "$SNAPSHOT_OFFSET" ]; do
@@ -310,7 +282,7 @@ else
         printf '[distill-worker] pass %d: offset %d → %d (chunk≤%d, snapshot %d)\n' \
             "$pass" "$CUR_OFFSET" "$PASS_UPPER" "$CHUNK_BYTES" "$SNAPSHOT_OFFSET" >> "$LOG_PATH"
         run_distill_pass "$PASS_UPPER"
-        [ "$EXIT_CODE" -ne 0 ] && { mark_failed "$EXIT_CODE" "claude headless exited non-zero on pass $pass (offset $CUR_OFFSET→$PASS_UPPER)"; exit "$EXIT_CODE"; }
+        [ "$EXIT_CODE" -ne 0 ] && { mark_failed "$EXIT_CODE" "$DISTILL_RUNTIME headless runtime exited non-zero on pass $pass (offset $CUR_OFFSET→$PASS_UPPER)"; exit "$EXIT_CODE"; }
         NEW_OFFSET="$(read_cur_offset)"
         if [ "$NEW_OFFSET" -le "$CUR_OFFSET" ]; then
             mark_failed 7 "distill pass $pass did not advance offset ($CUR_OFFSET → $NEW_OFFSET; expected ~$PASS_UPPER) — aborting to avoid an infinite loop"

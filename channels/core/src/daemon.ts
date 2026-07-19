@@ -11,6 +11,8 @@ import { probeTick, PROBE_INTERVAL_MS } from './probe.ts'
 import { createHttpApp } from './http.ts'
 import { dispatchTargets } from './dispatch.ts'
 import type { Platform } from './platform.ts'
+import { CodexRuntimeManager, type CodexRuntimeConfig } from './codex/runtime-manager.ts'
+import type { Server } from 'node:http'
 
 export interface DaemonOptions {
   platform: Platform
@@ -25,11 +27,24 @@ export interface DaemonOptions {
     next: number
     persist: (numbers: Record<string, number>, next: number) => void
   }
+  codex?: CodexRuntimeConfig
 }
 
-function installSignalHandlers(): void {
+function installSignalHandlers(cleanup: () => Promise<void>): void {
+  let shuttingDown = false
   for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGPIPE', 'SIGQUIT'] as const) {
-    process.on(sig, () => { log(`received ${sig}, exiting`); process.exit(0) })
+    process.on(sig, () => {
+      if (shuttingDown) return
+      shuttingDown = true
+      log(`received ${sig}, shutting down`)
+      const deadline = new Promise<void>(resolve => {
+        const timer = setTimeout(resolve, 5_000)
+        timer.unref()
+      })
+      void Promise.race([cleanup(), deadline])
+        .catch(error => log(`shutdown cleanup failed: ${error?.message ?? error}`))
+        .finally(() => process.exit(0))
+    })
   }
   process.on('uncaughtException', (e: any) => {
     log(`uncaughtException: ${e?.message ?? e}\n${e?.stack ?? ''}`)
@@ -44,7 +59,17 @@ function installSignalHandlers(): void {
 export function runChannelDaemon(opts: DaemonOptions): void {
   setLogger(opts.logger)
   initNumbering(opts.numbering.numbers, opts.numbering.next, opts.numbering.persist)
-  installSignalHandlers()
+
+  let runtimeManager: CodexRuntimeManager | undefined
+  let httpServer: Server | undefined
+  const probeTimer = setInterval(probeTick, PROBE_INTERVAL_MS)
+  installSignalHandlers(async () => {
+    clearInterval(probeTimer)
+    await runtimeManager?.stop()
+    if (httpServer?.listening) {
+      await new Promise<void>(resolve => httpServer!.close(() => resolve()))
+    }
+  })
 
   try {
     writeFileSync(opts.pidPath, String(process.pid))
@@ -52,11 +77,18 @@ export function runChannelDaemon(opts: DaemonOptions): void {
     log(`cannot write pid file: ${e.message}`)
   }
 
-  setInterval(probeTick, PROBE_INTERVAL_MS)
-
   const app = createHttpApp(opts.platform)
-  const httpServer = app.listen(opts.port, opts.host, async () => {
+  httpServer = app.listen(opts.port, opts.host, async () => {
     log(`${opts.platform.name}-channel daemon listening on ${opts.host}:${opts.port}/mcp (pid=${process.pid})`)
+    if (opts.codex?.targets.length) {
+      try {
+        runtimeManager = new CodexRuntimeManager(opts.platform, opts.codex)
+        await runtimeManager.start()
+      } catch (error: any) {
+        runtimeManager = undefined
+        log(`codex runtime unavailable; platform channel remains online: ${error?.message ?? error}`)
+      }
+    }
     // Hand the platform a dispatch bound to it; the platform starts its inbound loop.
     await opts.platform.startInbound(
       (rawTargets, content, metaBase) => dispatchTargets(opts.platform, rawTargets, content, metaBase),

@@ -25,7 +25,8 @@ import { fileURLToPath } from 'url'
 import { homedir } from 'os'
 import { parse as parseYaml } from 'yaml'
 import { parseRoutingPrefix, applyStickyRouting } from '../core/src/routing.ts'
-import { byName, sessionsById, resolveTargetToName } from '../core/src/sessions.ts'
+import { resolveTargetToName } from '../core/src/sessions.ts'
+import { totalTargetCount } from '../core/src/targets.ts'
 import type { Platform, InboundDispatch } from '../core/src/platform.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -62,6 +63,7 @@ type Config = {
   http_host: string
   http_port: number
   groups: Record<string, GroupConfig> // chatId(oc_…) → group config
+  codex_targets: Array<{ name: string; cwd: string; externalChatId: string }>
 }
 type State = {
   last_seen_msg_time: Record<string, string>   // per-chat ISO watermark (create_time)
@@ -86,9 +88,29 @@ function readYaml(path: string): any {
   try { return parseYaml(readFileSync(path, 'utf-8')) ?? {} } catch { return {} }
 }
 
+export function normalizeLarkCodexTargets(
+  raw: unknown,
+  groups: Record<string, GroupConfig>,
+  home = homedir(),
+): Array<{ name: string; cwd: string; externalChatId: string }> {
+  if (!Array.isArray(raw)) return []
+  const chatIdByName = new Map(Object.entries(groups).map(([chatId, group]) => [group.name, chatId]))
+  return raw.flatMap((item: any) => {
+    if (!item || typeof item.name !== 'string' || typeof item.cwd !== 'string' || typeof item.group !== 'string') return []
+    const externalChatId = chatIdByName.get(item.group)
+    if (!externalChatId) return []
+    return [{
+      name: String(item.name).toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'main',
+      cwd: String(item.cwd).replace(/^~(?=\/|$)/, home),
+      externalChatId,
+    }]
+  })
+}
+
 function loadConfig(): Config {
   const pub = readYaml(CONFIG_YAML)?.channels?.lark ?? {}
   const sec = readYaml(SECRETS_YAML)?.channels?.lark ?? {}
+  const groups: Record<string, GroupConfig> = sec.groups ?? {}
   return {
     // Secrets (self_open_id, groups+webhook_url) come ONLY from secrets.yaml —
     // never from config.yaml or the environment. Empty self_open_id is
@@ -99,7 +121,8 @@ function loadConfig(): Config {
     lark_cli_bin: String(pub.lark_cli_bin ?? 'lark-cli'),
     http_host: String(pub.host ?? '127.0.0.1'),
     http_port: Number(pub.port ?? 9876),
-    groups: sec.groups ?? {},
+    groups,
+    codex_targets: normalizeLarkCodexTargets(pub.codex?.targets, groups),
   }
 }
 
@@ -345,8 +368,8 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
 
   for (const q of queue) {
     // B4 replay: no sessions at all → defer (keep watermark for replay on reconnect).
-    if (sessionsById.size === 0) {
-      log(`(no MCP sessions; keeping watermark for replay on reconnect, chat=${group.name})`)
+    if (totalTargetCount() === 0) {
+      log(`(no runtime targets; keeping watermark for replay on reconnect, chat=${group.name})`)
       break
     }
     // Dedup truth: record + persist watermark + msgid BEFORE delivery.
@@ -485,6 +508,16 @@ export function initLark() {
         saveState(state)
       },
     },
+    codex: cfg.codex_targets.length > 0 ? {
+      platform: 'lark' as const,
+      bindingsPath: join(DATA_DIR, 'bindings.json'),
+      targets: cfg.codex_targets,
+      client: process.env.KA_CODEX_APP_SERVER_COMMAND ? {
+        command: process.env.KA_CODEX_APP_SERVER_COMMAND,
+        args: JSON.parse(process.env.KA_CODEX_APP_SERVER_ARGS_JSON ?? '["app-server"]'),
+        env: process.env,
+      } : undefined,
+    } : undefined,
   }
 }
 

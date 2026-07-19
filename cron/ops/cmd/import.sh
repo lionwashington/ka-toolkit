@@ -22,7 +22,7 @@ mkdir -p "$BACKUP_DIR"
 # Map of known legacy jobs → (schedule, kind, command, target_pane)
 legacy_map() {
     case "$1" in
-        kb-distill)   echo "every 2h|inject-prompt|/kb distill|main" ;;
+        kb-distill)   echo "every 2h|ka-cli|kb distill --background|" ;;
         daily-brief)  echo "daily 07:00|inject-prompt|/daily-brief|main" ;;
         *)            return 1 ;;
     esac

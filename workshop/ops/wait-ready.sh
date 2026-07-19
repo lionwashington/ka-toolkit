@@ -80,12 +80,6 @@ if [ -z "$SESSION" ]; then
     SESSION="$(workshop_session_name "$CONFIG")"
 fi
 
-RUNTIME="$(runtime_default_from_config "$CONFIG")"
-if ! runtime_load "$RUNTIME"; then
-    log_err "runtime '$RUNTIME' not supported (phase-2: only cc)"
-    exit 3
-fi
-
 tmux_require
 
 if ! tmux_has_session "$SESSION"; then
@@ -96,6 +90,13 @@ fi
 TARGET="${TARGET_OVERRIDE:-$SESSION:0.0}"
 if ! "$TMUX_BIN" display-message -p -t "$TARGET" "#{pane_id}" >/dev/null 2>&1; then
     log_err "pane $TARGET not found in session $SESSION"
+    exit 3
+fi
+
+RUNTIME="$("$TMUX_BIN" show-options -p -v -t "$TARGET" @ka_runtime 2>/dev/null || true)"
+[ -n "$RUNTIME" ] || RUNTIME="$(runtime_default_from_config "$CONFIG")"
+if ! runtime_load "$RUNTIME"; then
+    log_err "runtime '$RUNTIME' not supported"
     exit 3
 fi
 

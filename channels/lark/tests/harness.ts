@@ -64,6 +64,7 @@ export async function startDaemon(opts: {
   selfOpenId?: string
   chatId?: string
   pollIntervalSeconds?: number
+  codexTarget?: { name: string; cwd: string; command: string; args: string[]; statePath: string }
 }): Promise<Daemon> {
   const dataDir = mkdtempSync(join(tmpdir(), 'lark-daemon-test-'))
   const mockDir = join(dataDir, 'mock')
@@ -77,10 +78,13 @@ export async function startDaemon(opts: {
   // Two-bucket data, same as prod: config.yaml (non-secret) + secrets.yaml
   // (self_open_id + group webhooks) in the config dir the daemon resolves via
   // KA_CONFIG_DIR. state.json/log/pid stay in KA_DAEMON_DATA_DIR; both = dataDir.
+  const codexLines = opts.codexTarget
+    ? `    codex:\n      targets:\n        - name: ${opts.codexTarget.name}\n          cwd: ${opts.codexTarget.cwd}\n          group: Test Group\n`
+    : ''
   writeFileSync(join(dataDir, 'config.yaml'),
     `channels:\n  lark:\n    port: ${port}\n` +
     `    poll_interval_seconds: ${opts.pollIntervalSeconds ?? 1}\n` +
-    `    page_size: 20\n    lark_cli_bin: "${fakeCli}"\n`)
+    `    page_size: 20\n    lark_cli_bin: "${fakeCli}"\n${codexLines}`)
   writeFileSync(join(dataDir, 'secrets.yaml'),
     `channels:\n  lark:\n    self_open_id: "${selfOpenId}"\n    groups:\n` +
     `      ${chatId}:\n        name: "Test Group"\n        webhook_url: "${opts.webhookUrl}"\n`)
@@ -92,7 +96,16 @@ export async function startDaemon(opts: {
     KA_PLATFORM_MODULE: join(PKG_DIR, 'lark-platform.ts'),
     LARK_MOCK_DIR: mockDir,
   }
-  const cmd = ['node', '--experimental-strip-types', join(PKG_DIR, '..', 'core', 'src', 'main.ts')]
+  if (opts.codexTarget) {
+    env.KA_CODEX_APP_SERVER_COMMAND = opts.codexTarget.command
+    env.KA_CODEX_APP_SERVER_ARGS_JSON = JSON.stringify(opts.codexTarget.args)
+    env.FAKE_CODEX_STATE = opts.codexTarget.statePath
+  }
+  const bundle = process.env.KA_TEST_DAEMON_BUNDLE
+  const cmd = bundle
+    ? ['node', bundle]
+    : ['node', '--experimental-strip-types', join(PKG_DIR, '..', 'core', 'src', 'main.ts')]
+  if (bundle) delete env.KA_PLATFORM_MODULE
   const proc = spawn(cmd[0], cmd.slice(1), { cwd: PKG_DIR, env, stdio: ['ignore', 'pipe', 'pipe'] })
   // proc.stderr?.on('data', d => process.stderr.write(`[lark-daemon] ${d}`))  // debug
 
@@ -109,8 +122,11 @@ export async function startDaemon(opts: {
       writeFileSync(join(mockDir, `${chat}.json`), JSON.stringify({ ok: true, data: { messages } }))
     },
     stop: () => new Promise<void>(resolve => {
-      proc.once('exit', () => { try { rmSync(dataDir, { recursive: true, force: true }) } catch {}; resolve() })
-      proc.kill('SIGKILL')
+      const finish = () => { try { rmSync(dataDir, { recursive: true, force: true }) } catch {}; resolve() }
+      if (proc.exitCode !== null || proc.signalCode !== null) return finish()
+      const fallback = setTimeout(() => proc.kill('SIGKILL'), 6_000)
+      proc.once('exit', () => { clearTimeout(fallback); finish() })
+      proc.kill('SIGTERM')
     }),
   }
 }

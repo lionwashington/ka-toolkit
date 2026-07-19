@@ -101,5 +101,36 @@ printf '%s\n' "$out" | grep -qx $'mate_runtime\tmater\tcodex'  || fail "missing 
 rm -f "$tmp_cfg"
 ok "yaml-parse emits runtime_default / mate_runtime for non-main entries"
 
+# -- 9. generic pane dispatcher preserves CC default resume behavior ---------
+tmp_root="$(mktemp -d)"
+mkdir -p "$tmp_root/bin" "$tmp_root/home" "$tmp_root/workspace.with-dot"
+cat > "$tmp_root/bin/claude" <<'SH'
+#!/bin/bash
+printf '%s\n' "$@" > "$FAKE_CLAUDE_ARGS"
+SH
+chmod +x "$tmp_root/bin/claude"
+project_key="$(printf '%s' "$tmp_root/workspace.with-dot" | tr '/.' '-')"
+project_dir="$tmp_root/home/.claude/projects/$project_key"
+mkdir -p "$project_dir"
+: > "$project_dir/older.jsonl"
+sleep 1
+: > "$project_dir/newest.jsonl"
+FAKE_CLAUDE_ARGS="$tmp_root/args" HOME="$tmp_root/home" KA_HOME="$REPO" \
+    PATH="$tmp_root/bin:$PATH" "$OPS/start-pane.sh" cc test "$tmp_root/workspace.with-dot" --model test-model \
+    >/dev/null 2>&1 || fail "generic start-pane failed to dispatch cc"
+grep -qx -- '--resume' "$tmp_root/args" || fail "cc entrypoint did not add default --resume"
+grep -qx 'newest' "$tmp_root/args" || fail "cc entrypoint did not resolve latest session"
+grep -qx 'test-model' "$tmp_root/args" || fail "cc entrypoint dropped configured args"
+rm -rf "$tmp_root"
+ok "generic pane dispatcher delegates to cc and preserves default resume"
+
+# -- 10. generic pane dispatcher rejects unavailable runtimes ----------------
+set +e
+KA_HOME="$REPO" "$OPS/start-pane.sh" gemini test /tmp >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" -eq 78 ] || fail "unsupported pane runtime rc=$rc (want 78)"
+ok "generic pane dispatcher fails closed for unavailable runtime"
+
 echo "PASS: 16-runtime-cc-contract"
 exit 0

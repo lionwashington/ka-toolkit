@@ -4,10 +4,11 @@ Contract every runtime adapter (`workshop/ops/runtimes/<name>/`) must implement 
 that the `ka` CLI can target it without any runtime-specific code in the top-level
 commands.
 
-> **Status**: implemented for **cc** — the CC-specific logic lives behind sourced
+> **Status**: implemented for **cc** and **codex**. The CC-specific logic lives behind sourced
 > adapter files in `workshop/ops/runtimes/cc/` (`launch.sh`, `ready-signals.sh`,
-> `send-prompt.sh`); `workshop/ops/dispatch.sh` `runtime_load`s them. `codex` /
-> `gemini` adapters are reserved (not yet implemented). This doc is the contract
+> `send-prompt.sh`, `post-launch.sh`) plus `cc/bin/start-pane.sh`;
+> `workshop/ops/runtimes/dispatch.sh` loads them. Codex uses the stable interactive
+> CLI plus `resume --last`; `gemini` remains reserved. This doc is the contract
 > the cc adapter satisfies and any new runtime must implement.
 
 ## Naming convention
@@ -21,23 +22,14 @@ per-mate override) and `source`s the matching files before calling.
 workshop/ops/runtimes/
 ├── dispatch.sh                      (the adapter loader)
 ├── cc/                              (the implemented CC adapter)
-│   ├── launch.sh · ready-signals.sh · send-prompt.sh
+│   ├── launch.sh · ready-signals.sh · send-prompt.sh · post-launch.sh
+│   ├── bin/start-pane.sh
 │   └── (doc: docs/components/workshop-runtime-cc.md)
-├── codex/   (reserved, not implemented)
+├── codex/                          (interactive TUI adapter)
 └── gemini/  (reserved, not implemented)
 ```
 
 ## Required functions
-
-### `runtime::launch_pane <cwd> [args...]`
-Produce the command line (or directly run it) to start the agent runtime in a
-tmux pane with the given working directory. The pane entrypoint is
-`workshop/ops/start-pane.sh` — CC-specific (uses `claude --resume …`).
-
-**Returns**: exit 0 if launch was dispatched; non-zero if the binary is missing
-or args are invalid.
-
-**CC today**: `claude`. Telegram goes through the daemon (`KA_CHANNEL` env set by `start-pane.sh`), not a CC plugin.
 
 ### `runtime::ready_match <captured_text>`
 Given the text captured from `tmux capture-pane -p -J`, return exit 0 if the
@@ -59,7 +51,13 @@ Echo the runtime's executable name (CC: `claude`). **CC**: `workshop/ops/runtime
 
 ### `runtime::launch_pane_script`
 Echo the path to the per-pane launch script (guarantees cwd, sets the channel
-via `KA_CHANNEL`, resolves `--resume`). **CC**: `workshop/ops/start-pane.sh`.
+via `KA_CHANNEL`, resolves `--resume`). The top-level `start-pane.sh` is only a
+dispatcher. **CC**: `workshop/ops/runtimes/cc/bin/start-pane.sh`.
+
+### `runtime::post_launch <tmux_target> <name>` (optional)
+
+Run runtime-specific convergence after a pane is created. The CC adapter uses
+this hook to confirm the development-channel gate after its marker appears.
 
 > **Startup convergence (gen2)**: the old team/plugin verbs were RETIRED together
 > with the CC team mechanism — `spawn_mate_prompt_template`,

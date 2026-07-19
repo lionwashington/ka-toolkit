@@ -1,5 +1,5 @@
 #!/bin/bash
-# ops/kb/distill-bg.sh — start a background /kb distill in a headless claude
+# ops/kb/distill-bg.sh — start a background /kb distill through the configured runtime
 # Opus process. Returns immediately after spawning the worker; the worker
 # writes status to ~/.knowledge-assistant/state/distill-current.json and a
 # per-run log to ~/.knowledge-assistant/state/distill-<timestamp>.log.
@@ -21,6 +21,16 @@
 set -euo pipefail
 : "${KA_HOME:=$HOME/.knowledge-assistant}"
 source "$KA_HOME/shared/ops/common.sh"
+
+# Resolve the headless executor from the typed config reader unless explicitly
+# overridden for an experiment. Export it so the detached worker inherits it.
+if [ -z "${KA_DISTILL_RUNTIME:-}" ]; then
+    _config_cli="$KA_HOME/kb/core/dist/config-cli.js"
+    if [ -f "$_config_cli" ]; then
+        KA_DISTILL_RUNTIME="$(node "$_config_cli" distill-runtime 2>/dev/null || true)"
+    fi
+fi
+export KA_DISTILL_RUNTIME="${KA_DISTILL_RUNTIME:-cc}"
 
 JSONL=""
 SESSION_ID=""
@@ -142,6 +152,7 @@ distill-bg dry-run:
   log_path=$LOG_PATH
   state_file=$STATUS_FILE
   worker=$WORKER
+  runtime=$KA_DISTILL_RUNTIME
   workspace_cwd=$WORKSPACE_CWD
 EOF
     exit 0
@@ -162,7 +173,8 @@ cat > "$STATUS_FILE" <<EOF
   "session_id": "$SESSION_ID",
   "jsonl_path": "$JSONL",
   "log_path": "$LOG_PATH",
-  "workspace_cwd": "$WORKSPACE_CWD"
+  "workspace_cwd": "$WORKSPACE_CWD",
+  "runtime": "$KA_DISTILL_RUNTIME"
 }
 EOF
 

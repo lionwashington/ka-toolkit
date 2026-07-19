@@ -24,6 +24,7 @@ import {
 } from './probe.ts'
 import { createMcpServer } from './mcp.ts'
 import type { Platform } from './platform.ts'
+import { runtimeTargetEntries, runtimeTargetOf, targetNames } from './targets.ts'
 
 export function createHttpApp(platform: Platform) {
   const app = express()
@@ -52,6 +53,7 @@ export function createHttpApp(platform: Platform) {
     // Design principle (agreed): the daemon must NOT 404 a reconnect that tells us
     // its channel — re-adopt it, don't force the client to re-handshake.
     const reqName = (req.query as any)?.name
+    const channelName = sanitizeChannelName(reqName)
     const isSseReconnect = req.method === 'GET'
       && String(req.headers['accept'] ?? '').includes('text/event-stream')
       && !!reqName
@@ -68,7 +70,16 @@ export function createHttpApp(platform: Platform) {
       return
     }
 
-    const channelName = sanitizeChannelName(reqName)
+    if (runtimeTargetOf(channelName)) {
+      log(`rejecting MCP session for ${channelName}: name is owned by a runtime target`)
+      res.status(409).json({
+        jsonrpc: '2.0',
+        error: { code: -32002, message: `Channel name is already owned by runtime target: ${channelName}` },
+        id: (req.body && (req.body as any).id) ?? null,
+      })
+      return
+    }
+
     const reuseId = sessionId && isSseReconnect ? sessionId : undefined
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => reuseId ?? randomUUID(),
@@ -117,6 +128,8 @@ export function createHttpApp(platform: Platform) {
     for (const [name, list] of byName) channelCounts[name] = list.length
     const owners: Record<string, string> = {}
     for (const [name, list] of byName) if (list.length) owners[name] = list[list.length - 1].id.slice(0, 8)
+    const runtimeEntries = runtimeTargetEntries()
+    const runtimeByName = new Map(runtimeEntries)
     res.json({
       ok: true,
       pid: process.pid,
@@ -126,11 +139,16 @@ export function createHttpApp(platform: Platform) {
       channels_online: channelCounts,
       active_owners: owners,
       channel_numbers: Object.fromEntries(
-        Array.from(byName.keys())
+        targetNames()
           .map(n => [n, channelNumberOf(n)] as [string, number])
           .sort((a, b) => a[1] - b[1]),
       ),
       sessions: sessionList,
+      runtime_targets: runtimeEntries.map(([name, target]) => ({
+        name,
+        runtime: target.runtime,
+        alive: target.isAlive?.() ?? true,
+      })),
       dispatches_total: counters.dispatches,
       replies_total: counters.replies,
       replies_failed_total: counters.repliesFailed,
@@ -139,11 +157,13 @@ export function createHttpApp(platform: Platform) {
       probes_sent_total: probesSentTotal,
       probe_failures_total: probeFailuresTotal,
       channel_alive: Object.fromEntries(
-        Array.from(byName.entries()).map(([name, list]) => {
+        targetNames().map(name => {
+          const list = byName.get(name) ?? []
           const now = Date.now()
           // alive = a recent ping SUCCEEDED (newly-created sessions get a short
           // creation grace so they aren't reported dead during connect).
-          const alive = list.some(s =>
+          const runtime = runtimeByName.get(name)
+          const alive = (runtime?.isAlive?.() ?? !!runtime) || list.some(s =>
             (s.lastProbeOk > 0 && now - s.lastProbeOk < CHANNEL_FRESH_MS) ||
             (s.lastProbeOk === 0 && now - s.createdAt < PROBE_GRACE_MS))
           return [name, alive]

@@ -36,7 +36,7 @@ export KA_CRON_LOG_DIR="$TMP/logs"
 # The backend-adapter detects launchd by `command -v launchctl`. On Debian docker
 # it returns "unknown" → install/uninstall ops bail out gracefully.
 
-echo "[1/8] schedule-parser handles all four syntaxes"
+echo "[1/9] schedule-parser handles all four syntaxes"
 out="$(bash "$SCHED" "every 5m")" || { echo "FAIL: every 5m"; exit 1; }
 [ "$(echo "$out" | wc -l | tr -d ' ')" = "12" ] || { echo "FAIL: every 5m expected 12 lines got: $out"; exit 1; }
 
@@ -59,7 +59,7 @@ set -e
 [ "$rc" -ne 0 ] || { echo "FAIL: bad schedule should not exit 0"; exit 1; }
 echo "    ok"
 
-echo "[2/8] plist-gen byte-stable for fixed input"
+echo "[2/9] plist-gen byte-stable for fixed input"
 ENV_REPO="$REPO" \
 KA_HOME="$REPO" \
 KA_CRON_NAME="unit-single" \
@@ -97,7 +97,7 @@ awk '/StartCalendarInterval/{getline; print}' "$TMP/multi.plist" | grep -q '<arr
     || { echo "FAIL: multi.plist expected ≥13 <dict> tags (1 outer + 12 entries)"; exit 1; }
 echo "    ok"
 
-echo "[3/8] ka cron add initialises yaml + writes record"
+echo "[3/9] ka cron add initialises yaml + writes record"
 "$KA" cron add --name unit-job --schedule "every 30m" --kind shell \
     --command "echo hi" --description "unit" --disabled >/dev/null 2>&1 \
     || { echo "FAIL: ka cron add"; exit 1; }
@@ -106,7 +106,7 @@ grep -q '^jobs:$' "$KA_CRON_CONFIG" \
     || { echo "FAIL: yaml jobs section not in canonical form"; cat "$KA_CRON_CONFIG"; exit 1; }
 echo "    ok"
 
-echo "[4/8] cron yaml is parser-clean"
+echo "[4/9] cron yaml is parser-clean"
 recs="$(bash "$PARSE" "$KA_CRON_CONFIG" 2>/dev/null)"
 echo "$recs" | grep -q $'^job\tunit-job\tschedule\tevery 30m$' \
     || { echo "FAIL: parse-yaml did not see schedule"; echo "$recs"; exit 1; }
@@ -123,7 +123,7 @@ echo "$recs" | grep -q $'^job\tunit-job\tenabled\tfalse$' \
     || { echo "FAIL: duplicate job block written"; exit 1; }
 echo "    ok"
 
-echo "[5/8] ka cron enable/disable toggles flag without duplicating block"
+echo "[5/9] ka cron enable/disable toggles flag without duplicating block"
 "$KA" cron enable unit-job >/dev/null 2>&1 || true
 recs="$(bash "$PARSE" "$KA_CRON_CONFIG" 2>/dev/null)"
 echo "$recs" | grep -q $'^job\tunit-job\tenabled\ttrue$' \
@@ -137,7 +137,7 @@ echo "$recs" | grep -q $'^job\tunit-job\tenabled\tfalse$' \
     || { echo "FAIL: disable did not set enabled=false"; exit 1; }
 echo "    ok"
 
-echo "[6/8] ka cron remove drops block; second remove is no-op"
+echo "[6/9] ka cron remove drops block; second remove is no-op"
 "$KA" cron remove unit-job >/dev/null 2>&1 || true
 [ "$(grep -c '^  - name: unit-job' "$KA_CRON_CONFIG")" = "0" ] \
     || { echo "FAIL: remove did not drop block"; exit 1; }
@@ -152,7 +152,7 @@ case "$rc" in
 esac
 echo "    ok"
 
-echo "[7/8] ka cron list detects yaml drift (manual edit reflected)"
+echo "[7/9] ka cron list detects yaml drift (manual edit reflected)"
 # Manually append a job
 cat >> "$KA_CRON_CONFIG" <<'EOF'
   - name: drift-job
@@ -166,7 +166,7 @@ echo "$out" | grep -q 'drift-job' \
     || { echo "FAIL: ka cron list did not pick up manual edit"; echo "$out"; exit 1; }
 echo "    ok"
 
-echo "[8/8] ka cron import: legacy plist scan is bounded, no-op when none"
+echo "[8/9] ka cron import: legacy plist scan is bounded, no-op when none"
 # Use isolated HOME with no LaunchAgents dir → import should report "no legacy"
 RUN_HOME="$(mktemp -d)"
 mkdir -p "$RUN_HOME/.knowledge-assistant"
@@ -179,6 +179,11 @@ echo "$out" | grep -q 'no legacy' \
     || { echo "FAIL: import on empty LA dir should say 'no legacy', got: $out"; exit 1; }
 [ "$rc" -eq 0 ] || { echo "FAIL: empty import rc=$rc"; exit 1; }
 rm -rf "$RUN_HOME"
+echo "    ok"
+
+echo "[9/9] legacy kb-distill migrates to direct ka-cli execution"
+grep -Eq 'kb-distill\).*ka-cli\|kb distill --background' "$REPO/cron/ops/cmd/import.sh" \
+    || { echo "FAIL: kb-distill import still depends on prompt injection"; exit 1; }
 echo "    ok"
 
 echo "ka-cron OK"

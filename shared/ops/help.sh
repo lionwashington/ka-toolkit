@@ -41,7 +41,7 @@ COMMANDS
                       ka kb reindex [--full]
                           (Re)build the kb_search index (incremental | full).
                       ka kb distill [status]
-                          Spawn a background Opus /kb distill worker; `status` shows
+                          Spawn a background runtime-selected /kb distill worker; `status` shows
                           the last run. Full form:
                           ka kb distill --jsonl <abs path> [--session-id <uuid>] [--dry-run]
     status          Print a <1s health summary (tmux / channel + kb daemons / mates).

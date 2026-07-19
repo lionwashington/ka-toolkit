@@ -14,6 +14,7 @@ const ConfigSchema = z.object({
   state_dir: z.string().default('~/.knowledge-assistant/state'),
   distiller: z.object({
     interval: z.string().default('2h'),
+    runtime: z.enum(['cc', 'codex']).default('cc'),
   }).default({}),
   retrieval: z.object({
     max_results: z.number().default(5),

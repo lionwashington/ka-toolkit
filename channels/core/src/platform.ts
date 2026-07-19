@@ -49,6 +49,10 @@ export interface Platform {
   // ── outbound ──────────────────────────────────────────────────────────────--
   /** Deliver `text` to a platform target. null on success, else an error string. */
   send(target: string, text: string): Promise<string | null>
+  /** Optional editable-message streaming. Platforms without it receive only the final text. */
+  startStream?(target: string, initialText: string): Promise<unknown>
+  updateStream?(handle: unknown, text: string): Promise<string | null>
+  finishStream?(handle: unknown, text: string): Promise<string | null>
 
   // ── attachment ──────────────────────────────────────────────────────────────
   /**

@@ -131,3 +131,71 @@ export class AppServerClient extends EventEmitter {
   }
 }
 
+export class AppServerSupervisor extends EventEmitter {
+  constructor(options) {
+    super()
+    if (!options?.createClient) throw new Error('createClient is required')
+    this.createClient = options.createClient
+    this.maxRestarts = options.maxRestarts ?? 3
+    this.backoffMs = options.backoffMs ?? (attempt => Math.min(100 * (2 ** (attempt - 1)), 2_000))
+    this.clientInfo = options.clientInfo
+    this.client = null
+    this.restartCount = 0
+    this.stopping = false
+    this.timer = null
+  }
+
+  async start() {
+    if (this.client) throw new Error('app-server supervisor already started')
+    this.stopping = false
+    await this.#launch(true)
+    return this.client
+  }
+
+  async stop() {
+    this.stopping = true
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = null
+    const client = this.client
+    this.client = null
+    await client?.stop()
+  }
+
+  async #launch(throwOnFailure = false) {
+    const client = this.createClient()
+    this.client = client
+    client.once('exit', details => this.#onExit(client, details))
+    try {
+      await client.start()
+      await client.initialize(this.clientInfo)
+      this.emit('ready', { client, restartCount: this.restartCount })
+    } catch (error) {
+      if (this.client === client) this.client = null
+      await client.stop().catch(() => {})
+      this.#scheduleRestart(error)
+      if (throwOnFailure) throw error
+      this.emit('restart-error', { error, attempt: this.restartCount })
+    }
+  }
+
+  #onExit(client, details) {
+    if (this.client !== client) return
+    this.client = null
+    if (!this.stopping) this.#scheduleRestart(new Error(`app-server exited (code=${details.code}, signal=${details.signal})`))
+  }
+
+  #scheduleRestart(error) {
+    if (this.stopping || this.timer) return
+    if (this.restartCount >= this.maxRestarts) {
+      this.emit('exhausted', { error, restartCount: this.restartCount })
+      return
+    }
+    const attempt = ++this.restartCount
+    const delayMs = this.backoffMs(attempt)
+    this.emit('restart-scheduled', { error, attempt, delayMs })
+    this.timer = setTimeout(() => {
+      this.timer = null
+      this.#launch().catch(restartError => this.emit('restart-error', { error: restartError, attempt }))
+    }, delayMs)
+  }
+}

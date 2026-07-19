@@ -12,7 +12,7 @@
 # Echo the absolute path of the pane entrypoint. start.sh uses this to build
 # the tmux `new-session`/`new-window` command line.
 runtime::launch_pane_script() {
-    printf '%s' "${KA_RUNTIMES_DIR}/../start-pane.sh"
+    printf '%s' "${KA_RUNTIMES_DIR}/cc/bin/start-pane.sh"
 }
 
 # runtime::launch_binary

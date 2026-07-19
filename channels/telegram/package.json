@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "test": "node --experimental-strip-types --test tests/unit.test.ts tests/e2e.test.ts"
+    "test": "node --experimental-strip-types --test tests/unit.test.ts tests/e2e.test.ts tests/codex-e2e.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

@@ -22,7 +22,8 @@ import { fileURLToPath } from 'url'
 import { homedir } from 'os'
 import { parse as parseYaml } from 'yaml'
 import { parseRoutingPrefix, applyStickyRouting } from '../core/src/routing.ts'
-import { byName, sessionsById, resolveTargetToName } from '../core/src/sessions.ts'
+import { resolveTargetToName } from '../core/src/sessions.ts'
+import { totalTargetCount } from '../core/src/targets.ts'
 import type { Platform, InboundDispatch } from '../core/src/platform.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -54,6 +55,7 @@ type Config = {
   poll_hard_timeout_ms: number  // client-side hard cap on a single getUpdates; 0 = off
   token: string             // bot token (secrets.yaml channels.telegram.token)
   owner_chat_id: string     // only this Telegram user id may reach the daemon
+  codex_targets: Array<{ name: string; cwd: string }>
 }
 type State = {
   offset: number                              // next getUpdates offset = last update_id + 1
@@ -74,6 +76,16 @@ function readYaml(path: string): any {
   try { return parseYaml(readFileSync(path, 'utf-8')) ?? {} } catch { return {} }
 }
 
+export function normalizeCodexTargets(raw: unknown, home = homedir()): Array<{ name: string; cwd: string }> {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((item: any) => item && typeof item.name === 'string' && typeof item.cwd === 'string')
+    .map((item: any) => ({
+      name: String(item.name).toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'main',
+      cwd: String(item.cwd).replace(/^~(?=\/|$)/, home),
+    }))
+}
+
 function loadConfig(): Config {
   const pub = readYaml(CONFIG_YAML)?.channels?.telegram ?? {}
   const sec = readYaml(SECRETS_YAML)?.channels?.telegram ?? {}
@@ -91,6 +103,7 @@ function loadConfig(): Config {
     // is fail-closed in initTelegram (the daemon refuses to start).
     token: String(sec.token ?? ''),
     owner_chat_id: String(sec.owner_chat_id ?? ''),
+    codex_targets: normalizeCodexTargets(pub.codex?.targets),
   }
 }
 
@@ -309,9 +322,9 @@ async function handleUpdate(u: any): Promise<'ok' | 'stop'> {
     return 'ok'
   }
 
-  // B4 replay: defer if no MCP sessions at all — keep offset for replay on reconnect.
-  if (sessionsById.size === 0) {
-    log(`(no MCP sessions; keeping offset ${state.offset} for replay on reconnect)`)
+  // B4 replay: defer if no runtime target is online — keep offset for replay on reconnect.
+  if (totalTargetCount() === 0) {
+    log(`(no runtime targets; keeping offset ${state.offset} for replay on reconnect)`)
     return 'stop'
   }
 
@@ -417,6 +430,17 @@ async function anchorOffsetIfFresh(): Promise<void> {
 export const telegramPlatform: Platform = {
   name: 'telegram',
   send: (target, text) => sendToTelegram(target, text),
+  async startStream(target: string, initialText: string): Promise<unknown> {
+    const message = await bot.api.sendMessage(target, initialText)
+    return { chatId: target, messageId: message.message_id }
+  },
+  async updateStream(handle: any, text: string): Promise<string | null> {
+    try { await bot.api.editMessageText(handle.chatId, handle.messageId, text); return null }
+    catch (error: any) { return error?.message ?? String(error) }
+  },
+  async finishStream(handle: any, text: string): Promise<string | null> {
+    return telegramPlatform.updateStream!(handle, text)
+  },
   // SECURITY: always the configured owner, regardless of the chat_id the session
   // passed — a compromised/injected CC must not reach an arbitrary chat.
   resolveReplyTarget(_passedChatId: string): string | null {
@@ -498,6 +522,19 @@ export function initTelegram() {
         saveState(state)
       },
     },
+    codex: cfg.codex_targets.length > 0 ? {
+      platform: 'telegram' as const,
+      bindingsPath: join(DATA_DIR, 'bindings.json'),
+      targets: cfg.codex_targets.map(target => ({
+        ...target,
+        externalChatId: cfg.owner_chat_id,
+      })),
+      client: process.env.KA_CODEX_APP_SERVER_COMMAND ? {
+        command: process.env.KA_CODEX_APP_SERVER_COMMAND,
+        args: JSON.parse(process.env.KA_CODEX_APP_SERVER_ARGS_JSON ?? '["app-server"]'),
+        env: process.env,
+      } : undefined,
+    } : undefined,
   }
 }
 

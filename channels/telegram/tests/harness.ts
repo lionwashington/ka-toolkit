@@ -63,6 +63,11 @@ export async function startMockTelegram(): Promise<MockTelegram> {
     sentMsgs.push({ chat_id: String(req.body?.chat_id ?? ''), text: String(req.body?.text ?? '') })
     res.json({ ok: true, result: { message_id: sentMsgs.length, date: Math.floor(Date.now() / 1000), chat: { id: req.body?.chat_id }, text: req.body?.text } })
   })
+  app.post('/bot:token/editMessageText', (req, res) => {
+    const index = Number(req.body?.message_id) - 1
+    if (sentMsgs[index]) sentMsgs[index].text = String(req.body?.text ?? '')
+    res.json({ ok: true, result: { message_id: Number(req.body?.message_id), chat: { id: req.body?.chat_id }, text: req.body?.text } })
+  })
   app.post('/bot:token/sendChatAction', (req, res) => {
     actions.push({ chat_id: String(req.body?.chat_id ?? ''), action: String(req.body?.action ?? '') })
     res.json({ ok: true, result: true })
@@ -116,7 +121,13 @@ async function getFreePort(): Promise<number> {
   return port
 }
 
-export async function startDaemon(opts: { apiRoot: string; ownerChatId?: string; pollTimeout?: number; pollHardTimeoutMs?: number }): Promise<Daemon> {
+export async function startDaemon(opts: {
+  apiRoot: string
+  ownerChatId?: string
+  pollTimeout?: number
+  pollHardTimeoutMs?: number
+  codexTarget?: { name: string; cwd: string; command: string; args: string[]; statePath: string }
+}): Promise<Daemon> {
   const dataDir = mkdtempSync(join(tmpdir(), 'tg-daemon-test-'))
   const port = await getFreePort()
   const ownerChatId = opts.ownerChatId ?? '12345'
@@ -127,8 +138,11 @@ export async function startDaemon(opts: { apiRoot: string; ownerChatId?: string;
   // secrets.yaml (token/owner) in the config dir the daemon resolves via
   // KA_CONFIG_DIR. state.json/log/pid stay in KA_DAEMON_DATA_DIR. Here both
   // point at dataDir so the test exercises the real resolution path.
+  const codexLines = opts.codexTarget
+    ? `    codex:\n      targets:\n        - name: ${opts.codexTarget.name}\n          cwd: ${opts.codexTarget.cwd}\n`
+    : ''
   writeFileSync(join(dataDir, 'config.yaml'),
-    `channels:\n  telegram:\n    port: ${port}\n    poll_timeout: ${pollTimeout}\n${hardLine}`)
+    `channels:\n  telegram:\n    port: ${port}\n    poll_timeout: ${pollTimeout}\n${hardLine}${codexLines}`)
   writeFileSync(join(dataDir, 'secrets.yaml'),
     `channels:\n  telegram:\n    token: "test-token"\n    owner_chat_id: "${ownerChatId}"\n`)
   // Two launch modes, SAME assertions:
@@ -143,6 +157,11 @@ export async function startDaemon(opts: { apiRoot: string; ownerChatId?: string;
     TELEGRAM_API_ROOT: opts.apiRoot,
     KA_DAEMON_DATA_DIR: dataDir,
     KA_CONFIG_DIR: dataDir,
+  }
+  if (opts.codexTarget) {
+    env.KA_CODEX_APP_SERVER_COMMAND = opts.codexTarget.command
+    env.KA_CODEX_APP_SERVER_ARGS_JSON = JSON.stringify(opts.codexTarget.args)
+    env.FAKE_CODEX_STATE = opts.codexTarget.statePath
   }
   if (bundle) {
     cmd = ['node', bundle]
@@ -168,8 +187,11 @@ export async function startDaemon(opts: { apiRoot: string; ownerChatId?: string;
   return {
     port, dataDir, proc, baseUrl,
     stop: () => new Promise<void>(resolve => {
-      proc.once('exit', () => { try { rmSync(dataDir, { recursive: true, force: true }) } catch {} ; resolve() })
-      proc.kill('SIGKILL')
+      const finish = () => { try { rmSync(dataDir, { recursive: true, force: true }) } catch {}; resolve() }
+      if (proc.exitCode !== null || proc.signalCode !== null) return finish()
+      const fallback = setTimeout(() => proc.kill('SIGKILL'), 6_000)
+      proc.once('exit', () => { clearTimeout(fallback); finish() })
+      proc.kill('SIGTERM')
     }),
   }
 }

@@ -12,8 +12,7 @@
 # is active per CLI invocation — we use a flat `runtime::` namespace instead of
 # an associative dispatch table to stay bash 3.2 compatible.
 #
-# Phase 2: `cc` is the only fully-implemented adapter. `codex` / `gemini`
-# remain reserved names — calling runtime_load with them exits non-zero.
+# `cc` and `codex` are implemented. `gemini` remains reserved.
 
 if [ -z "${KA_RUNTIMES_DIR:-}" ]; then
     KA_RUNTIMES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,15 +49,20 @@ runtime_load() {
         echo "runtime_load: unknown runtime '$rt' (dir $dir not found)" >&2
         return 1
     fi
-    # Phase 2 only implements cc. Codex/Gemini dirs may exist as placeholders
-    # later — fail loudly if they're requested before adapters land.
     case "$rt" in
-        cc) ;;
-        codex|gemini)
+        cc|codex) ;;
+        gemini)
             echo "runtime_load: '$rt' adapter not yet implemented (phase 3+); see docs/KA_CLI_RUNTIME_DESIGN.md" >&2
             return 1
             ;;
     esac
+    # The namespace is intentionally flat for bash 3.2. Clear every contract
+    # function before switching adapters so optional capabilities cannot leak
+    # from a previously loaded runtime in the same process.
+    local fn
+    for fn in runtime::launch_pane_script runtime::launch_binary runtime::ready_match runtime::inject_prompt runtime::post_launch; do
+        unset -f "$fn" >/dev/null 2>&1 || true
+    done
     local f
     for f in "$dir"/*.sh; do
         [ -f "$f" ] || continue

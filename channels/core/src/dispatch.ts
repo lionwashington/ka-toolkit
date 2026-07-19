@@ -3,9 +3,10 @@
 // miss notice, typing ACK) stays in the daemon and calls fanout() here.
 import { log } from './log.ts'
 import { counters } from './counters.ts'
-import { type Session, sessionsOf, allSessions, onlineChannelListStr, resolveTargetToName } from './sessions.ts'
+import { type Session, sessionsOf, allSessions, resolveTargetToName } from './sessions.ts'
 import { resolveTargetList } from './routing.ts'
 import type { Platform } from './platform.ts'
+import { onlineTargetListStr, runtimeTargetOf, targetCount, targetNames, totalTargetCount } from './targets.ts'
 
 // Lightweight cc loop guard: if the same (from→to) channel pair exchanges more
 // than CC_LOOP_MAX dispatches within CC_LOOP_WINDOW_MS, log a warning so a
@@ -43,7 +44,7 @@ export async function dispatch(
   // owner DM, or the lark group — correct feedback target for both.
   if (targets.length === 0) {
     if (targetName === 'all') return
-    const online = onlineChannelListStr()
+    const online = onlineTargetListStr()
     log(`route miss: target=${targetName}, online=${online}`)
     counters.routeMiss++
     const replyTo = String(metaBase.chat_id ?? '')
@@ -93,7 +94,7 @@ export async function dispatchTargets(
       counters.routeMiss++
       await platform.send(
         replyTo,
-        `⚠️ no target remembered — reply with \`to <channel>:\` to pick one\nOnline channels: ${onlineChannelListStr()}`,
+        `⚠️ no target remembered — reply with \`to <channel>:\` to pick one\nOnline channels: ${onlineTargetListStr()}`,
       )
     }
     return
@@ -102,26 +103,26 @@ export async function dispatchTargets(
   const { deliver, notFound } = resolveTargetList(
     rawTargets,
     resolveTargetToName,
-    name => sessionsOf(name).length > 0,
+    name => targetCount(name) > 0,
   )
 
   let delivered = 0
   if (deliver.length === 1 && deliver[0] === 'all') {
-    const targets = allSessions()
-    if (targets.length > 0) {
-      log(`dispatch → all [${targets.length} sess] (${content.length} chars)`)
+    const count = totalTargetCount()
+    if (count > 0) {
+      log(`dispatch → all [${count} targets] (${content.length} chars)`)
       counters.dispatches++
-      await fanout(targets, content, metaBase, 'all')
-      delivered = targets.length
+      await Promise.allSettled(targetNames().map(name => deliverToTarget(name, content, metaBase, 'all')))
+      delivered = count
     }
   } else {
     for (const name of deliver) {
-      const targets = sessionsOf(name)
-      if (targets.length === 0) continue
-      log(`dispatch → "${name}" [${targets.length} sess] (${content.length} chars)`)
+      const count = targetCount(name)
+      if (count === 0) continue
+      log(`dispatch → "${name}" [${count} targets] (${content.length} chars)`)
       counters.dispatches++
-      await fanout(targets, content, metaBase, name)
-      delivered += targets.length
+      await deliverToTarget(name, content, metaBase, name)
+      delivered += count
     }
   }
 
@@ -133,7 +134,7 @@ export async function dispatchTargets(
       const deliveredNote = deliver.length > 0 ? `\nDelivered to: ${deliver.join(', ')}` : ''
       await platform.send(
         replyTo,
-        `⚠️ not found: ${notFound.join(', ')}\nOnline channels: ${onlineChannelListStr()}${deliveredNote}\n(target by name or number, comma-separated for several, e.g. \`to main, 2\`)`,
+        `⚠️ not found: ${notFound.join(', ')}\nOnline channels: ${onlineTargetListStr()}${deliveredNote}\n(target by name or number, comma-separated for several, e.g. \`to main, 2\`)`,
       )
     }
   }
@@ -145,6 +146,25 @@ export async function dispatchTargets(
       platform.ackDelivery?.(String(ackChatId))
     }
   }
+}
+
+export async function deliverToTarget(
+  name: string,
+  content: string,
+  metaBase: Record<string, unknown>,
+  routedTarget: string,
+): Promise<void> {
+  const sessions = sessionsOf(name)
+  const runtime = runtimeTargetOf(name)
+  const normalizedMeta = Object.fromEntries(
+    Object.entries({ ...metaBase, channel_name: name, routed_target: routedTarget })
+      .map(([key, value]) => [key, String(value)]),
+  )
+  if (runtime) {
+    void runtime.deliver({ content, meta: normalizedMeta })
+      .catch(error => log(`runtime delivery failed for ${name}: ${error?.message ?? error}`))
+  }
+  if (sessions.length) await fanout(sessions, content, metaBase, routedTarget)
 }
 
 // Deliver one notification to every session in `targets`, in PARALLEL with a

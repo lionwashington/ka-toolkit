@@ -31,6 +31,7 @@ CLAUDE_JSON="${KA_CLAUDE_JSON:-$HOME/.claude.json}"                   # node MCP
 KA_BIN_LINK="${KA_BIN_LINK:-$HOME/.local/bin/ka}"                     # ka command symlink
 LAUNCHAGENTS_DIR="${KA_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"     # cron plist
 CLAUDE_SETTINGS="${KA_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"  # hooks registration
+CODEX_HOOKS="${KA_CODEX_HOOKS:-${CODEX_HOME:-$HOME/.codex}/hooks.json}" # Codex lifecycle hooks
 CLAUDE_SKILLS_DIR="${KA_CLAUDE_SKILLS:-$HOME/.claude/skills}"         # skills symlink landing spot
 TELEGRAM_DIR="${KA_TELEGRAM_DIR:-$HOME/.telegram-channel}"            # old daemon location
 LARK_DIR="${KA_LARK_DIR:-$HOME/.lark-channel}"                        # old lark daemon location
@@ -510,6 +511,18 @@ deploy_hooks() {         # CC hooks (capture-hook) → runtime (esbuild bundle +
       log "  pruned stale hook: $bn (source removed)"
     fi
   done
+  # Codex uses the same runtime destination but a distinct filename so its Stop
+  # hook can coexist with the Claude Code capture hook.
+  local codex_hook="$REPO_ROOT/kb/adapter-codex/dist/hooks/capture-hook.js"
+  if [ -f "$codex_hook" ]; then
+    if "$ESB" "$codex_hook" --bundle --platform=node --format=esm --banner:js="import{createRequire}from'module';const require=createRequire(import.meta.url);" --outfile="$dest/codex-capture-hook.js" >/dev/null 2>&1; then
+      cnt=$((cnt + 1))
+    else
+      log "  FAIL bundle codex-capture-hook.js"
+    fi
+  else
+    log "  WARN Codex hook dist missing (build @ka/adapter-codex first): ${codex_hook}"
+  fi
   log "  OK ${dest} (${cnt} hook(s), esbuild bundle self-contained, no external @ka/core resolution needed)"
 }
 
@@ -605,7 +618,7 @@ register_mcp() {         # switch ①: point CLAUDE_JSON's node MCP at runtime/m
   [ -f "$CLAUDE_JSON" ] || { log "  WARN ${CLAUDE_JSON} does not exist, skipping"; return 0; }
   cp "$CLAUDE_JSON" "${CLAUDE_JSON}.pre-switch-$(date +%Y%m%d%H%M%S)"
   RT="$RUNTIME" python3 - "$CLAUDE_JSON" <<'PY'
-import json, os, sys
+import json, os, shlex, sys
 rt = os.environ["RT"]; p = sys.argv[1]
 d = json.load(open(p))
 ms = d.get("mcpServers", {})
@@ -686,15 +699,15 @@ switch_hooks() {         # switch ④: CLAUDE_SETTINGS hook paths → runtime/ho
   want hooks || return 0
   [ "$DO_SWITCH" = 1 ] || return 0
   log "switch ④ hooks → ${CLAUDE_SETTINGS} re-pointed at ${RUNTIME}/hooks (backed up)"
-  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] cp settings.json .pre-switch; change hook paths repo→runtime/hooks"; return 0; fi
-  [ -f "$CLAUDE_SETTINGS" ] || { log "  WARN ${CLAUDE_SETTINGS} does not exist, skipping"; return 0; }
-  cp "$CLAUDE_SETTINGS" "${CLAUDE_SETTINGS}.pre-switch-$(date +%Y%m%d%H%M%S)"
+  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] back up + re-point Claude hooks; merge Codex Stop capture into ${CODEX_HOOKS} (preserve existing hooks)"; return 0; fi
+  if [ -f "$CLAUDE_SETTINGS" ]; then
+    cp "$CLAUDE_SETTINGS" "${CLAUDE_SETTINGS}.pre-switch-$(date +%Y%m%d%H%M%S)"
   # Re-point the hooks dir to the new $KA_HOME/kb/hooks, whatever the settings.json
   # currently points at. Match ALL three known prior locations, not just the gen3
   # repo path — otherwise a machine migrating from an OLD DEPLOYED runtime (hooks at
   # `runtime/hooks`) or an OLD repo layout (`packages/adapters/claude-code/dist/hooks`)
   # is left with stale hook paths that break once the old runtime/ is removed.
-  RT="$RUNTIME" python3 - "$CLAUDE_SETTINGS" <<'PY'
+    RT="$RUNTIME" python3 - "$CLAUDE_SETTINGS" <<'PY'
 import os, re, sys
 rt = os.environ["RT"]; p = sys.argv[1]
 raw = open(p).read()
@@ -707,7 +720,41 @@ raw2 = re.sub(
 open(p, "w").write(raw2)
 print("  hook paths rewired" if raw2 != raw else "  no hook path matched")
 PY
-  log "  OK hooks re-pointed at runtime/hooks"
+    log "  OK Claude hooks re-pointed at runtime/hooks"
+  else
+    log "  WARN ${CLAUDE_SETTINGS} does not exist; skipping Claude hook switch"
+  fi
+
+  local codex_hook="$RUNTIME/kb/hooks/codex-capture-hook.js"
+  if [ ! -f "$codex_hook" ]; then
+    log "  WARN ${codex_hook} is not deployed; skipping Codex hook switch"
+    return 0
+  fi
+  mkdir -p "$(dirname "$CODEX_HOOKS")"
+  [ -f "$CODEX_HOOKS" ] && cp "$CODEX_HOOKS" "${CODEX_HOOKS}.pre-switch-$(date +%Y%m%d%H%M%S)"
+  CODEX_HOOK_PATH="$codex_hook" python3 - "$CODEX_HOOKS" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+try:
+    with open(p) as f: data = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    data = {}
+hooks = data.setdefault("hooks", {})
+groups = hooks.setdefault("Stop", [])
+command = "node " + shlex.quote(os.environ["CODEX_HOOK_PATH"])
+replacement = {"hooks": [{"type": "command", "command": command, "timeout": 30}]}
+for i, group in enumerate(groups):
+    handlers = group.get("hooks", []) if isinstance(group, dict) else []
+    if any(isinstance(h, dict) and "codex-capture-hook.js" in h.get("command", "") for h in handlers):
+        groups[i] = replacement
+        break
+else:
+    groups.append(replacement)
+with open(p, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+PY
+  log "  OK Codex Stop capture hook registered in ${CODEX_HOOKS} (review trust with /hooks)"
 }
 
 switch_daemon() {        # switch ⑤: migrate secrets + (re)start the telegram daemon IFF it is the active kind

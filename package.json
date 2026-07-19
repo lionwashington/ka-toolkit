@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "build": "pnpm -r build",
-    "test": "pnpm -r test && node --test tests/codex-app-server/client.test.mjs",
+    "test": "pnpm -r test && node --experimental-strip-types --test tests/channel-core/*.test.ts && node --test tests/codex-app-server/client.test.mjs tests/distill-runtime/cc.test.mjs",
     "lint": "pnpm -r lint"
   },
   "engines": {
