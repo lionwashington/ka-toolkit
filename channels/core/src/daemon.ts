@@ -60,7 +60,7 @@ export function runChannelDaemon(opts: DaemonOptions): void {
   setLogger(opts.logger)
   initNumbering(opts.numbering.numbers, opts.numbering.next, opts.numbering.persist)
 
-  let runtimeManager: CodexRuntimeManager | undefined
+  const runtimeManager = opts.codex ? new CodexRuntimeManager(opts.platform, opts.codex) : undefined
   let httpServer: Server | undefined
   const probeTimer = setInterval(probeTick, PROBE_INTERVAL_MS)
   installSignalHandlers(async () => {
@@ -77,18 +77,9 @@ export function runChannelDaemon(opts: DaemonOptions): void {
     log(`cannot write pid file: ${e.message}`)
   }
 
-  const app = createHttpApp(opts.platform)
+  const app = createHttpApp(opts.platform, runtimeManager)
   httpServer = app.listen(opts.port, opts.host, async () => {
     log(`${opts.platform.name}-channel daemon listening on ${opts.host}:${opts.port}/mcp (pid=${process.pid})`)
-    if (opts.codex?.targets.length) {
-      try {
-        runtimeManager = new CodexRuntimeManager(opts.platform, opts.codex)
-        await runtimeManager.start()
-      } catch (error: any) {
-        runtimeManager = undefined
-        log(`codex runtime unavailable; platform channel remains online: ${error?.message ?? error}`)
-      }
-    }
     // Hand the platform a dispatch bound to it; the platform starts its inbound loop.
     await opts.platform.startInbound(
       (rawTargets, content, metaBase) => dispatchTargets(opts.platform, rawTargets, content, metaBase),

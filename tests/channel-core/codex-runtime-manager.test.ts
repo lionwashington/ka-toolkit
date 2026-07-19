@@ -8,6 +8,7 @@ import { CodexRuntimeManager } from '../../channels/core/src/codex/runtime-manag
 import { dispatchTargets } from '../../channels/core/src/dispatch.ts'
 import { runtimeTargetOf } from '../../channels/core/src/targets.ts'
 import type { Platform } from '../../channels/core/src/platform.ts'
+import { startFakeSocketServer } from '../codex-app-server/fake-socket-server.mjs'
 
 const fake = fileURLToPath(new URL('../codex-app-server/fake-app-server.mjs', import.meta.url))
 
@@ -35,15 +36,12 @@ test('routes platform input through Codex and sends the final reply back through
   const manager = new CodexRuntimeManager(platform, {
     platform: 'telegram',
     bindingsPath: join(dir, 'bindings.json'),
-    targets: [{ name: 'codex-main', cwd: dir, externalChatId: 'owner' }],
-    client: {
-      command: process.execPath,
-      args: [fake],
-      env: { ...process.env, FAKE_CODEX_STATE: join(dir, 'fake-state.json') },
-      requestTimeoutMs: 500,
-    },
+    externalChatId: 'owner',
+    requestTimeoutMs: 500,
   })
-  await manager.start()
+  const socketPath = join(dir, 'app-server.sock')
+  const appServer = await startFakeSocketServer({ socketPath, fakePath: fake, statePath: join(dir, 'fake-state.json') })
+  await manager.register({ name: 'codex-main', cwd: dir, socketPath })
   assert.ok(runtimeTargetOf('codex-main'))
   await dispatchTargets(platform, ['codex-main'], 'hello', { chat_id: 'owner' })
   await waitFor(() => sent.some(message => message.text.includes('echo:hello')))
@@ -51,6 +49,7 @@ test('routes platform input through Codex and sends the final reply back through
   assert.equal(sent[0].target, 'owner')
   assert.match(sent[0].text, /echo:hello/)
   await manager.stop()
+  await appServer.close()
   assert.equal(runtimeTargetOf('codex-main'), undefined)
 })
 
@@ -70,15 +69,12 @@ test('binds an approval to its target and accepts a single-use owner command', a
   const manager = new CodexRuntimeManager(platform, {
     platform: 'telegram',
     bindingsPath: join(dir, 'bindings.json'),
-    targets: [{ name: 'codex-main', cwd: dir, externalChatId: 'owner' }],
-    client: {
-      command: process.execPath,
-      args: [fake],
-      env: { ...process.env, FAKE_CODEX_STATE: join(dir, 'fake-state.json') },
-      requestTimeoutMs: 500,
-    },
+    externalChatId: 'owner',
+    requestTimeoutMs: 500,
   })
-  await manager.start()
+  const socketPath = join(dir, 'app-server.sock')
+  const appServer = await startFakeSocketServer({ socketPath, fakePath: fake, statePath: join(dir, 'fake-state.json') })
+  await manager.register({ name: 'codex-main', cwd: dir, socketPath })
   await dispatchTargets(platform, ['codex-main'], 'approve-me', { chat_id: 'owner' })
   while (!sent.some(message => message.text.includes('requests approval 10000'))) {
     await new Promise(resolve => setTimeout(resolve, 5))
@@ -93,6 +89,7 @@ test('binds an approval to its target and accepts a single-use owner command', a
   assert.equal(sent.length, before + 1)
   assert.match(sent.at(-1)!.text, /not pending/)
   await manager.stop()
+  await appServer.close()
 })
 
 test('stop unregisters the target and declines a pending approval', async () => {
@@ -111,17 +108,15 @@ test('stop unregisters the target and declines a pending approval', async () => 
   const manager = new CodexRuntimeManager(platform, {
     platform: 'telegram',
     bindingsPath: join(dir, 'bindings.json'),
-    targets: [{ name: 'codex-stop', cwd: dir, externalChatId: 'owner' }],
-    client: {
-      command: process.execPath,
-      args: [fake],
-      env: { ...process.env, FAKE_CODEX_STATE: join(dir, 'fake-state.json') },
-      requestTimeoutMs: 500,
-    },
+    externalChatId: 'owner',
+    requestTimeoutMs: 500,
   })
-  await manager.start()
+  const socketPath = join(dir, 'app-server.sock')
+  const appServer = await startFakeSocketServer({ socketPath, fakePath: fake, statePath: join(dir, 'fake-state.json') })
+  await manager.register({ name: 'codex-stop', cwd: dir, socketPath })
   await dispatchTargets(platform, ['codex-stop'], 'approve-me', { chat_id: 'owner' })
   await waitFor(() => sent.some(message => message.includes('requests approval')))
   await manager.stop()
+  await appServer.close()
   assert.equal(runtimeTargetOf('codex-stop'), undefined)
 })

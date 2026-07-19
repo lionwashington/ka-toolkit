@@ -5,8 +5,20 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ownerMsg, startDaemon, startMockWebhook, waitFor } from './harness.ts'
+import { startFakeSocketServer } from '../../../tests/codex-app-server/fake-socket-server.mjs'
 
 const fake = fileURLToPath(new URL('../../../tests/codex-app-server/fake-app-server.mjs', import.meta.url))
+
+async function registerFake(daemon: { baseUrl: string }, workspace: string, name: string) {
+  const socketPath = join(workspace, 'app-server.sock')
+  const server = await startFakeSocketServer({ socketPath, fakePath: fake, statePath: join(workspace, 'fake-state.json') })
+  const response = await fetch(`${daemon.baseUrl}/api/runtimes/codex`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name, cwd: workspace, socket_path: socketPath }),
+  })
+  assert.equal(response.ok, true, await response.text())
+  return server
+}
 
 async function waitForReady(baseUrl: string): Promise<boolean> {
   const deadline = Date.now() + 5_000
@@ -24,14 +36,8 @@ test('Lark routes a configured group through the shared Codex runtime bridge', a
   const daemon = await startDaemon({
     webhookUrl: webhook.url,
     pollIntervalSeconds: 1,
-    codexTarget: {
-      name: 'codex-reviewer',
-      cwd: workspace,
-      command: process.execPath,
-      args: [fake],
-      statePath: join(workspace, 'fake-state.json'),
-    },
   })
+  const appServer = await registerFake(daemon, workspace, 'codex-reviewer')
   try {
     assert.equal(await waitForReady(daemon.baseUrl), true)
     daemon.pushMessages('oc_test', [ownerMsg({
@@ -47,6 +53,7 @@ test('Lark routes a configured group through the shared Codex runtime bridge', a
     assert.match(calls, /PATCH\t\/open-apis\/cardkit\/v1\/cards\/card-1\/settings/)
   } finally {
     await daemon.stop()
+    await appServer.close()
     await webhook.close()
   }
 })
@@ -58,14 +65,8 @@ test('Lark falls back to final webhook delivery when CardKit is unavailable', as
     webhookUrl: webhook.url,
     pollIntervalSeconds: 0.05,
     cardKitFail: true,
-    codexTarget: {
-      name: 'codex-reviewer',
-      cwd: workspace,
-      command: process.execPath,
-      args: [fake],
-      statePath: join(workspace, 'fake-state.json'),
-    },
   })
+  const appServer = await registerFake(daemon, workspace, 'codex-reviewer')
   try {
     assert.equal(await waitForReady(daemon.baseUrl), true)
     daemon.pushMessages('oc_test', [ownerMsg({
@@ -78,6 +79,7 @@ test('Lark falls back to final webhook delivery when CardKit is unavailable', as
     assert.match(daemon.apiCalls(), /POST\t\/open-apis\/cardkit\/v1\/cards/)
   } finally {
     await daemon.stop()
+    await appServer.close()
     await webhook.close()
   }
 })

@@ -24,9 +24,10 @@ import {
 } from './probe.ts'
 import { createMcpServer } from './mcp.ts'
 import type { Platform } from './platform.ts'
+import type { CodexRuntimeManager } from './codex/runtime-manager.ts'
 import { runtimeTargetEntries, runtimeTargetOf, targetNames } from './targets.ts'
 
-export function createHttpApp(platform: Platform) {
+export function createHttpApp(platform: Platform, runtimeManager?: CodexRuntimeManager) {
   const app = express()
   app.use(express.json({ limit: '5mb' }))
 
@@ -180,6 +181,29 @@ export function createHttpApp(platform: Platform) {
     log('received /api/shutdown')
     res.json({ ok: true, shutting_down: true })
     setTimeout(() => process.exit(0), 200)
+  })
+
+  app.post('/api/runtimes/codex', async (req, res) => {
+    if (!runtimeManager) { res.status(503).json({ ok: false, error: 'Codex runtime routing is unavailable' }); return }
+    const name = sanitizeChannelName(req.body?.name)
+    const cwd = String(req.body?.cwd ?? '')
+    const socketPath = String(req.body?.socket_path ?? '')
+    if (!name || !cwd || !socketPath.startsWith('/')) {
+      res.status(400).json({ ok: false, error: 'name, cwd, and absolute socket_path are required' }); return
+    }
+    try {
+      await runtimeManager.register({ name, cwd, socketPath })
+      res.json({ ok: true, name })
+    } catch (error: any) {
+      log(`Codex runtime registration failed (${name}): ${error?.message ?? error}`)
+      res.status(502).json({ ok: false, error: error?.message ?? String(error) })
+    }
+  })
+
+  app.delete('/api/runtimes/codex/:name', async (req, res) => {
+    if (!runtimeManager) { res.status(503).json({ ok: false, error: 'Codex runtime routing is unavailable' }); return }
+    const name = sanitizeChannelName(req.params.name)
+    res.json({ ok: true, name, removed: await runtimeManager.unregister(name) })
   })
 
   // /api/send — deterministic re-send of a reply the MODEL leaked as TEXT instead of

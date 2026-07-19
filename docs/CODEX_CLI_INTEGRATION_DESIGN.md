@@ -167,7 +167,7 @@ Telegram/Lark 用户消息
 
 | 问题 | Claude Code 当前方式 | Codex App Server 方式 |
 |---|---|---|
-| 谁主动建立 runtime 连接 | Claude 连接 Channel daemon | Channel daemon 启动/连接 App Server |
+| 谁主动建立 runtime 连接 | Claude 连接 Channel daemon | Workshop 启动 App Server；TUI 与 Channel 分别连接 |
 | 如何输入消息 | MCP notification | `turn/start` JSON-RPC request |
 | 如何返回结果 | Claude 调 `reply` MCP tool | App Server 发 item/turn event |
 | runtime 身份 | 在线 Claude MCP session | 持久化 Codex `threadId` |
@@ -195,11 +195,13 @@ interface RuntimeChannel {
 
 runtime event 在到达 Telegram/Lark 前规范化为 `turn-started`、`text-delta`、`activity`、`approval`、`final`、`error` 和 `turn-completed`。
 
-Channel transport configuration does not declare runtime targets. The daemon
-discovers every effective `runtime: codex` mate from the same `workshop.yaml`
-used by Workshop (including the top-level runtime default), then injects only
-the platform-specific reply address. Mate name and cwd therefore have one source
-of truth and are never repeated under `channels.telegram` or `channels.lark`.
+Channel transport configuration does not declare runtime targets, and Channel
+never reads `workshop.yaml`. Workshop starts one App Server sidecar for each
+Codex mate, connects the TUI to the same per-mate Unix socket, and registers the
+live endpoint with Channel's loopback control API. The registration loop heals
+a later Channel start or restart. On pane shutdown, Workshop unregisters the
+target and terminates the App Server. Channel owns only routing clients and
+never owns the App Server process.
 
 ### 3.6 持久化 binding
 
@@ -255,6 +257,7 @@ Workshop 只负责运行时编排：
 
 - 读取 `workshop.yaml`；
 - 管理 mate 的 cwd、runtime 类型和生命周期；
+- 为 Codex mate 启动和停止 App Server sidecar，并维护 Channel 注册；
 - 管理 tmux pane/window 或 headless mate 的状态展示；
 - 调用 Channel 提供的绑定能力，但不实现 Telegram/Lark 协议；
 - 不执行 KB distill，也不拥有 Cron schedule。

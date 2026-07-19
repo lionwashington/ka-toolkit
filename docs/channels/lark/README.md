@@ -82,8 +82,10 @@ identity. The app must have message-send and card create/update scopes. If CardK
 creation is unavailable, the daemon automatically sends the completed response
 through the configured group webhook instead.
 
-Codex mate names and working directories come exclusively from
-`config/workshop.yaml`; do not duplicate them under `channels.lark`.
+Codex mate names and working directories are owned exclusively by Workshop.
+Workshop registers each live App Server socket with Channel; the Lark daemon
+does not read `workshop.yaml` and runtime targets are not duplicated under
+`channels.lark`.
 
 ## Start / Stop / Inspect the daemon
 

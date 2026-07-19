@@ -28,7 +28,6 @@ import { parseRoutingPrefix, applyStickyRouting } from '../core/src/routing.ts'
 import { resolveTargetToName } from '../core/src/sessions.ts'
 import { totalTargetCount } from '../core/src/targets.ts'
 import type { Platform, InboundDispatch } from '../core/src/platform.ts'
-import { normalizeWorkshopCodexTargets } from '../core/src/workshop-targets.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 // Data dir holds state.json / channel.log / daemon.pid / attachments/ — the
@@ -50,7 +49,6 @@ const CONFIG_DIR = process.env.KA_CONFIG_DIR
   || join(process.env.KA_HOME || join(homedir(), '.knowledge-assistant'), 'config')
 const CONFIG_YAML = join(CONFIG_DIR, 'config.yaml')
 const SECRETS_YAML = join(CONFIG_DIR, 'secrets.yaml')
-const WORKSHOP_YAML = process.env.OPS_CONFIG || join(CONFIG_DIR, 'workshop.yaml')
 
 type GroupConfig = {
   name: string                       // display name, e.g. "Team Group"
@@ -65,7 +63,6 @@ type Config = {
   http_host: string
   http_port: number
   groups: Record<string, GroupConfig> // chatId(oc_…) → group config
-  codex_targets: Array<{ name: string; cwd: string; externalChatId: string }>
 }
 type State = {
   last_seen_msg_time: Record<string, string>   // per-chat ISO watermark (create_time)
@@ -105,10 +102,6 @@ function loadConfig(): Config {
     http_host: String(pub.host ?? '127.0.0.1'),
     http_port: Number(pub.port ?? 9876),
     groups,
-    codex_targets: normalizeWorkshopCodexTargets(readYaml(WORKSHOP_YAML)).map(target => ({
-      ...target,
-      externalChatId: Object.keys(groups)[0] ?? '',
-    })),
   }
 }
 
@@ -582,16 +575,11 @@ export function initLark() {
         saveState(state)
       },
     },
-    codex: cfg.codex_targets.length > 0 ? {
+    codex: {
       platform: 'lark' as const,
       bindingsPath: join(DATA_DIR, 'bindings.json'),
-      targets: cfg.codex_targets,
-      client: process.env.KA_CODEX_APP_SERVER_COMMAND ? {
-        command: process.env.KA_CODEX_APP_SERVER_COMMAND,
-        args: JSON.parse(process.env.KA_CODEX_APP_SERVER_ARGS_JSON ?? '["app-server"]'),
-        env: process.env,
-      } : undefined,
-    } : undefined,
+      externalChatId: Object.keys(cfg.groups)[0] ?? '',
+    },
   }
 }
 

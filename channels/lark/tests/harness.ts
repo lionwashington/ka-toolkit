@@ -66,7 +66,6 @@ export async function startDaemon(opts: {
   chatId?: string
   pollIntervalSeconds?: number
   cardKitFail?: boolean
-  codexTarget?: { name: string; cwd: string; command: string; args: string[]; statePath: string }
 }): Promise<Daemon> {
   const dataDir = mkdtempSync(join(tmpdir(), 'lark-daemon-test-'))
   const mockDir = join(dataDir, 'mock')
@@ -84,9 +83,6 @@ export async function startDaemon(opts: {
     `channels:\n  lark:\n    port: ${port}\n` +
     `    poll_interval_seconds: ${opts.pollIntervalSeconds ?? 1}\n` +
     `    page_size: 20\n    lark_cli_bin: "${fakeCli}"\n`)
-  writeFileSync(join(dataDir, 'workshop.yaml'), opts.codexTarget
-    ? `session: workshop\nmates:\n  - name: ${opts.codexTarget.name}\n    cwd: ${opts.codexTarget.cwd}\n    runtime: codex\n`
-    : 'session: workshop\nmates: []\n')
   writeFileSync(join(dataDir, 'secrets.yaml'),
     `channels:\n  lark:\n    self_open_id: "${selfOpenId}"\n    groups:\n` +
     `      ${chatId}:\n        name: "Test Group"\n        webhook_url: "${opts.webhookUrl}"\n`)
@@ -97,11 +93,6 @@ export async function startDaemon(opts: {
     KA_CONFIG_DIR: dataDir,
     KA_PLATFORM_MODULE: join(PKG_DIR, 'lark-platform.ts'),
     LARK_MOCK_DIR: mockDir,
-  }
-  if (opts.codexTarget) {
-    env.KA_CODEX_APP_SERVER_COMMAND = opts.codexTarget.command
-    env.KA_CODEX_APP_SERVER_ARGS_JSON = JSON.stringify(opts.codexTarget.args)
-    env.FAKE_CODEX_STATE = opts.codexTarget.statePath
   }
   if (opts.cardKitFail) env.LARK_MOCK_CARDKIT_FAIL = '1'
   const bundle = process.env.KA_TEST_DAEMON_BUNDLE

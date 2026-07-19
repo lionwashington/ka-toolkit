@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { connectClient, startDaemon, startMockTelegram, waitFor } from './harness.ts'
+import { startFakeSocketServer } from '../../../tests/codex-app-server/fake-socket-server.mjs'
 
 const fake = fileURLToPath(new URL('../../../tests/codex-app-server/fake-app-server.mjs', import.meta.url))
 
@@ -20,17 +21,17 @@ async function waitForAsync(predicate: () => Promise<boolean>, timeoutMs: number
 test('Telegram routes an owner message through a persistent Codex target', async () => {
   const workspace = mkdtempSync(join(tmpdir(), 'ka-telegram-codex-'))
   const telegram = await startMockTelegram()
+  const socketPath = join(workspace, 'app-server.sock')
+  const appServer = await startFakeSocketServer({ socketPath, fakePath: fake, statePath: join(workspace, 'fake-state.json') })
   const daemon = await startDaemon({
     apiRoot: telegram.url,
-    codexTarget: {
-      name: 'codex-main',
-      cwd: workspace,
-      command: process.execPath,
-      args: [fake],
-      statePath: join(workspace, 'fake-state.json'),
-    },
   })
   try {
+    const registered = await fetch(`${daemon.baseUrl}/api/runtimes/codex`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'codex-main', cwd: workspace, socket_path: socketPath }),
+    })
+    assert.equal(registered.ok, true, await registered.text())
     const online = await waitForAsync(async () => {
       const status = await fetch(`${daemon.baseUrl}/api/status`).then(response => response.json())
       return Boolean(status.last_poll_at) && status.runtime_targets?.some((target: any) => target.name === 'codex-main' && target.alive)
@@ -60,6 +61,7 @@ test('Telegram routes an owner message through a persistent Codex target', async
     assert.equal(await waitFor(() => telegram.sent().some(message => message.text.includes('Interrupt requested.')), 5_000), true)
   } finally {
     await daemon.stop()
+    await appServer.close()
     await telegram.close()
   }
 })

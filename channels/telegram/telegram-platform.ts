@@ -25,7 +25,6 @@ import { parseRoutingPrefix, applyStickyRouting } from '../core/src/routing.ts'
 import { resolveTargetToName } from '../core/src/sessions.ts'
 import { totalTargetCount } from '../core/src/targets.ts'
 import type { Platform, InboundDispatch } from '../core/src/platform.ts'
-import { normalizeWorkshopCodexTargets } from '../core/src/workshop-targets.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 // Data dir holds state.json / channel.log / daemon.pid / attachments/ — the
@@ -48,7 +47,6 @@ const CONFIG_DIR = process.env.KA_CONFIG_DIR
   || join(process.env.KA_HOME || join(homedir(), '.knowledge-assistant'), 'config')
 const CONFIG_YAML = join(CONFIG_DIR, 'config.yaml')
 const SECRETS_YAML = join(CONFIG_DIR, 'secrets.yaml')
-const WORKSHOP_YAML = process.env.OPS_CONFIG || join(CONFIG_DIR, 'workshop.yaml')
 
 type Config = {
   http_host: string
@@ -57,7 +55,6 @@ type Config = {
   poll_hard_timeout_ms: number  // client-side hard cap on a single getUpdates; 0 = off
   token: string             // bot token (secrets.yaml channels.telegram.token)
   owner_chat_id: string     // only this Telegram user id may reach the daemon
-  codex_targets: Array<{ name: string; cwd: string }>
 }
 type State = {
   offset: number                              // next getUpdates offset = last update_id + 1
@@ -95,7 +92,6 @@ function loadConfig(): Config {
     // is fail-closed in initTelegram (the daemon refuses to start).
     token: String(sec.token ?? ''),
     owner_chat_id: String(sec.owner_chat_id ?? ''),
-    codex_targets: normalizeWorkshopCodexTargets(readYaml(WORKSHOP_YAML)),
   }
 }
 
@@ -514,19 +510,11 @@ export function initTelegram() {
         saveState(state)
       },
     },
-    codex: cfg.codex_targets.length > 0 ? {
+    codex: {
       platform: 'telegram' as const,
       bindingsPath: join(DATA_DIR, 'bindings.json'),
-      targets: cfg.codex_targets.map(target => ({
-        ...target,
-        externalChatId: cfg.owner_chat_id,
-      })),
-      client: process.env.KA_CODEX_APP_SERVER_COMMAND ? {
-        command: process.env.KA_CODEX_APP_SERVER_COMMAND,
-        args: JSON.parse(process.env.KA_CODEX_APP_SERVER_ARGS_JSON ?? '["app-server"]'),
-        env: process.env,
-      } : undefined,
-    } : undefined,
+      externalChatId: cfg.owner_chat_id,
+    },
   }
 }
 

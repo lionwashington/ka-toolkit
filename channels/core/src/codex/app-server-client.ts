@@ -1,12 +1,14 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { createInterface } from 'node:readline'
+import { createConnection, type Socket } from 'node:net'
 
 type JsonObject = Record<string, any>
 
 export interface AppServerClientOptions {
   command?: string
   args?: string[]
+  socketPath?: string
   cwd?: string
   env?: NodeJS.ProcessEnv
   requestTimeoutMs?: number
@@ -28,6 +30,7 @@ export class AppServerClient extends EventEmitter {
   readonly requestTimeoutMs: number
   readonly serverRequestHandler?: (request: JsonObject) => Promise<unknown>
   private child: ChildProcessWithoutNullStreams | null = null
+  private socket: Socket | null = null
   private stopping = false
   private nextId = 1
   private readonly pending = new Map<number, PendingRequest>()
@@ -41,13 +44,20 @@ export class AppServerClient extends EventEmitter {
     this.env = options.env
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10_000
     this.serverRequestHandler = options.serverRequestHandler
+    this.socketPath = options.socketPath
   }
 
-  get running(): boolean { return this.child !== null }
+  readonly socketPath?: string
+
+  get running(): boolean { return this.child !== null || this.socket !== null }
 
   async start(): Promise<void> {
-    if (this.child) throw new Error('app-server client already started')
+    if (this.running) throw new Error('app-server client already started')
     this.stopping = false
+    if (this.socketPath) {
+      await this.connectSocket(this.socketPath)
+      return
+    }
     const child = spawn(this.command, this.args, {
       cwd: this.cwd,
       env: this.env,
@@ -76,7 +86,7 @@ export class AppServerClient extends EventEmitter {
   }
 
   request(method: string, params?: unknown, timeoutMs = this.requestTimeoutMs): Promise<any> {
-    if (!this.child) return Promise.reject(new Error('app-server is not running'))
+    if (!this.running) return Promise.reject(new Error('app-server is not running'))
     const id = this.nextId++
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -93,6 +103,15 @@ export class AppServerClient extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    if (this.socket) {
+      this.stopping = true
+      const socket = this.socket
+      this.socket = null
+      socket.end()
+      socket.destroy()
+      this.failAll(new Error('app-server connection closed'))
+      return
+    }
     const child = this.child
     if (!child) return
     this.stopping = true
@@ -104,8 +123,35 @@ export class AppServerClient extends EventEmitter {
   }
 
   private write(message: JsonObject): void {
-    if (!this.child?.stdin.writable) throw new Error('app-server stdin is not writable')
-    this.child.stdin.write(`${JSON.stringify(message)}\n`)
+    const line = `${JSON.stringify(message)}\n`
+    if (this.socket?.writable) { this.socket.write(line); return }
+    if (this.child?.stdin.writable) { this.child.stdin.write(line); return }
+    throw new Error('app-server transport is not writable')
+  }
+
+  private connectSocket(socketPath: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const socket = createConnection(socketPath)
+      let settled = false
+      socket.setEncoding('utf8')
+      createInterface({ input: socket }).on('line', line => this.onLine(line))
+      socket.once('connect', () => {
+        settled = true
+        this.socket = socket
+        resolve()
+      })
+      socket.once('error', error => {
+        if (!settled) reject(error)
+        this.failAll(error)
+        this.emit('transport-error', error)
+      })
+      socket.once('close', () => {
+        if (this.socket === socket) this.socket = null
+        const error = new Error('app-server socket closed')
+        this.failAll(error)
+        this.emit('exit', { code: null, signal: null })
+      })
+    })
   }
 
   private onLine(line: string): void {

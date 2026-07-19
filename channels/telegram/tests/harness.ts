@@ -126,7 +126,6 @@ export async function startDaemon(opts: {
   ownerChatId?: string
   pollTimeout?: number
   pollHardTimeoutMs?: number
-  codexTarget?: { name: string; cwd: string; command: string; args: string[]; statePath: string }
 }): Promise<Daemon> {
   const dataDir = mkdtempSync(join(tmpdir(), 'tg-daemon-test-'))
   const port = await getFreePort()
@@ -140,9 +139,6 @@ export async function startDaemon(opts: {
   // point at dataDir so the test exercises the real resolution path.
   writeFileSync(join(dataDir, 'config.yaml'),
     `channels:\n  telegram:\n    port: ${port}\n    poll_timeout: ${pollTimeout}\n${hardLine}`)
-  writeFileSync(join(dataDir, 'workshop.yaml'), opts.codexTarget
-    ? `session: workshop\nmates:\n  - name: ${opts.codexTarget.name}\n    cwd: ${opts.codexTarget.cwd}\n    runtime: codex\n`
-    : 'session: workshop\nmates: []\n')
   writeFileSync(join(dataDir, 'secrets.yaml'),
     `channels:\n  telegram:\n    token: "test-token"\n    owner_chat_id: "${ownerChatId}"\n`)
   // Two launch modes, SAME assertions:
@@ -157,11 +153,6 @@ export async function startDaemon(opts: {
     TELEGRAM_API_ROOT: opts.apiRoot,
     KA_DAEMON_DATA_DIR: dataDir,
     KA_CONFIG_DIR: dataDir,
-  }
-  if (opts.codexTarget) {
-    env.KA_CODEX_APP_SERVER_COMMAND = opts.codexTarget.command
-    env.KA_CODEX_APP_SERVER_ARGS_JSON = JSON.stringify(opts.codexTarget.args)
-    env.FAKE_CODEX_STATE = opts.codexTarget.statePath
   }
   if (bundle) {
     cmd = ['node', bundle]

@@ -1,4 +1,4 @@
-import { AppServerClient, type AppServerClientOptions } from './app-server-client.ts'
+import { AppServerClient } from './app-server-client.ts'
 import { CodexChannelTarget, type CodexChannelEvent } from './channel-target.ts'
 import { BindingStore, type ChannelPlatform } from '../bindings.ts'
 import { registerRuntimeTarget, unregisterRuntimeTarget } from '../targets.ts'
@@ -6,78 +6,85 @@ import { channelNumberOf } from '../sessions.ts'
 import type { Platform } from '../platform.ts'
 import { log } from '../log.ts'
 
-export interface CodexTargetConfig {
+export interface CodexRuntimeRegistration {
   name: string
   cwd: string
-  externalChatId: string
-  externalThreadId?: string
+  socketPath: string
 }
 
 export interface CodexRuntimeConfig {
   platform: ChannelPlatform
   bindingsPath: string
-  targets: CodexTargetConfig[]
-  client?: AppServerClientOptions
+  externalChatId: string
+  requestTimeoutMs?: number
 }
+
+type ManagedTarget = { target: CodexChannelTarget; client: AppServerClient }
 
 export class CodexRuntimeManager {
   private readonly platform: Platform
   private readonly config: CodexRuntimeConfig
-  private readonly client: AppServerClient
-  private readonly targets: CodexChannelTarget[] = []
+  private readonly bindings: BindingStore
+  private readonly targets = new Map<string, ManagedTarget>()
   private readonly streams = new Map<string, {
-    prefix: string
-    text: string
-    handle: Promise<unknown>
-    lastUpdate: number
-    timer?: NodeJS.Timeout
+    prefix: string; text: string; handle: Promise<unknown>; lastUpdate: number; timer?: NodeJS.Timeout
   }>()
 
   constructor(platform: Platform, config: CodexRuntimeConfig) {
     this.platform = platform
     this.config = config
-    this.client = new AppServerClient({
-      ...config.client,
-      serverRequestHandler: request => this.handleServerRequest(request),
-    })
+    this.bindings = new BindingStore(config.bindingsPath)
   }
 
-  async start(): Promise<void> {
-    if (this.config.targets.length === 0) return
-    await this.client.start()
-    await this.client.initialize()
-    const bindings = new BindingStore(this.config.bindingsPath)
+  async register(item: CodexRuntimeRegistration): Promise<void> {
+    await this.unregister(item.name)
+    const client = new AppServerClient({
+      socketPath: item.socketPath,
+      requestTimeoutMs: this.config.requestTimeoutMs,
+      serverRequestHandler: request => this.handleServerRequest(request),
+    })
+    await client.start()
+    await client.initialize()
+    const target = new CodexChannelTarget({
+      name: item.name,
+      cwd: item.cwd,
+      platform: this.config.platform,
+      externalChatId: this.config.externalChatId,
+      client,
+      bindings: this.bindings,
+      onEvent: (event, source) => this.onEvent(item.name, event, source.meta.chat_id || this.config.externalChatId),
+    })
     try {
-      for (const item of this.config.targets) {
-        const target = new CodexChannelTarget({
-          ...item,
-          platform: this.config.platform,
-          client: this.client,
-          bindings,
-          onEvent: (event, source) => this.onEvent(item.name, event, source.meta.chat_id || item.externalChatId),
-        })
-        await target.connect()
-        registerRuntimeTarget(target)
-        this.targets.push(target)
-        log(`codex target online: ${item.name} (${item.cwd})`)
-      }
+      await target.connect()
+      registerRuntimeTarget(target)
+      this.targets.set(item.name, { target, client })
+      log(`codex target registered: ${item.name} (${item.socketPath})`)
     } catch (error) {
-      await this.stop()
+      target.shutdown()
+      await client.stop()
       throw error
     }
   }
 
+  async unregister(name: string): Promise<boolean> {
+    const managed = this.targets.get(name)
+    if (!managed) return false
+    this.targets.delete(name)
+    managed.target.shutdown()
+    unregisterRuntimeTarget(name, managed.target)
+    await managed.client.stop()
+    log(`codex target unregistered: ${name}`)
+    return true
+  }
+
   async stop(): Promise<void> {
-    for (const target of this.targets) {
-      target.shutdown()
-      unregisterRuntimeTarget(target.name, target)
-    }
-    this.targets.length = 0
-    for (const stream of this.streams.values()) {
-      if (stream.timer) clearTimeout(stream.timer)
-    }
+    await Promise.all(Array.from(this.targets.keys(), name => this.unregister(name)))
+    for (const stream of this.streams.values()) if (stream.timer) clearTimeout(stream.timer)
     this.streams.clear()
-    await this.client.stop()
+  }
+
+  registrations(): Array<{ name: string; alive: boolean }> {
+    return Array.from(this.targets, ([name, managed]) => ({ name, alive: managed.target.isAlive() }))
   }
 
   private async onEvent(name: string, event: CodexChannelEvent, replyTarget: string): Promise<void> {
@@ -85,19 +92,11 @@ export class CodexRuntimeManager {
       const target = this.platform.resolveReplyTarget(replyTarget)
       if (target) {
         const prefix = `**[#${channelNumberOf(name)}-${name}]** `
-        this.streams.set(event.turnId, {
-          prefix,
-          text: '',
-          handle: this.platform.startStream(target, `${prefix}…`),
-          lastUpdate: 0,
-        })
+        this.streams.set(event.turnId, { prefix, text: '', handle: this.platform.startStream(target, `${prefix}…`), lastUpdate: 0 })
       }
     } else if (event.type === 'text-delta') {
       const stream = this.streams.get(event.turnId)
-      if (stream) {
-        stream.text += event.delta
-        this.scheduleStreamUpdate(event.turnId, stream)
-      }
+      if (stream) { stream.text += event.delta; this.scheduleStreamUpdate(event.turnId, stream) }
     } else if (event.type === 'final') {
       const stream = this.streams.get(event.turnId)
       if (stream && this.platform.finishStream) {
@@ -109,8 +108,7 @@ export class CodexRuntimeManager {
       }
       const target = this.platform.resolveReplyTarget(replyTarget)
       if (!target) throw new Error(`reply target not allowed: ${replyTarget}`)
-      const prefix = `**[#${channelNumberOf(name)}-${name}]** `
-      const error = await this.platform.send(target, `${prefix}${event.text}`)
+      const error = await this.platform.send(target, `**[#${channelNumberOf(name)}-${name}]** ${event.text}`)
       if (error) throw new Error(error)
     } else if (event.type === 'activity') {
       const target = this.platform.resolveReplyTarget(replyTarget)
@@ -119,9 +117,7 @@ export class CodexRuntimeManager {
       const target = this.platform.resolveReplyTarget(replyTarget)
       if (target) {
         const command = String(event.request.params?.command ?? 'requested action')
-        await this.platform.send(target,
-          `⚠️ ${name} requests approval ${event.requestId}: ${command}\n` +
-          `Reply with \`to ${name}: /approve ${event.requestId}\` or \`to ${name}: /deny ${event.requestId}\`.`)
+        await this.platform.send(target, `⚠️ ${name} requests approval ${event.requestId}: ${command}\nReply with \`to ${name}: /approve ${event.requestId}\` or \`to ${name}: /deny ${event.requestId}\`.`)
       }
     } else if (event.type === 'error') {
       log(`codex target ${name} failed: ${event.error.message}`)
@@ -146,8 +142,8 @@ export class CodexRuntimeManager {
 
   private async handleServerRequest(request: Record<string, any>): Promise<unknown> {
     const threadId = String(request.params?.threadId ?? '')
-    const target = this.targets.find(candidate => candidate.ownsThread(threadId))
-    if (!target) throw new Error(`approval request for unknown Codex thread: ${threadId}`)
-    return target.requestApproval(request)
+    const managed = Array.from(this.targets.values()).find(candidate => candidate.target.ownsThread(threadId))
+    if (!managed) throw new Error(`approval request for unknown Codex thread: ${threadId}`)
+    return managed.target.requestApproval(request)
   }
 }

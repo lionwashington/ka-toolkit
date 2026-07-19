@@ -7,8 +7,9 @@ commands.
 > **Status**: implemented for **cc** and **codex**. The CC-specific logic lives behind sourced
 > adapter files in `workshop/ops/runtimes/cc/` (`launch.sh`, `ready-signals.sh`,
 > `send-prompt.sh`, `post-launch.sh`) plus `cc/bin/start-pane.sh`;
-> `workshop/ops/runtimes/dispatch.sh` loads them. Codex uses the stable interactive
-> CLI plus `resume --last`; `gemini` remains reserved. This doc is the contract
+> `workshop/ops/runtimes/dispatch.sh` loads them. Codex uses a Workshop-owned App
+> Server sidecar, connects its TUI through the same Unix socket, and defaults to
+> `resume --last`; `gemini` remains reserved. This doc is the contract
 > the cc adapter satisfies and any new runtime must implement.
 
 ## Naming convention
@@ -53,6 +54,11 @@ Echo the runtime's executable name (CC: `claude`). **CC**: `workshop/ops/runtime
 Echo the path to the per-pane launch script (guarantees cwd, sets the channel
 via `KA_CHANNEL`, resolves `--resume`). The top-level `start-pane.sh` is only a
 dispatcher. **CC**: `workshop/ops/runtimes/cc/bin/start-pane.sh`.
+
+The Codex implementation also owns the App Server sidecar lifecycle. While the
+pane is alive it registers the socket with Channel's loopback API and retries
+registration after Channel restarts. Pane exit unregisters the target and stops
+the sidecar.
 
 ### `runtime::post_launch <tmux_target> <name>` (optional)
 
