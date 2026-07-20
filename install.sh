@@ -40,8 +40,20 @@ LARK_DIR="${KA_LARK_DIR:-$HOME/.lark-channel}"                        # old lark
 # daemons are always deployed; only the active one is started.
 
 DRY_RUN=0; ONLY=""; DO_SWITCH=0; DO_CLEANUP=0; CHANNEL_KIND_ARG=""
+usage() {
+  cat <<'EOF'
+Usage: ./install.sh [options]
+  --dry-run                  Print actions without changing runtime files
+  --only <component>         Deploy one component
+  --switch                   Switch live registrations after deployment
+  --cleanup-old              Remove obsolete deployed artifacts
+  --channel-kind <kind>      Select telegram or lark
+  -h, --help                 Show this help and exit
+EOF
+}
 for a in "$@"; do
   case "$a" in
+    -h|--help) usage; exit 0 ;;
     --dry-run)  DRY_RUN=1 ;;
     --switch)   DO_SWITCH=1 ;;
     --cleanup-old) DO_CLEANUP=1 ;;
