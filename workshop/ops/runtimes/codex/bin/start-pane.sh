@@ -45,6 +45,45 @@ RUNTIME_NAME="${KA_CHANNEL:-$PANE_NAME}"
 SAFE_NAME="$(printf '%s' "$RUNTIME_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]//g')"
 [ -n "$SAFE_NAME" ] || SAFE_NAME="main"
 SERVER_LOG="$SOCKET_DIR/$SAFE_NAME.log"
+PORT_LOCK_DIR="$SOCKET_DIR/.port-allocation.lock"
+PORT_LOCK_HELD=0
+APP_SERVER_PID=""
+
+release_port_lock() {
+    if [ "$PORT_LOCK_HELD" = "1" ]; then
+        rm -f "$PORT_LOCK_DIR/pid"
+        rmdir "$PORT_LOCK_DIR" 2>/dev/null || true
+        PORT_LOCK_HELD=0
+    fi
+}
+
+cleanup() {
+    release_port_lock
+    [ -n "${REGISTRAR_PID:-}" ] && kill "$REGISTRAR_PID" 2>/dev/null || true
+    curl -sf -X DELETE "http://127.0.0.1:${KA_CHANNEL_PORT:-9877}/api/runtimes/codex/$SAFE_NAME" >/dev/null 2>&1 || true
+    [ -n "$APP_SERVER_PID" ] && kill "$APP_SERVER_PID" 2>/dev/null || true
+    [ -n "$APP_SERVER_PID" ] && wait "$APP_SERVER_PID" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM HUP
+
+# Port discovery closes its temporary listener before App Server binds. Serialize
+# that small gap across Workshop panes so simultaneous Codex mates cannot select
+# the same ephemeral port.
+for _ in $(seq 1 200); do
+    if mkdir "$PORT_LOCK_DIR" 2>/dev/null; then
+        printf '%s\n' "$$" > "$PORT_LOCK_DIR/pid"
+        PORT_LOCK_HELD=1
+        break
+    fi
+    lock_pid="$(cat "$PORT_LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+        rm -f "$PORT_LOCK_DIR/pid"
+        rmdir "$PORT_LOCK_DIR" 2>/dev/null || true
+    fi
+    sleep 0.05
+done
+[ "$PORT_LOCK_HELD" = "1" ] || { echo "[start-pane:$PANE_NAME] ERROR: timed out allocating App Server port"; exit 1; }
+
 APP_SERVER_PORT="$(node -e 'const s=require("net").createServer();s.listen(0,"127.0.0.1",()=>{process.stdout.write(String(s.address().port));s.close()})')"
 APP_SERVER_ENDPOINT="ws://127.0.0.1:$APP_SERVER_PORT"
 
@@ -58,14 +97,6 @@ codex \
     app-server --listen "$APP_SERVER_ENDPOINT" >>"$SERVER_LOG" 2>&1 &
 APP_SERVER_PID=$!
 
-cleanup() {
-    [ -n "${REGISTRAR_PID:-}" ] && kill "$REGISTRAR_PID" 2>/dev/null || true
-    curl -sf -X DELETE "http://127.0.0.1:${KA_CHANNEL_PORT:-9877}/api/runtimes/codex/$SAFE_NAME" >/dev/null 2>&1 || true
-    kill "$APP_SERVER_PID" 2>/dev/null || true
-    wait "$APP_SERVER_PID" 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM HUP
-
 for _ in $(seq 1 100); do
     node -e 'const net=require("net");const s=net.connect(Number(process.argv[1]),"127.0.0.1",()=>{s.end();process.exit(0)});s.on("error",()=>process.exit(1))' "$APP_SERVER_PORT" >/dev/null 2>&1 && break
     kill -0 "$APP_SERVER_PID" 2>/dev/null || {
@@ -75,6 +106,7 @@ for _ in $(seq 1 100); do
     sleep 0.1
 done
 kill -0 "$APP_SERVER_PID" 2>/dev/null || { echo "[start-pane:$PANE_NAME] ERROR: App Server did not start"; exit 1; }
+release_port_lock
 
 register_loop() {
     local port="${KA_CHANNEL_PORT:-9877}"
@@ -99,27 +131,40 @@ run_codex() {
     codex --remote "$APP_SERVER_ENDPOINT" "$@"
 }
 
+run_resume_last() {
+    started_at="$(date +%s)"
+    set +e
+    run_codex "$@" resume --last
+    rc=$?
+    set -e
+    elapsed=$(( $(date +%s) - started_at ))
+    if [ "$rc" -ne 0 ] && [ "$elapsed" -lt 10 ]; then
+        echo "[start-pane:$PANE_NAME] no resumable Codex session; starting fresh"
+        run_codex "$@"
+        return $?
+    fi
+    return "$rc"
+}
+
 # Explicit arguments are authoritative. This supports session IDs via
 # `args: [resume, <session-id>]` and any documented global flags.
 if [ "$#" -gt 0 ]; then
-    echo "[start-pane:$PANE_NAME] codex $* (Workshop-managed App Server)"
-    run_codex "$@"
+    # Claude Code used a top-level `--last`; Codex exposes it under `resume`.
+    # Preserve the remaining global flags when an existing Workshop config is
+    # migrated by changing only its runtime.
+    if [ "$1" = "--last" ]; then
+        shift
+        echo "[start-pane:$PANE_NAME] codex $* resume --last (Workshop-managed App Server)"
+        run_resume_last "$@"
+    else
+        echo "[start-pane:$PANE_NAME] codex $* (Workshop-managed App Server)"
+        run_codex "$@"
+    fi
     exit $?
 fi
 
-# Default to the most recent interactive session for this cwd. On a first-ever
-# launch `resume --last` exits quickly because no session exists; only that
-# startup failure falls back to a fresh TUI. A normally used TUI is never
-# relaunched after the user exits.
-started_at="$(date +%s)"
-set +e
-run_codex resume --last --sandbox workspace-write --ask-for-approval on-request
-rc=$?
-set -e
-elapsed=$(( $(date +%s) - started_at ))
-if [ "$rc" -ne 0 ] && [ "$elapsed" -lt 10 ]; then
-    echo "[start-pane:$PANE_NAME] no resumable Codex session; starting fresh"
-    run_codex --sandbox workspace-write --ask-for-approval on-request
-    exit $?
-fi
-exit "$rc"
+# `resume --last` is global and can attach several concurrently-started mates to
+# the same thread. Start an isolated TUI by default; callers that need continuity
+# must provide `args: [resume, <thread-id>]` explicitly.
+run_codex --sandbox workspace-write --ask-for-approval on-request
+exit $?

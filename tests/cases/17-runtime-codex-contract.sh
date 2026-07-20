@@ -44,13 +44,34 @@ grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --model test-model$' "$tmp_root/
 
 : > "$tmp_root/calls"
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
+    "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" --last --dangerously-bypass-approvals-and-sandbox >/dev/null 2>&1 \
+    || fail "legacy --last Codex launch failed"
+grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-approvals-and-sandbox resume --last$' "$tmp_root/calls" \
+    || fail "legacy --last was not translated to Codex resume --last"
+grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-approvals-and-sandbox$' "$tmp_root/calls" \
+    || fail "legacy --last did not fall back to a fresh Codex TUI"
+
+: > "$tmp_root/calls"
+FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" >/dev/null 2>&1 \
-    || fail "Codex resume fallback failed"
-grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ resume --last --sandbox workspace-write --ask-for-approval on-request$' "$tmp_root/calls" \
-    || fail "default resume command missing"
+    || fail "fresh Codex launch failed"
 grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --sandbox workspace-write --ask-for-approval on-request$' "$tmp_root/calls" \
-    || fail "fresh fallback command missing"
+    || fail "isolated default launch missing"
+if grep -Eq -- 'resume --last' "$tmp_root/calls"; then fail "default launch reused a global Codex thread"; fi
+ok "Codex launch preserves args, migrates legacy --last, and isolates default threads"
+
+: > "$tmp_root/calls"
+pids=""
+for name in one two three four five; do
+    FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" KA_CHANNEL="$name" \
+        "$OPS/start-pane.sh" codex "$name" "$tmp_root/work" --model test-model >/dev/null 2>&1 &
+    pids="$pids $!"
+done
+for pid in $pids; do wait "$pid" || fail "concurrent Codex pane launch failed"; done
+ports="$(sed -n 's/.*app-server --listen ws:\/\/127\.0\.0\.1:\([0-9][0-9]*\).*/\1/p' "$tmp_root/calls")"
+[ "$(printf '%s\n' "$ports" | sed '/^$/d' | wc -l | tr -d ' ')" = "5" ] || fail "did not observe five App Server launches"
+[ "$(printf '%s\n' "$ports" | sort -u | wc -l | tr -d ' ')" = "5" ] || fail "concurrent Codex panes reused an App Server port"
 rm -rf "$tmp_root"
-ok "Codex launch preserves args and falls back from empty resume"
+ok "concurrent Codex panes allocate distinct App Server ports"
 
 echo "PASS: 17-runtime-codex-contract"
