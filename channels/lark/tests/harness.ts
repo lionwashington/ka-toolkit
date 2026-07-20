@@ -66,6 +66,7 @@ export async function startDaemon(opts: {
   chatId?: string
   pollIntervalSeconds?: number
   cardKitFail?: boolean
+  cardKitUpdateFail?: boolean
 }): Promise<Daemon> {
   const dataDir = mkdtempSync(join(tmpdir(), 'lark-daemon-test-'))
   const mockDir = join(dataDir, 'mock')
@@ -95,6 +96,7 @@ export async function startDaemon(opts: {
     LARK_MOCK_DIR: mockDir,
   }
   if (opts.cardKitFail) env.LARK_MOCK_CARDKIT_FAIL = '1'
+  if (opts.cardKitUpdateFail) env.LARK_MOCK_CARDKIT_UPDATE_FAIL = '1'
   const bundle = process.env.KA_TEST_DAEMON_BUNDLE
   const cmd = bundle
     ? ['node', bundle]

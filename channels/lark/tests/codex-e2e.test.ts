@@ -85,3 +85,106 @@ test('Lark falls back to final webhook delivery when CardKit is unavailable', as
     await webhook.close()
   }
 })
+
+test('Lark falls back to the webhook when an established CardKit stream cannot update', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'ka-lark-codex-update-fallback-'))
+  const webhook = await startMockWebhook()
+  const daemon = await startDaemon({
+    webhookUrl: webhook.url,
+    pollIntervalSeconds: 0.05,
+    cardKitUpdateFail: true,
+  })
+  const appServer = await registerFake(daemon, workspace, 'codex-reviewer')
+  try {
+    assert.equal(await waitForReady(daemon.baseUrl), true)
+    daemon.pushMessages('oc_test', [ownerMsg({
+      mid: 'om_update_fallback',
+      text: 'to codex-reviewer: update-fallback',
+      createTime: '2030-01-01 00:03',
+    })])
+    const delivered = await waitFor(() => webhook.sent().some(message => message.text.includes('echo:update-fallback')), 10_000)
+    assert.equal(delivered, true, `sent=${JSON.stringify(webhook.sent())}\napi=${daemon.apiCalls()}`)
+    assert.match(daemon.apiCalls(), /PUT\t\/open-apis\/cardkit\/v1\/cards\/card-1\/elements\/content\/content/)
+  } finally {
+    await daemon.stop()
+    await appServer.close()
+    await webhook.close()
+  }
+})
+
+test('Lark closes Codex streams that complete or fail without an agent text delta', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'ka-lark-codex-empty-'))
+  const webhook = await startMockWebhook()
+  const daemon = await startDaemon({ webhookUrl: webhook.url, pollIntervalSeconds: 0.05 })
+  const appServer = await registerFake(daemon, workspace, 'codex-reviewer')
+  try {
+    assert.equal(await waitForReady(daemon.baseUrl), true)
+    daemon.pushMessages('oc_test', [ownerMsg({
+      mid: 'om_empty',
+      text: 'to codex-reviewer: complete-without-text',
+      createTime: '2030-01-01 00:04',
+    })])
+    const closed = await waitFor(() =>
+      daemon.apiCalls().includes('Codex completed without a text response.') &&
+      daemon.apiCalls().includes('/settings'), 10_000)
+    assert.equal(closed, true, daemon.apiCalls())
+
+    daemon.pushMessages('oc_test', [ownerMsg({
+      mid: 'om_failed_empty',
+      text: 'to codex-reviewer: fail-without-text',
+      createTime: '2030-01-01 00:05',
+    })])
+    const failedClosed = await waitFor(() =>
+      daemon.apiCalls().includes('Codex turn failed without a text response.') &&
+      daemon.apiCalls().split('\n').filter(line => line.includes('/settings')).length >= 2, 10_000)
+    assert.equal(failedClosed, true, daemon.apiCalls())
+  } finally {
+    await daemon.stop()
+    await appServer.close()
+    await webhook.close()
+  }
+})
+
+test('Lark routes Codex approvals, images, and interrupt controls end to end', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'ka-lark-codex-controls-'))
+  const webhook = await startMockWebhook()
+  const daemon = await startDaemon({ webhookUrl: webhook.url, pollIntervalSeconds: 0.05 })
+  const appServer = await registerFake(daemon, workspace, 'codex-reviewer')
+  try {
+    assert.equal(await waitForReady(daemon.baseUrl), true)
+
+    daemon.pushMessages('oc_test', [ownerMsg({
+      mid: 'om_approval', text: 'to codex-reviewer: approve-me', createTime: '2030-01-01 00:05',
+    })])
+    assert.equal(await waitFor(() => webhook.sent().some(message => message.text.includes('requests approval 1')), 10_000), true)
+    daemon.pushMessages('oc_test', [ownerMsg({
+      mid: 'om_approve', text: 'to codex-reviewer: /approve 1', createTime: '2030-01-01 00:06',
+    })])
+    assert.equal(await waitFor(() => daemon.apiCalls().includes('echo:approve-me'), 10_000), true)
+
+    daemon.pushMessages('oc_test', [{
+      message_id: 'om_image',
+      message_position: '3',
+      create_time: '2030-01-01 00:07',
+      sender: { id: 'ou_test_self', sender_type: 'user', name: 'Owner' },
+      msg_type: 'image',
+      content: '[Image: img_codex_test]',
+    }])
+    assert.equal(await waitFor(() =>
+      daemon.apiCalls().includes('echo:[image]|localImage:') && daemon.apiCalls().includes('om_image'), 10_000), true)
+
+    daemon.pushMessages('oc_test', [ownerMsg({
+      mid: 'om_wait', text: 'to codex-reviewer: wait-for-interrupt', createTime: '2030-01-01 00:08',
+    })])
+    assert.equal(await waitFor(() => daemon.apiCalls().split('\n').filter(line => line.includes('/messages')).length >= 3, 10_000), true)
+    daemon.pushMessages('oc_test', [ownerMsg({
+      mid: 'om_stop', text: 'to codex-reviewer: /stop', createTime: '2030-01-01 00:09',
+    })])
+    assert.equal(await waitFor(() => webhook.sent().some(message => message.text.includes('Interrupt requested.')), 10_000), true)
+    assert.equal(await waitFor(() => daemon.apiCalls().includes('Codex turn interrupted.'), 10_000), true)
+  } finally {
+    await daemon.stop()
+    await appServer.close()
+    await webhook.close()
+  }
+})

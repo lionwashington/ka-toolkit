@@ -5,12 +5,12 @@
 
 ## 1. Goal & Positioning
 
-lark-channel is a **standalone background daemon** that bridges Lark group chats and Claude Code in both directions:
+lark-channel is a **standalone background daemon** that bridges Lark group chats and agent runtimes in both directions:
 
-- **Inbound**: polls Lark groups for new messages sent by **the user themselves**, and pushes them to connected Claude Code sessions via MCP
-- **Outbound**: exposes a `reply` MCP tool; once Claude calls it, the message is sent back to the Lark group via the group bot's webhook
+- **Inbound**: polls Lark groups for new messages sent by **the user themselves**, then dispatches them to a Claude Code MCP session or a registered Codex App Server target
+- **Outbound**: Claude replies through the `reply` MCP tool; Codex replies through normalized runtime events and a CardKit stream with webhook fallback
 
-The user sends and receives in Lark on their phone/computer; the **terminal transcript never reaches the user** — they only see what the `reply` tool sends out.
+The user sends and receives in Lark on their phone/computer; the **terminal transcript never reaches the user** — they only see explicit Claude `reply` tool output or Codex runtime replies emitted by the daemon.
 
 ## 2. Why a Standalone HTTP Daemon (not a stdio MCP)
 
@@ -38,6 +38,13 @@ Claude Code MCP client (some session)
    ▼  POST /mcp
 daemon  ──webhook POST──▶  Lark group (reply, auto-prefixed with [channel name])
 ```
+
+For Codex, Workshop starts one App Server per mate on a loopback WebSocket and
+registers its endpoint plus canonical thread ID through `/api/runtimes/codex`.
+The daemon resumes that thread, submits `turn/start`, maps downloaded Lark images
+to `localImage`, streams agent-message deltas into CardKit, and maps `/stop` to
+`turn/interrupt`. App Server lifecycle remains owned by Workshop; the Lark daemon
+only owns the client connection and channel routing.
 
 ## 4. Multi-session / Named Routing Model (v0.4.0 core)
 

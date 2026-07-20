@@ -37,13 +37,22 @@ test('maps downloaded platform images to Codex localImage input', () => {
     content: 'describe this',
     meta: { attachment_path: '/tmp/photo.jpg', attachment_kind: 'photo' },
   }), [
-    { type: 'text', text: 'describe this' },
+    { type: 'text', text: 'describe this', text_elements: [] },
     { type: 'localImage', path: '/tmp/photo.jpg' },
   ])
   assert.deepEqual(buildCodexTurnInput({
     content: '[attachment: notes.pdf]',
     meta: { attachment_path: '/tmp/notes.pdf', attachment_kind: 'document' },
-  }), [{ type: 'text', text: '[attachment: notes.pdf]\n\nLocal attachment path: /tmp/notes.pdf' }])
+  }), [{ type: 'text', text: '[attachment: notes.pdf]\n\nLocal attachment path: /tmp/notes.pdf', text_elements: [] }])
+})
+
+test('uses the completed turn item when no agent-message delta was emitted', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-final-item-'))
+  const events: CodexChannelEvent[] = []
+  const appServer = client(join(dir, 'fake-state.json'))
+  await target(dir, appServer, events).deliver({ content: 'final-item-only', meta: {} })
+  assert.equal(events.find(event => event.type === 'final')?.text, 'echo:final-item-only')
+  await appServer.stop()
 })
 
 test('serializes turns, emits normalized events, and persists a durable binding', async () => {

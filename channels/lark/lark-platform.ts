@@ -297,7 +297,14 @@ function enqueueCardUpdate(handle: LarkStreamHandle, text: string, finish: boole
     const updated = await callLarkApi('PUT',
       `/open-apis/cardkit/v1/cards/${encodeURIComponent(handle.cardId)}/elements/content/content`,
       { content: text || ' ', sequence: handle.sequence, uuid: `ka-${handle.cardId}-${handle.sequence}` })
-    if (!updated.ok) return `CardKit update failed: ${updated.error ?? 'unknown error'}`
+    if (!updated.ok) {
+      // A card can be created and sent successfully, then lose update access or
+      // hit a transient CardKit failure. Stop trying to edit that card and make
+      // sure the completed answer still reaches the group through its webhook.
+      handle.mode = 'fallback'
+      log(`CardKit update failed; using final webhook delivery: ${updated.error ?? 'unknown error'}`)
+      return finish ? postToLarkWebhook(handle.target, text) : null
+    }
     if (!finish) return null
     handle.sequence++
     const closed = await callLarkApi('PATCH',

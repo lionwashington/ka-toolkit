@@ -1,6 +1,6 @@
 ---
 name: lark-channel
-description: Manage the standalone lark-channel daemon — a process that polls Lark groups for new messages and pushes them into Claude Code via MCP HTTP transport (with named-channel routing), and exposes a `reply` tool to post back to those groups via webhook bots. Use this skill when the user asks to start/stop/check the lark-channel daemon, launch a named session (claude-ch), set up channel routing, when they report Lark messages aren't reaching Claude, or when troubleshooting Lark↔Claude connectivity issues. Do NOT use this skill for normal Lark API operations — those are in lark-im / lark-drive / etc.
+description: Manage the standalone lark-channel daemon — a process that polls Lark groups and routes messages to Claude Code over MCP or to Workshop-managed Codex App Server targets, then posts replies through webhook bots or CardKit. Use this skill for daemon lifecycle, named-channel routing, and Lark↔agent-runtime connectivity troubleshooting. Do NOT use this skill for normal Lark API operations — those are in lark-im / lark-drive / etc.
 ---
 
 # lark-channel daemon
@@ -8,13 +8,14 @@ description: Manage the standalone lark-channel daemon — a process that polls 
 A **standalone background daemon** (decoupled from Claude Code lifecycle) that:
 - Polls Lark groups on **per-group intervals** (`Example Group A` 1s, `Example Group B` 5s)
 - Filters for messages from the user (`self_open_id`)
-- Routes them to **all sessions of the target channel** as `notifications/claude/channel`
-- Accepts replies via webhook bots (one per group), auto-prefixed with `[channel name]`
+- Routes them to all Claude MCP sessions of the target name or to its registered Codex target
+- Accepts replies via webhook bots or CardKit, auto-prefixed with `[#number-name]`
+- Drives registered Codex threads through App Server and streams their replies through CardKit with webhook fallback
 
-**Full architecture design** is in `~/.lark-channel/ARCHITECTURE.md`; the user manual is in `~/.lark-channel/README.md`.
+The source documentation is in `docs/channels/lark/{ARCHITECTURE,README}.md`.
 
 **Key invariants (v0.5.3)**:
-- Only ONE daemon instance runs at a time (`flock` on `~/.lark-channel/.daemon.lock`).
+- Only ONE daemon instance runs at a time (`flock` on `~/.knowledge-assistant/channels/lark-daemon/.daemon.lock`).
 - **(v0.6.0)** Primary store `byName: Map<name, Session[]>` — per-name FIFO, cap = 4 (`PER_NAME_FIFO_CAP`); when the oldest gets pushed out, its connection is closed and it's removed from the `sessionsById` index in sync. Fully resolves session accumulation bloat (v0.5.x accumulated 2482 over several days → now at most 7×4 = 28).
 - Auxiliary `sessionsById: Map<id, Session>` — only for HTTP request → transport routing (request headers carry the id, not the name).
 - `monoTs: bigint` (hrtime nanoseconds) used for monotonic-time ordering, avoiding `Date.now()` ms-level collisions.
@@ -28,16 +29,15 @@ A **standalone background daemon** (decoupled from Claude Code lifecycle) that:
 ## ⚠️ The Most Important Ops Commandment: Don't Casually Restart the daemon
 
 **Restarting the daemon interrupts the SSE notification stream of connected clients.** The `--dangerously-load-development-channels` channel consumer is bound to the MCP session that existed at Claude startup; a daemon restart forces the client to re-init into a new session, but the consumer may still be bound to the old (dead) session → messages get delivered to a session nobody consumes, presenting as "the daemon clearly dispatched, but the conversation never receives it".
-- **When you must restart the daemon after editing server.ts**: after restarting, **each connected client must also be restarted once** (to rebind the consumer). Be sure to inform the user in advance.
+- **When you must restart after changing daemon source**: deploy it with `./install.sh --only daemon`. Claude MCP clients may need one restart to rebind their consumer; Workshop-managed Codex targets re-register automatically.
 - For routine troubleshooting, **prefer methods that don't require a restart** (check status, check the log, clear state).
 
 ## Layout
 
 ```
-~/.lark-channel/
-├── config.json           # groups + webhooks + polling interval
+~/.knowledge-assistant/channels/lark-daemon/
+├── daemon.mjs            # deployed self-contained daemon bundle
 ├── state.json            # last_seen watermark per group
-├── server.ts             # daemon source (Node + TypeScript, run via --experimental-strip-types)
 ├── daemon.sh             # foreground runner (flock-protected) — DON'T run directly
 ├── start.sh              # idempotent starter — USE THIS to launch
 ├── status.sh             # health check (exit 0 if alive, 1 if dead)
@@ -45,9 +45,11 @@ A **standalone background daemon** (decoupled from Claude Code lifecycle) that:
 ├── channel.log           # daemon's own log (lifecycle, dispatches, /mcp methods, errors)
 ├── daemon.stdout.log     # stdout/stderr from background launch
 ├── daemon.pid            # pid of running daemon
-├── .daemon.lock          # flock for singleton
-├── ARCHITECTURE.md       # architecture design (data structures / owner model / dedup / probing / self-heal)
-└── README.md             # user manual (claude-ch / routing syntax / ops commands)
+└── .daemon.lock          # flock for singleton
+
+~/.knowledge-assistant/config/
+├── config.yaml           # non-secret channel kind, port, polling configuration
+└── secrets.yaml          # self_open_id, chat IDs, webhook URLs (mode 600)
 
 ~/.local/bin/claude-ch    # wrapper script to launch a named session
 ```
@@ -67,6 +69,16 @@ When Claude Code starts, it connects to `http://127.0.0.1:9876/mcp`. If the daem
 
 ## Named channel + routing (v0.4.0)
 
+### Codex targets
+
+Codex targets are not MCP sessions and are not configured under `channels.lark`.
+`ka workshop` starts one loopback App Server per `runtime: codex` mate and registers
+its endpoint plus canonical thread ID with the active daemon. Inspect
+`/api/status.runtime_targets` to verify registration. `/stop` interrupts the active
+turn; images are passed as `localImage`; CardKit creation or update failures fall
+back to the configured group webhook. Restart or repair the Workshop mate when a
+Codex target is absent or `alive: false`.
+
 ### Launch a named session — `claude-ch`
 
 ```bash
@@ -82,13 +94,13 @@ claude-ch audit --dangerously-skip-permissions --dangerously-load-development-ch
 
 | Form | Behavior |
 |---|---|
-| `content` | Default → `main` |
+| `content` | Sticky → the chat's last explicit single target; if none is available, ask the user to select a target |
 | `to <name>: content` / `to <name> content` / `2<name>` / `2 <name> content` | Delivered to `<name>` (prefix `to`/`2`, spaces flexible, colon optional) |
 | `to 1:` / `to2:` / `to 3` / `2 1: content` | Deliver by **number** (numbers in `channel_numbers`) |
 | `to all: content` / `2 all content` | Broadcast to all online channels |
 | `to <nonexistent>: content` | With explicit colon → daemon replies "offline" + lists online channels (#numbers) |
 
-**No-colon anti-misroute rule**: with a colon = explicit routing (a miss returns a hint); without a colon = route only if the target matches an **online** channel (name or number), otherwise treat as a plain message and send the full text to main (so `tomorrow ...` / `2 weeks later` won't be misrouted).
+**No-colon anti-misroute rule**: with a colon = explicit routing (a miss returns a hint); without a colon = route only if the target matches an **online** channel (name or number), otherwise treat the full text as a sticky plain message (so `tomorrow ...` / `2 weeks later` won't be misrouted).
 
 **Numbers**: `state.channel_numbers` (name→number) is persisted, assigned on first sight, retained across disconnect, reused on reconnect, so `to 2:` is always the same channel. `channelNumberOf()` / `nameByNumber()`.
 
@@ -117,7 +129,7 @@ Invoke this skill when the user says any of:
 ### Step 1 — Check status
 
 ```bash
-~/.lark-channel/status.sh
+~/.knowledge-assistant/channels/lark-daemon/status.sh
 ```
 
 - Exit 0 + JSON → daemon alive, problem is elsewhere (see Step 3)
@@ -126,7 +138,7 @@ Invoke this skill when the user says any of:
 ### Step 2 — Start daemon if dead
 
 ```bash
-~/.lark-channel/start.sh
+~/.knowledge-assistant/channels/lark-daemon/start.sh
 ```
 
 This is **idempotent and safe to run anytime**:
@@ -149,34 +161,34 @@ Common causes:
 | `route_miss_total` grows | User used a nonexistent channel name | daemon already replied with a hint to Lark; double-check `active_owners` |
 | **Message dispatched but doesn't surface in the conversation** | 🔴 Top suspect: a **non-string field** in the notification meta (silently dropped by Claude Code) | Check whether the dispatch's `params.meta` is all-string; the historical culprit was the numeric `channel_number` |
 | Suspected double-delivery across multiple same-named sessions | Multiple same-named sessions each have an independent consumer (rare, usually 2 clients with the same name) | Normally only 1 consumer surfaces; use different names at startup to avoid it |
-| `poll_errors_total > 10` | Lark API issue | `tail -30 ~/.lark-channel/channel.log` for `fetch failed` |
-| Recent Lark messages missing | Watermark advanced past them | Check `watermarks`; edit `~/.lark-channel/state.json` to roll it back (note `recent_msg_ids` also dedups) |
+| `poll_errors_total > 10` | Lark API issue | `tail -30 ~/.knowledge-assistant/channels/lark-daemon/channel.log` for `fetch failed` |
+| Recent Lark messages missing | Watermark advanced past them | Check `watermarks`; edit `~/.knowledge-assistant/channels/lark-daemon/state.json` to roll it back (note `recent_msg_ids` also dedups) |
 
 ## Diagnostic commands
 
 ```bash
 # Live log tail
-tail -f ~/.lark-channel/channel.log
+tail -f ~/.knowledge-assistant/channels/lark-daemon/channel.log
 
 # Recent activity / errors
-grep -E "error|fail|exception|dispatch" ~/.lark-channel/channel.log | tail -20
+grep -E "error|fail|exception|dispatch" ~/.knowledge-assistant/channels/lark-daemon/channel.log | tail -20
 
 # Check what's listening on port 9876
 ss -tlnp 2>/dev/null | grep 9876
 
 # Process tree
-ps -ef | grep -E "node.*server.ts|flock.*daemon.lock" | grep -v grep
+ps -ef | grep -E "node.*lark-daemon/daemon.mjs|flock.*daemon.lock" | grep -v grep
 
 # Who holds the flock
-fuser ~/.lark-channel/.daemon.lock
+fuser ~/.knowledge-assistant/channels/lark-daemon/.daemon.lock
 
 # Force-restart (kill and re-launch)
-~/.lark-channel/stop.sh && sleep 1 && ~/.lark-channel/start.sh
+~/.knowledge-assistant/channels/lark-daemon/stop.sh && sleep 1 && ~/.knowledge-assistant/channels/lark-daemon/start.sh
 ```
 
 ## Architecture rationale (FYI)
 
-Full design is in **`~/.lark-channel/ARCHITECTURE.md`**. Key points:
+Full design is in **`docs/channels/lark/ARCHITECTURE.md`**. Key points:
 
 - **Why a standalone HTTP daemon**: the old version was a stdio MCP child process spawned by Claude Code; a session restart/compact closes stdin → the server dies silently and isn't auto-respawned. Now an independent process with ppid=1, cron checks every minute, self-heals within ≤60s.
 - **Why deliver to all same-named sessions (not owner-only)**: a single Claude process opens **two** connections — the tool client + the `--dangerously-load-development-channels` notification consumer. The consumer isn't necessarily the owner, so owner-only delivery may not surface. Delivering to all same-named → the consumer one receives it.

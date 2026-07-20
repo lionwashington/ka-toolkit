@@ -40,6 +40,9 @@ if [ "$sub" = "api" ]; then
     printf '{"ok":true,"data":{"card_id":"card-1"}}'
   elif [ "$method" = "POST" ] && [ "$path" = "/open-apis/im/v1/messages" ]; then
     printf '{"ok":true,"data":{"message_id":"om_test"}}'
+  elif [ "$method" = "PUT" ] && [ "${LARK_MOCK_CARDKIT_UPDATE_FAIL:-0}" = "1" ]; then
+    printf '{"ok":false,"error":{"code":99991672,"message":"card update unavailable"}}' >&2
+    exit 1
   else
     printf '{"ok":true,"data":{}}'
   fi
