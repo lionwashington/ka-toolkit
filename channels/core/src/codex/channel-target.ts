@@ -30,6 +30,7 @@ type CodexUserInput =
   | { type: 'localImage'; path: string }
 
 const IMAGE_EXTENSIONS = /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|webp)$/i
+const DANGER_FULL_ACCESS = { type: 'dangerFullAccess' } as const
 
 /** Map a platform message to the current Codex App Server UserInput schema. */
 export function buildCodexTurnInput(source: RuntimeTargetMessage): CodexUserInput[] {
@@ -60,13 +61,19 @@ export class CodexChannelTarget implements RuntimeTarget {
   private nextApprovalId = 1
   private threadBusy = false
   private observing = false
+  private shuttingDown = false
   private readonly idleWaiters = new Set<() => void>()
   private readonly pendingApprovals = new Map<number, PendingApproval>()
 
   constructor(options: CodexChannelTargetOptions) {
     this.options = options
     this.name = options.name
-    this.binding = options.bindings.find(options)
+    this.binding = options.bindings.find({
+      channelName: options.name,
+      platform: options.platform,
+      externalChatId: options.externalChatId,
+      externalThreadId: options.externalThreadId,
+    })
     if (options.canonicalThreadId) {
       const timestamp = (options.now ?? (() => new Date()))().toISOString()
       this.binding = {
@@ -88,6 +95,7 @@ export class CodexChannelTarget implements RuntimeTarget {
   isAlive(): boolean { return this.connected && this.options.client.running }
 
   shutdown(): void {
+    this.shuttingDown = true
     this.connected = false
     if (this.observing) this.options.client.off('notification', this.observeThreadState)
     this.observing = false
@@ -100,6 +108,7 @@ export class CodexChannelTarget implements RuntimeTarget {
   }
 
   async connect(): Promise<void> {
+    this.shuttingDown = false
     if (!this.options.client.running) {
       await this.options.client.start()
       await this.options.client.initialize()
@@ -109,7 +118,11 @@ export class CodexChannelTarget implements RuntimeTarget {
       this.observing = true
     }
     if (this.binding) {
-      const resumed = await this.options.client.request('thread/resume', { threadId: this.binding.runtimeSessionId })
+      const resumed = await this.options.client.request('thread/resume', {
+        threadId: this.binding.runtimeSessionId,
+        approvalPolicy: 'never',
+        sandbox: 'danger-full-access',
+      })
       this.threadBusy = resumed.thread?.status?.type === 'active'
     }
     this.connected = true
@@ -165,8 +178,8 @@ export class CodexChannelTarget implements RuntimeTarget {
     const started = await this.options.client.request('thread/start', {
       cwd: this.options.cwd,
       ephemeral: false,
-      approvalPolicy: 'on-request',
-      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
+      sandbox: 'danger-full-access',
     })
     const timestamp = (this.options.now ?? (() => new Date()))().toISOString()
     this.binding = {
@@ -208,9 +221,23 @@ export class CodexChannelTarget implements RuntimeTarget {
           reject(new Error('Codex App Server exited during an active turn'))
         }
         const onTransportClose = () => {
-          cleanup()
           this.connected = false
-          reject(new Error('Codex App Server connection was lost during an active turn'))
+          if (this.shuttingDown || !this.options.client.reconnectable) {
+            cleanup()
+            reject(new Error('Codex App Server connection was lost during an active turn'))
+            return
+          }
+          void this.recoverActiveTurn(binding!, turnId).then(recovered => {
+            if (recovered) {
+              cleanup()
+              resolve({ turn: recovered, text: finalAgentText(recovered) || text })
+            } else {
+              this.options.client.once('transport-close', onTransportClose)
+            }
+          }, error => {
+            cleanup()
+            reject(new Error('Codex App Server connection was lost during an active turn', { cause: error }))
+          })
         }
         const onNotification = (message: any) => {
           const params = message.params ?? {}
@@ -245,6 +272,8 @@ export class CodexChannelTarget implements RuntimeTarget {
       const started = await this.options.client.request('turn/start', {
         threadId: binding.runtimeSessionId,
         input: buildCodexTurnInput(source),
+        approvalPolicy: 'never',
+        sandboxPolicy: DANGER_FULL_ACCESS,
       })
       turnId = started.turn.id
       this.activeTurnId = turnId
@@ -260,6 +289,34 @@ export class CodexChannelTarget implements RuntimeTarget {
       this.activeSource = undefined
       if (binding) this.persistActiveTurn(binding, undefined)
     }
+  }
+
+  private async recoverActiveTurn(binding: ChannelBinding, turnId: string | undefined): Promise<any | undefined> {
+    if (!turnId) throw new Error('active Codex turn id was not recorded')
+    let lastError: unknown
+    for (let attempt = 0; attempt < 10; attempt++) {
+      if (this.shuttingDown) throw new Error('Codex target is shutting down')
+      try {
+        await this.options.client.reconnect()
+        await this.options.client.request('thread/resume', {
+          threadId: binding.runtimeSessionId,
+          approvalPolicy: 'never',
+          sandbox: 'danger-full-access',
+        })
+        this.connected = true
+        const read = await this.options.client.request('thread/read', {
+          threadId: binding.runtimeSessionId,
+          includeTurns: true,
+        })
+        const turn = read.thread?.turns?.find((candidate: any) => candidate.id === turnId)
+        if (!turn) throw new Error(`active turn not found after reconnect: ${turnId}`)
+        return turn.status === 'inProgress' ? undefined : turn
+      } catch (error) {
+        lastError = error
+        await new Promise(resolve => setTimeout(resolve, Math.min(100 * (attempt + 1), 1_000)))
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError))
   }
 
   private async answerApproval(requestId: number, accept: boolean, source: RuntimeTargetMessage): Promise<void> {
@@ -306,4 +363,11 @@ export class CodexChannelTarget implements RuntimeTarget {
       this.idleWaiters.add(done)
     })
   }
+}
+
+function finalAgentText(turn: any): string {
+  const messages = Array.isArray(turn?.items)
+    ? turn.items.filter((item: any) => item?.type === 'agentMessage' && typeof item.text === 'string' && item.text)
+    : []
+  return messages.at(-1)?.text ?? ''
 }

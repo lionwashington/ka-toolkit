@@ -23,7 +23,7 @@ export interface CodexRuntimeConfig {
   requestTimeoutMs?: number
 }
 
-type ManagedTarget = { target: CodexChannelTarget; client: AppServerClient }
+type ManagedTarget = { target: CodexChannelTarget; client: AppServerClient; registration: CodexRuntimeRegistration }
 
 interface ActiveStream {
   prefix: string
@@ -48,6 +48,8 @@ export class CodexRuntimeManager {
   }
 
   async register(item: CodexRuntimeRegistration): Promise<void> {
+    const current = this.targets.get(item.name)
+    if (current && sameRegistration(current.registration, item)) return
     await this.unregister(item.name)
     const client = new AppServerClient({
       endpoint: item.endpoint,
@@ -71,7 +73,7 @@ export class CodexRuntimeManager {
     try {
       await target.connect()
       registerRuntimeTarget(target)
-      this.targets.set(item.name, { target, client })
+      this.targets.set(item.name, { target, client, registration: { ...item } })
       log(`codex target registered: ${item.name} (${item.endpoint ?? item.socketPath})`)
     } catch (error) {
       target.shutdown()
@@ -168,6 +170,11 @@ export class CodexRuntimeManager {
     if (!managed) throw new Error(`approval request for unknown Codex thread: ${threadId}`)
     return managed.target.requestApproval(request)
   }
+}
+
+function sameRegistration(left: CodexRuntimeRegistration, right: CodexRuntimeRegistration): boolean {
+  return left.name === right.name && left.cwd === right.cwd && left.endpoint === right.endpoint &&
+    left.socketPath === right.socketPath && left.threadId === right.threadId && left.threadPath === right.threadPath
 }
 
 export function describeApproval(request: Record<string, any>): string {

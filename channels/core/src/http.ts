@@ -127,6 +127,9 @@ export function createHttpApp(platform: Platform, runtimeManager?: CodexRuntimeM
     }))
     const channelCounts: Record<string, number> = {}
     for (const [name, list] of byName) channelCounts[name] = list.length
+    for (const [name, target] of runtimeTargetEntries()) {
+      if (!(name in channelCounts)) channelCounts[name] = target.isAlive?.() === false ? 0 : 1
+    }
     const owners: Record<string, string> = {}
     for (const [name, list] of byName) if (list.length) owners[name] = list[list.length - 1].id.slice(0, 8)
     const runtimeEntries = runtimeTargetEntries()

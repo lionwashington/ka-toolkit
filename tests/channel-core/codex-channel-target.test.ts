@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -74,8 +74,33 @@ test('resumes the persisted thread after the App Server process changes', async 
   const events: CodexChannelEvent[] = []
   await target(dir, secondClient, events).deliver({ content: 'second', meta: {} })
   assert.deepEqual(events.filter(event => event.type === 'final').map(event => event.text), ['echo:second'])
-  assert.equal(new BindingStore(join(dir, 'bindings.json')).list().length, 1)
+  const bindings = new BindingStore(join(dir, 'bindings.json')).list()
+  assert.equal(bindings.length, 1)
+  assert.equal(bindings[0].runtimeSessionId, 'thread-1')
   await secondClient.stop()
+})
+
+test('forces no-approval full-access policy for new, resumed, and subsequent turns', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-policy-'))
+  const statePath = join(dir, 'fake-state.json')
+  const firstClient = client(statePath)
+  await target(dir, firstClient, []).deliver({ content: 'first', meta: {} })
+  await firstClient.stop()
+
+  const secondClient = client(statePath)
+  await target(dir, secondClient, []).deliver({ content: 'second', meta: {} })
+  await secondClient.stop()
+
+  const state = JSON.parse(readFileSync(statePath, 'utf8'))
+  const startedThread = state.requests.find((request: any) => request.method === 'thread/start')
+  const resumedThread = state.requests.find((request: any) => request.method === 'thread/resume')
+  const turns = state.requests.filter((request: any) => request.method === 'turn/start')
+  assert.equal(startedThread.params.approvalPolicy, 'never')
+  assert.equal(startedThread.params.sandbox, 'danger-full-access')
+  assert.equal(resumedThread.params.approvalPolicy, 'never')
+  assert.equal(resumedThread.params.sandbox, 'danger-full-access')
+  assert.ok(turns.every((request: any) => request.params.approvalPolicy === 'never'))
+  assert.ok(turns.every((request: any) => request.params.sandboxPolicy?.type === 'dangerFullAccess'))
 })
 
 test('interrupts only the active turn', async () => {

@@ -61,12 +61,13 @@ up = int(d.get("uptime_seconds", 0)); h, m = up // 3600, (up % 3600) // 60
 on = d.get("channels_online", {}) or {}
 nums = d.get("channel_numbers", {}) or {}
 alive = d.get("channel_alive", {}) or {}
+runtime = {x.get("name"): x.get("runtime") for x in (d.get("runtime_targets", []) or [])}
 print(f"  pid {d.get('pid', '?')} · uptime {h}h{m}m · {len(on)} channel(s) online")
 names = sorted(on.keys(), key=lambda n: nums.get(n, 999))
 if names:
-    print(f"  {'CHANNEL':<16}{'#':<5}{'ONLINE':<8}ALIVE")
+    print(f"  {'CHANNEL':<16}{'#':<5}{'RUNTIME':<9}{'ONLINE':<8}ALIVE")
     for n in names:
-        print(f"  {n:<16}{str(nums.get(n, '?')):<5}{('yes' if on.get(n) else 'no'):<8}{'yes' if alive.get(n) else 'no'}")
+        print(f"  {n:<16}{str(nums.get(n, '?')):<5}{runtime.get(n, 'cc'):<9}{('yes' if on.get(n) else 'no'):<8}{'yes' if alive.get(n) else 'no'}")
 print(f"  dispatches {d.get('dispatches_total', 0)} · replies {d.get('replies_total', 0)} "
       f"({d.get('replies_failed_total', 0)} failed) · probes {d.get('probes_sent_total', 0)} "
       f"({d.get('probe_failures_total', 0)} failed)")

@@ -2,8 +2,9 @@ import { createInterface } from 'node:readline'
 import { readFileSync, writeFileSync } from 'node:fs'
 
 const statePath = process.env.FAKE_CODEX_STATE
-let state = { threads: {} }
+let state = { threads: {}, requests: [] }
 try { if (statePath) state = JSON.parse(readFileSync(statePath, 'utf8')) } catch {}
+state.requests ??= []
 
 function save() { if (statePath) writeFileSync(statePath, JSON.stringify(state)) }
 function send(message) { process.stdout.write(`${JSON.stringify(message)}\n`) }
@@ -30,6 +31,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     return
   }
   if (message.method === 'thread/start') {
+    state.requests.push({ method: message.method, params: message.params })
     const id = `thread-${Object.keys(state.threads).length + 1}`
     const thread = { id, ephemeral: Boolean(message.params.ephemeral), path: message.params.ephemeral ? null : `/tmp/${id}.jsonl`, cwd: message.params.cwd }
     state.threads[id] = thread
@@ -39,12 +41,16 @@ createInterface({ input: process.stdin }).on('line', line => {
     return
   }
   if (message.method === 'thread/resume') {
+    state.requests.push({ method: message.method, params: message.params })
+    save()
     const thread = state.threads[message.params.threadId]
     if (!thread) send({ id: message.id, error: { code: -32004, message: 'thread not found' } })
     else send({ id: message.id, result: { thread, cwd: thread.cwd, model: 'fake', modelProvider: 'fake' } })
     return
   }
   if (message.method === 'turn/start') {
+    state.requests.push({ method: message.method, params: message.params })
+    save()
     const turn = { id: `turn-${turnId++}`, status: 'inProgress', items: [] }
     send({ id: message.id, result: { turn } })
     send({ method: 'turn/started', params: { threadId: message.params.threadId, turn } })

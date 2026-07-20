@@ -54,6 +54,7 @@ export class AppServerClient extends EventEmitter {
   readonly endpoint?: string
 
   get running(): boolean { return this.child !== null || this.socket !== null || this.websocket !== null }
+  get reconnectable(): boolean { return Boolean(this.endpoint || this.socketPath) }
 
   async start(): Promise<void> {
     if (this.running) throw new Error('app-server client already started')
@@ -91,6 +92,14 @@ export class AppServerClient extends EventEmitter {
     const response = await this.request('initialize', { clientInfo, capabilities: null })
     this.notify('initialized')
     return response
+  }
+
+  /** Reopen an externally managed socket/WebSocket transport after a transient disconnect. */
+  async reconnect(): Promise<void> {
+    if (!this.endpoint && !this.socketPath) throw new Error('spawned app-server transports cannot be reconnected')
+    if (this.running) return
+    await this.start()
+    await this.initialize()
   }
 
   request(method: string, params?: unknown, timeoutMs = this.requestTimeoutMs): Promise<any> {
