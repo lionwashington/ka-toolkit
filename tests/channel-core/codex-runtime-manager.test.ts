@@ -9,6 +9,7 @@ import { dispatchTargets } from '../../channels/core/src/dispatch.ts'
 import { runtimeTargetOf } from '../../channels/core/src/targets.ts'
 import type { Platform } from '../../channels/core/src/platform.ts'
 import { startFakeSocketServer } from '../codex-app-server/fake-socket-server.mjs'
+import { counters } from '../../channels/core/src/counters.ts'
 
 const fake = fileURLToPath(new URL('../codex-app-server/fake-app-server.mjs', import.meta.url))
 
@@ -21,6 +22,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 }
 
 test('routes platform input through Codex and sends the final reply back through the platform', async () => {
+  const repliesBefore = counters.replies
   const dir = mkdtempSync(join(tmpdir(), 'ka-codex-manager-'))
   const sent: Array<{ target: string; text: string }> = []
   const platform: Platform = {
@@ -48,6 +50,7 @@ test('routes platform input through Codex and sends the final reply back through
   assert.equal(sent.length, 1)
   assert.equal(sent[0].target, 'owner')
   assert.match(sent[0].text, /echo:hello/)
+  assert.equal(counters.replies, repliesBefore + 1)
   await manager.stop()
   await appServer.close()
   assert.equal(runtimeTargetOf('codex-main'), undefined)
@@ -119,4 +122,39 @@ test('stop unregisters the target and declines a pending approval', async () => 
   await manager.stop()
   await appServer.close()
   assert.equal(runtimeTargetOf('codex-stop'), undefined)
+})
+
+test('serializes the final stream edit after an in-flight incremental edit', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-stream-manager-'))
+  const calls: string[] = []
+  let releaseUpdate!: () => void
+  const updateBlocked = new Promise<void>(resolve => { releaseUpdate = resolve })
+  const platform: Platform = {
+    name: 'telegram',
+    resolveReplyTarget: value => value,
+    isSelf: () => true,
+    startInbound: () => {},
+    send: async () => null,
+    startStream: async () => ({ messageId: 1 }),
+    updateStream: async () => { calls.push('update:start'); await updateBlocked; calls.push('update:end'); return null },
+    finishStream: async () => { calls.push('finish'); return null },
+    fetchAttachment: async () => '',
+    instructions: () => '',
+    replyToolDescription: '',
+  }
+  const manager = new CodexRuntimeManager(platform, {
+    platform: 'telegram',
+    bindingsPath: join(dir, 'bindings.json'),
+    externalChatId: 'owner',
+  })
+  const onEvent = (manager as any).onEvent.bind(manager)
+  await onEvent('codex-main', { type: 'turn-started', threadId: 'thread-1', turnId: 'turn-1' }, 'owner')
+  await onEvent('codex-main', { type: 'text-delta', threadId: 'thread-1', turnId: 'turn-1', delta: 'partial' }, 'owner')
+  await waitFor(() => calls.includes('update:start'))
+  const final = onEvent('codex-main', { type: 'final', threadId: 'thread-1', turnId: 'turn-1', text: 'complete' }, 'owner')
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.deepEqual(calls, ['update:start'])
+  releaseUpdate()
+  await final
+  assert.deepEqual(calls, ['update:start', 'update:end', 'finish'])
 })

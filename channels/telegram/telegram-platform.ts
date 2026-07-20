@@ -424,7 +424,10 @@ export const telegramPlatform: Platform = {
   },
   async updateStream(handle: any, text: string): Promise<string | null> {
     try { await bot.api.editMessageText(handle.chatId, handle.messageId, text); return null }
-    catch (error: any) { return error?.message ?? String(error) }
+    catch (error: any) {
+      const message = error?.message ?? String(error)
+      return isNoopTelegramEdit(message) ? null : message
+    }
   },
   async finishStream(handle: any, text: string): Promise<string | null> {
     return telegramPlatform.updateStream!(handle, text)
@@ -466,6 +469,10 @@ export const telegramPlatform: Platform = {
     log(`getUpdates long-poll starting (timeout=${cfg.poll_timeout}s, offset=${state.offset})`)
     void pollLoop()
   },
+}
+
+export function isNoopTelegramEdit(message: string): boolean {
+  return /message is not modified/i.test(message)
 }
 
 // Load config/state, construct the Bot, and return the runChannelDaemon options

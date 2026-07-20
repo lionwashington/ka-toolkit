@@ -10,7 +10,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { parseRoutingPrefix, sanitizeChannelName, resolveTargetList, applyStickyRouting } from '../../core/src/routing.ts'
-import { chunk, extractAttachment, attachmentPlaceholder } from '../telegram-platform.ts'
+import { chunk, extractAttachment, attachmentPlaceholder, isNoopTelegramEdit } from '../telegram-platform.ts'
 
 // NEW CONTRACT (multi-target): parseRoutingPrefix returns `rawTargets: string[]`
 // (comma-separated list, names+numbers mixable, deduped) and NO `hadColon` — the
@@ -256,4 +256,13 @@ describe('attachmentPlaceholder', () => {
   test('video_note', () => assert.equal(attachmentPlaceholder('video_note', 'x'), '[video]'))
   test('audio', () => assert.equal(attachmentPlaceholder('audio', 'x'), '[audio]'))
   test('document → [attachment: name]', () => assert.equal(attachmentPlaceholder('document', 'a.zip'), '[attachment: a.zip]'))
+})
+
+describe('isNoopTelegramEdit', () => {
+  test('treats Telegram idempotent edit as success', () => {
+    assert.equal(isNoopTelegramEdit('400: Bad Request: message is not modified'), true)
+  })
+  test('keeps real Telegram failures visible', () => {
+    assert.equal(isNoopTelegramEdit('400: Bad Request: message to edit not found'), false)
+  })
 })

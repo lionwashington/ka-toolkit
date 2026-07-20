@@ -5,6 +5,7 @@ import { registerRuntimeTarget, unregisterRuntimeTarget } from '../targets.ts'
 import { channelNumberOf } from '../sessions.ts'
 import type { Platform } from '../platform.ts'
 import { log } from '../log.ts'
+import { counters } from '../counters.ts'
 
 export interface CodexRuntimeRegistration {
   name: string
@@ -22,14 +23,21 @@ export interface CodexRuntimeConfig {
 
 type ManagedTarget = { target: CodexChannelTarget; client: AppServerClient }
 
+interface ActiveStream {
+  prefix: string
+  text: string
+  handle: Promise<unknown>
+  lastUpdate: number
+  timer?: NodeJS.Timeout
+  update?: Promise<void>
+}
+
 export class CodexRuntimeManager {
   private readonly platform: Platform
   private readonly config: CodexRuntimeConfig
   private readonly bindings: BindingStore
   private readonly targets = new Map<string, ManagedTarget>()
-  private readonly streams = new Map<string, {
-    prefix: string; text: string; handle: Promise<unknown>; lastUpdate: number; timer?: NodeJS.Timeout
-  }>()
+  private readonly streams = new Map<string, ActiveStream>()
 
   constructor(platform: Platform, config: CodexRuntimeConfig) {
     this.platform = platform
@@ -103,15 +111,20 @@ export class CodexRuntimeManager {
       const stream = this.streams.get(event.turnId)
       if (stream && this.platform.finishStream) {
         if (stream.timer) clearTimeout(stream.timer)
+        if (stream.update) await stream.update
         const error = await this.platform.finishStream(await stream.handle, `${stream.prefix}${event.text}`)
         this.streams.delete(event.turnId)
         if (error) throw new Error(error)
+        counters.replies++
+        log(`codex target ${name} replied (turn=${event.turnId})`)
         return
       }
       const target = this.platform.resolveReplyTarget(replyTarget)
       if (!target) throw new Error(`reply target not allowed: ${replyTarget}`)
       const error = await this.platform.send(target, `**[#${channelNumberOf(name)}-${name}]** ${event.text}`)
       if (error) throw new Error(error)
+      counters.replies++
+      log(`codex target ${name} replied (turn=${event.turnId})`)
     } else if (event.type === 'activity') {
       const target = this.platform.resolveReplyTarget(replyTarget)
       if (target) await this.platform.send(target, `**[#${channelNumberOf(name)}-${name}]** ${event.text}`)
@@ -123,21 +136,24 @@ export class CodexRuntimeManager {
       }
     } else if (event.type === 'error') {
       log(`codex target ${name} failed: ${event.error.message}`)
+      counters.repliesFailed++
       const target = this.platform.resolveReplyTarget(replyTarget)
       if (target) await this.platform.send(target, `⚠️ ${name}: Codex turn failed: ${event.error.message}`)
     }
   }
 
-  private scheduleStreamUpdate(turnId: string, stream: { prefix: string; text: string; handle: Promise<unknown>; lastUpdate: number; timer?: NodeJS.Timeout }): void {
-    if (!this.platform.updateStream || stream.timer) return
+  private scheduleStreamUpdate(turnId: string, stream: ActiveStream): void {
+    if (!this.platform.updateStream || stream.timer || stream.update) return
     const delay = Math.max(0, 750 - (Date.now() - stream.lastUpdate))
-    stream.timer = setTimeout(async () => {
+    stream.timer = setTimeout(() => {
       stream.timer = undefined
       const current = this.streams.get(turnId)
       if (!current || !this.platform.updateStream) return
-      const error = await this.platform.updateStream(await current.handle, `${current.prefix}${current.text}`)
-      current.lastUpdate = Date.now()
-      if (error) log(`codex stream update failed: ${error}`)
+      current.update = (async () => {
+        const error = await this.platform.updateStream!(await current.handle, `${current.prefix}${current.text}`)
+        current.lastUpdate = Date.now()
+        if (error) log(`codex stream update failed: ${error}`)
+      })().finally(() => { current.update = undefined })
     }, delay)
     stream.timer.unref()
   }

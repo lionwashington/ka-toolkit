@@ -48,7 +48,14 @@ SERVER_LOG="$SOCKET_DIR/$SAFE_NAME.log"
 APP_SERVER_PORT="$(node -e 'const s=require("net").createServer();s.listen(0,"127.0.0.1",()=>{process.stdout.write(String(s.address().port));s.close()})')"
 APP_SERVER_ENDPOINT="ws://127.0.0.1:$APP_SERVER_PORT"
 
-codex app-server --listen "$APP_SERVER_ENDPOINT" >>"$SERVER_LOG" 2>&1 &
+# The legacy Telegram MCP may use the same bot identity as Channel and race its
+# getUpdates consumer. Replace that one transport with a disabled valid stdio
+# entry for this invocation only; the user's Codex configuration is untouched.
+codex \
+    -c 'mcp_servers.telegram.command="/usr/bin/true"' \
+    -c 'mcp_servers.telegram.args=[]' \
+    -c 'mcp_servers.telegram.enabled=false' \
+    app-server --listen "$APP_SERVER_ENDPOINT" >>"$SERVER_LOG" 2>&1 &
 APP_SERVER_PID=$!
 
 cleanup() {

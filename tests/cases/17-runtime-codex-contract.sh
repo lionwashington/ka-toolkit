@@ -27,8 +27,8 @@ mkdir -p "$tmp_root/bin" "$tmp_root/work"
 cat > "$tmp_root/bin/codex" <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "$FAKE_CODEX_CALLS"
-if [ "${1:-}" = app-server ]; then
-    endpoint="${3:-}"
+if printf '%s\n' "$*" | grep -q 'app-server --listen'; then
+    for endpoint in "$@"; do :; done
     port="${endpoint##*:}"
     exec python3 -c 'import socket,sys,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(); time.sleep(30)' "$port"
 fi
