@@ -33,8 +33,10 @@ mkdir -p "$HOME/.knowledge-assistant"
 export KA_CRON_CONFIG="$HOME/.knowledge-assistant/cron.yaml"
 export KA_CRON_LOG_DIR="$TMP/logs"
 # Force backend to be a no-op so add/install/remove don't try to talk to launchctl.
-# The backend-adapter detects launchd by `command -v launchctl`. On Debian docker
-# it returns "unknown" → install/uninstall ops bail out gracefully.
+# This must be explicit: on a macOS developer machine, changing HOME alone does
+# not isolate launchd's per-user label namespace and tests could unload a real
+# production unit with the same job name.
+export KA_CRON_BACKEND=systemd
 
 echo "[1/9] schedule-parser handles all four syntaxes"
 out="$(bash "$SCHED" "every 5m")" || { echo "FAIL: every 5m"; exit 1; }
@@ -181,9 +183,31 @@ echo "$out" | grep -q 'no legacy' \
 rm -rf "$RUN_HOME"
 echo "    ok"
 
-echo "[9/9] legacy kb-distill migrates to direct ka-cli execution"
+echo "[9/10] legacy kb-distill mapping uses direct ka-cli execution"
 grep -Eq 'kb-distill\).*ka-cli\|kb distill --background' "$REPO/cron/ops/cmd/import.sh" \
     || { echo "FAIL: kb-distill import still depends on prompt injection"; exit 1; }
+echo "    ok"
+
+echo "[10/10] existing inject-prompt kb-distill YAML migrates without a legacy plist"
+MIGRATE_HOME="$(mktemp -d)"
+mkdir -p "$MIGRATE_HOME/.knowledge-assistant/config"
+cat > "$MIGRATE_HOME/.knowledge-assistant/config/cron.yaml" <<'EOF'
+version: 1
+jobs:
+  - name: kb-distill
+    schedule: "every 12h"
+    kind: inject-prompt
+    command: "/kb distill"
+    enabled: false
+EOF
+HOME="$MIGRATE_HOME" KA_HOME="$REPO" \
+    KA_CRON_CONFIG="$MIGRATE_HOME/.knowledge-assistant/config/cron.yaml" \
+    "$KA" cron import >/dev/null
+grep -q 'kind: ka-cli' "$MIGRATE_HOME/.knowledge-assistant/config/cron.yaml" \
+    || { echo "FAIL: existing kb-distill kind was not migrated"; exit 1; }
+grep -q 'command: "kb distill --background"' "$MIGRATE_HOME/.knowledge-assistant/config/cron.yaml" \
+    || { echo "FAIL: existing kb-distill command was not migrated"; exit 1; }
+rm -rf "$MIGRATE_HOME"
 echo "    ok"
 
 echo "ka-cron OK"

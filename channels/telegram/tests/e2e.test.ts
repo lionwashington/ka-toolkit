@@ -152,6 +152,7 @@ describe('inbound: Telegram → MCP notification (sticky routing)', () => {
     const n = main.received.find(r => r.meta.attachment_path)!
     assert.equal(n.content, '[image]', 'no caption → placeholder')
     assert.ok(n.meta.attachment_path.length > 0)
+    assert.equal(n.meta.attachment_kind, 'photo')
     assert.equal(readFileSync(n.meta.attachment_path, 'utf8'), 'MOCKIMGBYTES', 'file downloaded to disk')
   })
 

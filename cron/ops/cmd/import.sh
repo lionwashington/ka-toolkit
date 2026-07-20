@@ -33,6 +33,45 @@ cron_load_jobs
 
 found=0
 imported=0
+migrated=0
+
+# Early cron generations represented KB maintenance as a prompt injected into
+# an online Workshop pane. Migrate that existing YAML entry in place even when
+# the legacy plist was already removed; otherwise repeated `ka cron import`
+# can never repair the stale job.
+if cron_job_exists "kb-distill"; then
+    old_kind="$(cron_job_field "kb-distill" kind || true)"
+    old_cmd="$(cron_job_field "kb-distill" command || true)"
+    if [ "$old_kind" = "inject-prompt" ] && [ "$old_cmd" = "/kb distill" ]; then
+        CRON_YAML_PATH="$CRON_YAML" python3 - <<'PY'
+import os
+
+path = os.environ["CRON_YAML_PATH"]
+lines = open(path).read().splitlines()
+inside = False
+for index, line in enumerate(lines):
+    stripped = line.strip()
+    if stripped == "- name: kb-distill":
+        inside = True
+        continue
+    if inside and stripped.startswith("- name:"):
+        inside = False
+    if not inside:
+        continue
+    indent = line[:len(line) - len(line.lstrip())]
+    if stripped.startswith("kind:"):
+        lines[index] = f"{indent}kind: ka-cli"
+    elif stripped.startswith("command:"):
+        lines[index] = f'{indent}command: "kb distill --background"'
+with open(path, "w") as output:
+    output.write("\n".join(lines) + "\n")
+PY
+        migrated=$((migrated + 1))
+        cron_load_jobs
+        log_ok "kb-distill: migrated inject-prompt to direct ka-cli execution"
+    fi
+fi
+
 for plist in "$LA_DIR"/com.knowledge-assistant.ka.*.plist; do
     [ -f "$plist" ] || continue
     base="$(basename "$plist" .plist)"
@@ -62,11 +101,11 @@ for plist in "$LA_DIR"/com.knowledge-assistant.ka.*.plist; do
     log_dim "$name: legacy plist moved to $BACKUP_DIR"
 done
 
-if [ "$found" -eq 0 ]; then
+if [ "$found" -eq 0 ] && [ "$migrated" -eq 0 ]; then
     log_info "no legacy plists to import"
     exit 0
 fi
 
 # Reinstall with new cron.* labels
 "$THIS_DIR/install.sh"
-log_ok "import complete: $imported new entries, $found legacy plists processed"
+log_ok "import complete: $imported new entries, $migrated existing entries migrated, $found legacy plists processed"

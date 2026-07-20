@@ -356,7 +356,10 @@ async function handleUpdate(u: any): Promise<'ok' | 'stop'> {
     sender_id: fromId,
     message_id: msg.message_id,
     ts: msg.date,
-    ...(attachmentPath ? { attachment_path: attachmentPath } : {}),
+    ...(attachmentPath ? {
+      attachment_path: attachmentPath,
+      attachment_kind: attachment?.kind ?? '',
+    } : {}),
   })
   return 'ok'
 }

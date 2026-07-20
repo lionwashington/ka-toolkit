@@ -84,7 +84,29 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-[ -n "$JSONL" ] || { log_err "--jsonl required"; exit 1; }
+# Scheduled runtime-neutral distillation has no interactive caller to provide a
+# transcript path. Resolve the canonical main session recorded by Workshop.
+# Explicit --jsonl always wins and remains useful for recovery/debug runs.
+if [ -z "$JSONL" ]; then
+    case "$KA_DISTILL_RUNTIME" in
+        codex)
+            _thread_file="$KA_STATE_DIR/codex-app-servers/main.thread"
+            _thread_id="$(tr -d '[:space:]' < "$_thread_file" 2>/dev/null || true)"
+            [ -n "$_thread_id" ] || { log_err "canonical Codex main thread not found: $_thread_file"; exit 2; }
+            JSONL="$(find "${CODEX_HOME:-$HOME/.codex}/sessions" -type f -name "*${_thread_id}*.jsonl" -print 2>/dev/null | head -1)"
+            SESSION_ID="${SESSION_ID:-$_thread_id}"
+            ;;
+        cc)
+            _lead_file="$KA_STATE_DIR/lead-session.id"
+            _lead_id="$(tr -d '[:space:]' < "$_lead_file" 2>/dev/null || true)"
+            [ -n "$_lead_id" ] || { log_err "canonical Claude lead session not found: $_lead_file"; exit 2; }
+            JSONL="$(find "$HOME/.claude/projects" -type f -name "${_lead_id}.jsonl" -print 2>/dev/null | head -1)"
+            SESSION_ID="${SESSION_ID:-$_lead_id}"
+            ;;
+        *) log_err "unsupported distill runtime: $KA_DISTILL_RUNTIME"; exit 2 ;;
+    esac
+fi
+[ -n "$JSONL" ] || { log_err "canonical $KA_DISTILL_RUNTIME transcript file not found"; exit 2; }
 [ -f "$JSONL" ] || { log_err "jsonl not found: $JSONL"; exit 2; }
 
 # Derive session_id from jsonl filename if not given.
@@ -95,14 +117,15 @@ fi
 STATE_DIR="$KA_STATE_DIR"
 mkdir -p "$STATE_DIR" || { log_err "cannot create $STATE_DIR"; exit 2; }
 
-# Log rotation: each background distill leaves a distill-<ts>.log; they pile up
-# forever otherwise. Keep the newest 30 (enough to debug recent runs), prune the
-# rest. `ls -t` newest-first + `tail -n +31` (BSD/macOS ok) = everything past #30.
-# `|| true` so an empty state dir (no logs yet — first-ever distill on a fresh
-# machine) doesn't trip `set -o pipefail` and abort the whole run.
-{ ls -1t "$STATE_DIR"/distill-*.log 2>/dev/null || true; } | tail -n +31 | while IFS= read -r old_log; do
-    rm -f "$old_log"
-done
+# Log rotation: each real background distill leaves a distill-<ts>.log. Dry-run
+# must remain strictly read-only and therefore skips pruning.
+if [ "$DRY_RUN" -eq 0 ]; then
+    # Keep the newest 30. `|| true` keeps a first-ever empty state dir safe
+    # under pipefail.
+    { ls -1t "$STATE_DIR"/distill-*.log 2>/dev/null || true; } | tail -n +31 | while IFS= read -r old_log; do
+        rm -f "$old_log"
+    done
+fi
 
 # Refuse to spawn if a worker is already running.
 STATUS_FILE="$STATE_DIR/distill-current.json"
@@ -118,7 +141,12 @@ fi
 
 # Locate ka-jsonl-reader CLI bundle. Core CLI bundle (self-contained tsup output, deployed verbatim to /kb/core/dist).
 # layout) or kb/core/dist (repo layout) — try both.
-JSONL_READER="$KA_HOME/kb/core/dist/jsonl-reader-cli.js"
+if [ "$KA_DISTILL_RUNTIME" = "codex" ]; then
+    JSONL_READER="$KA_HOME/kb/core/dist/codex-rollout-reader-cli.js"
+    [ -f "$JSONL_READER" ] || JSONL_READER="$KA_HOME/kb/adapter-codex/dist/rollout-reader-cli.js"
+else
+    JSONL_READER="$KA_HOME/kb/core/dist/jsonl-reader-cli.js"
+fi
 [ -f "$JSONL_READER" ] || { log_err "jsonl-reader bundle missing — run './install.sh --only core-cli' (or 'pnpm --filter @ka/core build' in repo) ($JSONL_READER)"; exit 2; }
 
 # Capture snapshot via the lightweight --format snapshot path (no message body)
@@ -192,7 +220,8 @@ nohup "$WORKER" \
     </dev/null >/dev/null 2>&1 &
 WORKER_PID=$!
 
-# Patch the status file with the real worker pid.
+# Record the child pid but leave status=`starting`. The worker changes it to
+# `running` only after argument parsing and runtime-adapter initialization.
 TMP_STATUS="${STATUS_FILE}.tmp.$$"
 node -e '
 const fs = require("fs");
@@ -200,9 +229,30 @@ const f = process.argv[1];
 const pid = Number(process.argv[2]);
 const j = JSON.parse(fs.readFileSync(f, "utf-8"));
 j.pid = pid;
-j.status = "running";
 fs.writeFileSync(f, JSON.stringify(j, null, 2));
 ' "$STATUS_FILE" "$WORKER_PID"
+
+# Bounded startup handshake. A missing runtime adapter, bad shebang, or other
+# preflight failure must be reported now instead of leaving stale `running`
+# state for every later scheduled run.
+WORKER_STATUS="starting"
+for _ in $(seq 1 20); do
+    WORKER_STATUS="$(awk -F'"' '/"status":/ {print $4; exit}' "$STATUS_FILE" 2>/dev/null || true)"
+    [ "$WORKER_STATUS" != "starting" ] && break
+    kill -0 "$WORKER_PID" 2>/dev/null || break
+    sleep 0.05
+done
+if [ "$WORKER_STATUS" = "starting" ]; then
+    node -e '
+const fs = require("fs");
+const f = process.argv[1];
+const j = JSON.parse(fs.readFileSync(f, "utf8"));
+Object.assign(j, {status: "failed", exit_code: 78, end_time: new Date().toISOString(), parse_tier: null, parse_notes: "distill worker exited before startup handshake"});
+fs.writeFileSync(f, JSON.stringify(j, null, 2));
+' "$STATUS_FILE"
+    log_err "distill worker exited before startup handshake (pid=$WORKER_PID)"
+    exit 2
+fi
 
 printf 'distill-bg: pid=%s log=%s status=%s snapshot=%s\n' \
     "$WORKER_PID" "$LOG_PATH" "$STATUS_FILE" "$SNAPSHOT_OFFSET"

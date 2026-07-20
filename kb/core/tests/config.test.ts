@@ -37,8 +37,8 @@ retrieval:
     expect(config.retrieval.max_results).toBe(10)
   })
 
-  it('returns defaults when no file provided', () => {
-    const config = loadConfig()
+  it('returns defaults when the explicit config file is missing', () => {
+    const config = loadConfig(join(tempDir, 'missing.yaml'))
 
     expect(config.knowledge_base_path).toBeDefined()
     expect(config.workspace_path).toBeDefined()

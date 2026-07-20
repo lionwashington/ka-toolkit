@@ -3,7 +3,10 @@
 
 distill_runtime_run() {
     local prompt="$1" output_file="$2" log_file="$3"
-    local -a args=(exec --json --ephemeral --skip-git-repo-check --sandbox workspace-write)
+    # The configured KB and the worker stats live under KA_HOME and may be
+    # outside WORKSPACE_CWD. A workspace-write sandbox therefore makes a
+    # successful distill impossible even though the model turn itself exits 0.
+    local -a args=(exec --json --ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
     if [ -n "${KA_CODEX_DISTILL_MODEL:-}" ]; then
         args+=(--model "$KA_CODEX_DISTILL_MODEL")
     fi

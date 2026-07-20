@@ -97,8 +97,13 @@ TELEGRAM_MCP_OVERRIDES=(
     -c 'mcp_servers.telegram.args=[]'
     -c 'mcp_servers.telegram.enabled=false'
 )
+# The sidecar must never inherit the pane's stdin. This shell runs without job
+# control, so a background App Server otherwise shares the foreground process
+# group with the TUI and can consume terminal replies or keystrokes.
 codex "${TELEGRAM_MCP_OVERRIDES[@]}" \
-    app-server --listen "$APP_SERVER_ENDPOINT" >>"$SERVER_LOG" 2>&1 &
+    --dangerously-bypass-hook-trust \
+    --dangerously-bypass-approvals-and-sandbox \
+    app-server --listen "$APP_SERVER_ENDPOINT" </dev/null >>"$SERVER_LOG" 2>&1 &
 APP_SERVER_PID=$!
 
 for _ in $(seq 1 100); do
@@ -177,8 +182,26 @@ run_codex() {
     codex "${TELEGRAM_MCP_OVERRIDES[@]}" --remote "$APP_SERVER_ENDPOINT" "$@"
 }
 
-if [ "${#TUI_ARGS[@]}" -eq 0 ]; then
-    TUI_ARGS=(--dangerously-bypass-approvals-and-sandbox)
+# Workshop panes are unattended runtime processes. Make approval bypass the
+# default even when a mate also configures unrelated arguments such as --model.
+# Preserve an explicitly supplied copy without duplicating it.
+HAS_BYPASS=0
+HAS_HOOK_TRUST_BYPASS=0
+if [ "${#TUI_ARGS[@]}" -gt 0 ]; then
+    for arg in "${TUI_ARGS[@]}"; do
+        [ "$arg" = "--dangerously-bypass-approvals-and-sandbox" ] && HAS_BYPASS=1
+        [ "$arg" = "--dangerously-bypass-hook-trust" ] && HAS_HOOK_TRUST_BYPASS=1
+    done
+fi
+if [ "$HAS_BYPASS" -eq 0 ]; then
+    if [ "${#TUI_ARGS[@]}" -eq 0 ]; then
+        TUI_ARGS=(--dangerously-bypass-approvals-and-sandbox)
+    else
+        TUI_ARGS=(--dangerously-bypass-approvals-and-sandbox "${TUI_ARGS[@]}")
+    fi
+fi
+if [ "$HAS_HOOK_TRUST_BYPASS" -eq 0 ]; then
+    TUI_ARGS=(--dangerously-bypass-hook-trust "${TUI_ARGS[@]}")
 fi
 echo "[start-pane:$PANE_NAME] codex ${TUI_ARGS[*]} resume $CANONICAL_THREAD_ID (Workshop-managed App Server)"
 set +e
@@ -186,4 +209,12 @@ run_codex "${TUI_ARGS[@]}" resume "$CANONICAL_THREAD_ID"
 TUI_STATUS=$?
 set -e
 printf '[start-pane:%s] Codex TUI exited with status %s\n' "$PANE_NAME" "$TUI_STATUS" | tee -a "$SERVER_LOG" >&2
+# A Channel-owned turn runs in the App Server, not in the TUI. Keep the
+# sidecar alive if the TUI exits so a long Telegram/Lark turn is not killed
+# mid-flight. The wrapper remains the pane owner and performs normal cleanup
+# when the fallback shell exits or Workshop stops the pane.
+if [ "${KA_CODEX_KEEP_APP_SERVER_ON_TUI_EXIT:-1}" = "1" ] && kill -0 "$APP_SERVER_PID" 2>/dev/null; then
+    echo "[start-pane:$PANE_NAME] App Server remains available; TUI exited, opening a shell" >&2
+    "${SHELL:-/bin/zsh}" -l
+fi
 exit "$TUI_STATUS"

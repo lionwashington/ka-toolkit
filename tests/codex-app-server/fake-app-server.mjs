@@ -48,11 +48,13 @@ createInterface({ input: process.stdin }).on('line', line => {
     const turn = { id: `turn-${turnId++}`, status: 'inProgress', items: [] }
     send({ id: message.id, result: { turn } })
     send({ method: 'turn/started', params: { threadId: message.params.threadId, turn } })
-    const text = message.params.input?.[0]?.text ?? ''
+    const text = message.params.input?.find(item => item.type === 'text')?.text ?? ''
+    const localImage = message.params.input?.find(item => item.type === 'localImage')?.path
     const complete = () => {
       if (!activeTurns.has(turn.id)) return
       activeTurns.delete(turn.id)
-      send({ method: 'item/agentMessage/delta', params: { threadId: message.params.threadId, turnId: turn.id, itemId: 'answer', delta: `echo:${text}` } })
+      const imageSuffix = localImage ? `|localImage:${localImage}` : ''
+      send({ method: 'item/agentMessage/delta', params: { threadId: message.params.threadId, turnId: turn.id, itemId: 'answer', delta: `echo:${text}${imageSuffix}` } })
       send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn: { ...turn, status: 'completed' } } })
     }
     activeTurns.set(turn.id, { threadId: message.params.threadId, turn })

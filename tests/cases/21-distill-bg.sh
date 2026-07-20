@@ -16,9 +16,41 @@ JSONL="$TMP/fake.jsonl"
 } > "$JSONL"
 
 # --- 1. Dry-run: snapshot capture + state file plan --------------------------
-out="$(KA_HOME="$REPO" bash "$REPO/kb/ops/distill-bg.sh" --jsonl "$JSONL" --dry-run)"
+out="$(KA_HOME="$REPO" KA_DISTILL_RUNTIME=cc bash "$REPO/kb/ops/distill-bg.sh" --jsonl "$JSONL" --dry-run)"
 echo "$out" | grep -q "session_id=fake"
 echo "$out" | grep -q "snapshot.offset="
+echo "$out" | grep -q "snapshot.count=2"
+
+# --- 1c. A worker that dies before its startup handshake is not reported as running.
+BROKEN_HOME="$TMP/broken-ka"
+mkdir -p "$BROKEN_HOME/shared/ops" "$BROKEN_HOME/kb/core/dist" "$BROKEN_HOME/kb/ops" "$TMP/broken-state"
+cp "$REPO/shared/ops/common.sh" "$BROKEN_HOME/shared/ops/common.sh"
+cp "$REPO/kb/core/dist/jsonl-reader-cli.js" "$BROKEN_HOME/kb/core/dist/jsonl-reader-cli.js"
+cp "$REPO/kb/ops/distill-bg.sh" "$BROKEN_HOME/kb/ops/distill-bg.sh"
+printf '%s\n' '#!/bin/bash' 'exit 78' > "$BROKEN_HOME/kb/ops/distill-bg-worker.sh"
+chmod +x "$BROKEN_HOME/kb/ops/distill-bg-worker.sh"
+if KA_HOME="$BROKEN_HOME" KA_STATE_DIR="$TMP/broken-state" KA_DISTILL_RUNTIME=cc WORKSPACE_CWD="$TMP" \
+    bash "$BROKEN_HOME/kb/ops/distill-bg.sh" --jsonl "$JSONL" --session-id broken 2>/dev/null; then
+    echo "FAIL: pre-handshake worker death returned success"; exit 1
+fi
+grep -q '"status": "failed"' "$TMP/broken-state/distill-current.json"
+grep -q 'exited before startup handshake' "$TMP/broken-state/distill-current.json"
+
+# --- 1b. Scheduled Codex run resolves Workshop's canonical main thread ------
+CODEX_HOME_TEST="$TMP/codex-home"
+THREAD_ID="019f0000-0000-7000-8000-000000000001"
+mkdir -p "$TMP/state/codex-app-servers" "$CODEX_HOME_TEST/sessions/2026/07/20"
+printf '%s\n' "$THREAD_ID" > "$TMP/state/codex-app-servers/main.thread"
+CODEX_JSONL="$CODEX_HOME_TEST/sessions/2026/07/20/rollout-$THREAD_ID.jsonl"
+{
+    printf '%s\n' '{"timestamp":"2026-07-20T01:00:00Z","type":"event_msg","payload":{"type":"user_message","message":"hello from Codex"}}'
+    printf '%s\n' '{"timestamp":"2026-07-20T01:00:01Z","type":"event_msg","payload":{"type":"agent_message","message":"hello back"}}'
+} > "$CODEX_JSONL"
+out="$(KA_HOME="$REPO" KA_STATE_DIR="$TMP/state" KA_DISTILL_RUNTIME=codex \
+    CODEX_HOME="$CODEX_HOME_TEST" WORKSPACE_CWD="$TMP" \
+    bash "$REPO/kb/ops/distill-bg.sh" --dry-run)"
+echo "$out" | grep -q "session_id=$THREAD_ID"
+echo "$out" | grep -q "jsonl=.*rollout-$THREAD_ID.jsonl"
 echo "$out" | grep -q "snapshot.count=2"
 
 # --- 2. Distill-status with no state file ------------------------------------
@@ -51,7 +83,7 @@ WORKSPACE="$TMP/workspace"
 mkdir -p "$WORKSPACE/memory/raw" "$WORKSPACE/memory/conversations" "$WORKSPACE/memory/topics"
 
 # Spawn (background); capture pid and wait for completion.
-spawn_out="$(KA_HOME="$REPO" WORKSPACE_CWD="$WORKSPACE" bash "$REPO/kb/ops/distill-bg.sh" \
+spawn_out="$(KA_HOME="$REPO" KA_DISTILL_RUNTIME=cc WORKSPACE_CWD="$WORKSPACE" bash "$REPO/kb/ops/distill-bg.sh" \
     --jsonl "$JSONL" \
     --session-id "fake-session")"
 echo "$spawn_out" | grep -q "distill-bg: pid="
@@ -67,6 +99,11 @@ for _ in $(seq 1 30); do
 done
 
 [ "$status" = "done" ] || { echo "FAIL: expected status=done, got '$status'"; cat "$LOG_PATH" 2>/dev/null || true; cat "$HOME/.knowledge-assistant/state/distill-current.json" 2>/dev/null || true; exit 1; }
+
+# The worker handshake must preserve the actual spawned worker pid, not the pid
+# of a short-lived helper used to patch JSON.
+state_pid="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).pid)' "$HOME/.knowledge-assistant/state/distill-current.json")"
+[ "$state_pid" = "$PID" ] || { echo "FAIL: worker pid mismatch (spawn=$PID state=$state_pid)"; exit 1; }
 
 # Verify the parsed numbers landed in the state file.
 state_json="$HOME/.knowledge-assistant/state/distill-current.json"

@@ -96,6 +96,12 @@ fs.writeFileSync(f, JSON.stringify(j, null, 2));
 ' "$STATUS_FILE" "$patch_json" || true
 }
 
+# The launcher intentionally leaves the state at `starting` until the worker
+# has parsed its arguments and loaded the selected runtime adapter.  This
+# handshake prevents an early exec/config failure from looking `running`
+# forever after the child has already exited.
+apply_status_patch "$(node -e 'process.stdout.write(JSON.stringify({pid: Number(process.argv[1]), status: "running"}))' "$$")"
+
 mark_failed() {
     local code="$1"
     local note="$2"
@@ -141,7 +147,22 @@ process.stdout.write(JSON.stringify({
 # ---------- prompt construction ----------
 # The distill agent runs in the workspace cwd, so the prompt must give it an
 # ABSOLUTE path to the CLI ($KA_HOME/kb/core/dist).
-JSONL_READER_ABS="$KA_HOME/kb/core/dist/jsonl-reader-cli.js"
+if [ "$DISTILL_RUNTIME" = "codex" ]; then
+    JSONL_READER_ABS="$KA_HOME/kb/core/dist/codex-rollout-reader-cli.js"
+    [ -f "$JSONL_READER_ABS" ] || JSONL_READER_ABS="$KA_HOME/kb/adapter-codex/dist/rollout-reader-cli.js"
+else
+    JSONL_READER_ABS="$KA_HOME/kb/core/dist/jsonl-reader-cli.js"
+fi
+
+CONFIG_PATH="${KA_CONFIG:-${KA_CONFIG_DIR:-$KA_HOME/config}/config.yaml}"
+KNOWLEDGE_BASE_PATH=""
+if [ -f "$CONFIG_PATH" ]; then
+    KNOWLEDGE_BASE_PATH="$(sed -n 's/^[[:space:]]*knowledge_base_path[[:space:]]*:[[:space:]]*//p' "$CONFIG_PATH" | head -1 | sed 's/[[:space:]]*$//')"
+    KNOWLEDGE_BASE_PATH="${KNOWLEDGE_BASE_PATH#\"}"; KNOWLEDGE_BASE_PATH="${KNOWLEDGE_BASE_PATH%\"}"
+    case "$KNOWLEDGE_BASE_PATH" in "~") KNOWLEDGE_BASE_PATH="$HOME" ;; "~/"*) KNOWLEDGE_BASE_PATH="$HOME/${KNOWLEDGE_BASE_PATH#\~/}" ;; esac
+    KNOWLEDGE_BASE_PATH="${KNOWLEDGE_BASE_PATH%/}"
+fi
+KB_SKILL_PATH="$KA_HOME/kb/skills/kb/SKILL.md"
 
 # build_prompt <pass-upper-offset> → echoes the headless distill prompt for ONE
 # pass whose upper bound is the given offset (= the full snapshot for a single
@@ -152,7 +173,17 @@ build_prompt() {
 You are a background distiller worker. Run mode: headless agent, no TTY interaction.
 
 [Task]
-Complete one incremental distill following the /kb distill --foreground workflow in kb/skills/kb.md.
+Complete one incremental distill following the deployed KB workflow at $KB_SKILL_PATH.
+
+[Resolved KA paths]
+- config: $CONFIG_PATH
+- knowledge base root: $KNOWLEDGE_BASE_PATH
+- raw directory: $KNOWLEDGE_BASE_PATH/raw
+- conversations directory: $KNOWLEDGE_BASE_PATH/conversations
+- topics directory: $KNOWLEDGE_BASE_PATH/topics
+
+Use these resolved paths directly. Do not probe legacy top-level config paths or
+infer the knowledge base from the current working directory.
 
 [Snapshot constraints (race condition guard)]
 - session_id: $SESSION_ID
@@ -241,7 +272,7 @@ run_distill_pass() {
 # `---`), not the body, and (2) take the MAX last_parsed_offset across matches
 # (the offset is monotonic, so the highest is the authoritative current state).
 read_cur_offset() {
-    local rawdir="$WORKSPACE_CWD/memory/raw" f fm off best=0
+    local rawdir="${KNOWLEDGE_BASE_PATH:-$WORKSPACE_CWD/memory}/raw" f fm off best=0
     [ -d "$rawdir" ] || { printf '0'; return; }
     for f in "$rawdir"/*.md; do
         [ -f "$f" ] || continue
@@ -310,7 +341,7 @@ printf '[distill-worker] end_iso=%s exit=%d duration_sec=%d\n' \
 # mark_failed instead.
 PARSED_JSON="$(node "$PARSER_CLI" \
     --log-path "$LOG_PATH" \
-    --memory-dir "$WORKSPACE_CWD/memory" \
+    --memory-dir "${KNOWLEDGE_BASE_PATH:-$WORKSPACE_CWD/memory}" \
     --start-time "$START_ISO" \
     --stats-file "$STATS_OUT" 2>>"$LOG_PATH")" || true
 
@@ -328,6 +359,15 @@ TIER="$(node -e '
 let d=""; process.stdin.on("data",c=>d+=c); process.stdin.on("end",()=>{
   try { console.log(JSON.parse(d).tier); } catch { console.log("unknown"); }
 })' <<<"$PARSED_JSON")"
+
+# Codex reports a completed agent turn with exit 0 even when the agent's final
+# message says that a write was denied. For the Codex adapter, the mandatory
+# stats file (or observable KB writes recovered by the parser) is therefore the
+# completion signal. Never turn an unknown/no-write result into false success.
+if [ "$DISTILL_RUNTIME" = "codex" ] && [ "$TIER" = "unknown" ]; then
+    mark_failed 6 "Codex distill completed without mandatory stats or observable KB writes"
+    exit 6
+fi
 
 if [ "$TIER" = "unknown" ]; then
     FINAL_STATUS="done-stats-unknown"

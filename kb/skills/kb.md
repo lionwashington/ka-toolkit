@@ -27,13 +27,13 @@ Use the `kb_status` MCP tool. Show knowledge base statistics.
 
 Execute knowledge distillation on unprocessed conversations.
 
-- **`/kb distill`** (no flag) and **`/kb distill --background`**: spawn a background Opus headless process via `ka kb distill --background`. The current session returns immediately; the worker runs to completion in the background and writes `~/.knowledge-assistant/state/distill-current.json`. The worker holds **no Telegram token and never pushes** — Telegram has a single egress, the main session. On failure the worker writes a standalone sentinel `~/.knowledge-assistant/state/distill-last-failure.json` (with `failed_at` / `exit_code` / `attempts` / `snapshot_offset` / `error_excerpt` / `log_path` / `acked:false`) that the next run does NOT overwrite. Use this 99% of the time.
+- **`/kb distill`** (no flag) and **`/kb distill --background`**: spawn the configured headless runtime (`distiller.runtime: cc|codex`) via `ka kb distill --background`. The current session returns immediately; the worker runs to completion in the background and writes `~/.knowledge-assistant/state/distill-current.json`. The worker holds **no Telegram token and never pushes** — Telegram has a single egress, the main session. On failure the worker writes a standalone sentinel `~/.knowledge-assistant/state/distill-last-failure.json` (with `failed_at` / `exit_code` / `attempts` / `snapshot_offset` / `error_excerpt` / `log_path` / `acked:false`) that the next run does NOT overwrite. Use this 99% of the time.
 - **`/kb distill --foreground`**: run the workflow synchronously in the current session (blocks). Useful for debugging, when the background runner is broken, or when you specifically need the result inline.
 
 #### Background mode (default)
 
-1. Determine the jsonl path: `ls -t ~/.claude/projects/<encoded-cwd>/*.jsonl | head -n 1` (most recently modified one matches the current session). The "encoded cwd" replaces `/` with `-` (e.g. `-Users-you-workspace-your-project`).
-2. Spawn: `bash -c 'ka kb distill --background --jsonl <abs-path>'`
+1. Spawn `ka kb distill --background`. The KB launcher resolves the canonical main transcript for the configured runtime and current workspace; do not guess a transcript by global modification time.
+2. For an explicit recovery/debug run only, pass `--jsonl <abs-path> --session-id <id>`.
 3. Capture the one-line stdout (`distill-bg: pid=N log=PATH status=STATEFILE snapshot=BYTES`) and surface it to the user.
 4. Done — do NOT execute Phase 0/1 yourself; the worker process handles them.
 5. If `ka kb distill --background` exits non-zero, fall back to the foreground workflow below (rare path; usually means jsonl missing or another worker already running).
@@ -50,14 +50,14 @@ To inspect a running or finished worker later, use `ka kb distill status` (or `k
 **Workflow:**
 
 **Phase 0 — Capture current session to raw/ (incremental)**
-1. Find the current session's transcript file: look in `~/.claude/projects/` for a `.jsonl` file matching the current session (most recently modified `.jsonl` file in the project subdirectory matching the current working directory).
+1. Find the current runtime's canonical transcript: Claude Code uses its project JSONL; Codex uses the canonical thread rollout under `$CODEX_HOME/sessions`. Never select the newest transcript across unrelated working directories.
 2. Check if this session is already captured in `raw/` (by matching `session_id` in frontmatter).
 3. **Always use the `ka-jsonl-reader` CLI** to extract messages — do NOT read the jsonl yourself (jsonl can reach 50MB+ and re-reading wastes tokens; the CLI does incremental seek-read in Node).
 
    Run the CLI:
 
    ```bash
-   node "$HOME/.knowledge-assistant/runtime/core-cli/jsonl-reader-cli.js" \
+   node "$HOME/.knowledge-assistant/kb/core/dist/<runtime-reader-cli>.js" \
      --jsonl <abs-path-to-jsonl> \
      [--offset <last_parsed_offset>] \
      [--last-entry-uuid <last_parsed_message_id>] \
@@ -89,7 +89,7 @@ To inspect a running or finished worker later, use `ka kb distill status` (or `k
    ```yaml
    ---
    id: <8-char hex>
-   source: claude-code
+   source: <claude-code|codex>
    session_id: <session uuid>
    timestamp: <ISO>
    distilled: false
@@ -104,7 +104,7 @@ To inspect a running or finished worker later, use `ka kb distill status` (or `k
    Body: append `markdownDelta` to existing body (or replace on fallback). Each batch is delimited by `<!-- batch N @ timestamp -->` for human review.
 
 **Phase 1 — Process raw → conversations + topics**
-5. Read the knowledge base config from `~/.knowledge-assistant/config.yaml`
+5. Read the knowledge base config from `~/.knowledge-assistant/config/config.yaml`
 6. Read all unprocessed raw files from `raw/` directory (files with `distilled: false` in frontmatter)
 7. If no unprocessed content, report "Nothing to distill" and exit
 8. Read existing topics via `kb_list_topics` MCP tool
@@ -160,7 +160,7 @@ To inspect a running or finished worker later, use `ka kb distill status` (or `k
 11. **Auto-split when daily log exceeds 1000 lines**. After writing/appending to `conversations/YYYY-MM-DD.md`, run the splitter CLI:
 
     ```bash
-    node "$HOME/.knowledge-assistant/runtime/core-cli/daily-log-splitter-cli.js" \
+    node "$HOME/.knowledge-assistant/kb/core/dist/daily-log-splitter-cli.js" \
       --file <abs path to YYYY-MM-DD.md> [--threshold 1000]
     ```
 

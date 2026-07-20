@@ -110,6 +110,7 @@ describe('inbound attachments', () => {
     const got = main.received.find(r => r.meta.attachment_path)!
     assert.equal(got.content, '[image]', 'no caption → English placeholder')
     assert.match(got.meta.attachment_path, /attachments\//, 'attachment_path points into the daemon attachments dir')
+    assert.equal(got.meta.attachment_kind, 'image')
     assert.equal(got.meta.message_id, 'm-img')
     for (const v of Object.values(got.meta)) assert.equal(typeof v, 'string')  // meta all-string invariant
   })

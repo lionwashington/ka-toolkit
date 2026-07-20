@@ -50,16 +50,32 @@ test('Telegram routes an owner message through a persistent Codex target', async
     assert.equal(replied, true, `sent=${JSON.stringify(telegram.sent())}\nlog=${log}`)
     assert.equal(telegram.sent().filter(message => message.text.includes('echo:hello')).length, 1)
 
-    push(2, 'to codex-main: approve-me')
+    telegram.push({
+      update_id: 2,
+      message: {
+        message_id: 2,
+        date: Math.floor(Date.now() / 1000),
+        from: { id: 12345 },
+        chat: { id: 12345 },
+        caption: 'to codex-main: inspect-image',
+        photo: [{ file_id: 'image-large', file_unique_id: 'codex-image' }],
+      },
+    })
+    const imageDelivered = await waitFor(() => telegram.sent().some(message =>
+      message.text.includes('echo:inspect-image|localImage:') && message.text.includes('codex-image.jpg'),
+    ), 5_000)
+    assert.equal(imageDelivered, true, `image input not delivered: ${JSON.stringify(telegram.sent())}`)
+
+    push(3, 'to codex-main: approve-me')
     assert.equal(await waitFor(() => telegram.sent().some(message => message.text.includes('requests approval 1')), 5_000), true)
-    push(3, 'to codex-main: /approve 1')
+    push(4, 'to codex-main: /approve 1')
     const approved = await waitFor(() => telegram.sent().some(message => message.text.includes('echo:approve-me')), 5_000)
     const approvalLog = (() => { try { return readFileSync(join(daemon.dataDir, 'channel.log'), 'utf8') } catch { return '' } })()
     assert.equal(approved, true, `sent=${JSON.stringify(telegram.sent())}\nlog=${approvalLog}`)
 
-    push(4, 'to codex-main: wait-for-interrupt')
+    push(5, 'to codex-main: wait-for-interrupt')
     await new Promise(resolve => setTimeout(resolve, 100))
-    push(5, 'to codex-main: /stop')
+    push(6, 'to codex-main: /stop')
     assert.equal(await waitFor(() => telegram.sent().some(message => message.text.includes('Interrupt requested.')), 5_000), true)
   } finally {
     await daemon.stop()

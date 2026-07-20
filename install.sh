@@ -544,6 +544,14 @@ deploy_core_cli() {      # core CLI (called by kb skill) → runtime/core-cli (t
     [ -f "$f" ] || continue
     cp "$f" "$dest/"; cnt=$((cnt + 1))
   done
+  # Runtime-specific transcript readers keep their format knowledge in the
+  # adapter while sharing the same deployed CLI directory with the worker.
+  local codex_reader="$REPO_ROOT/kb/adapter-codex/dist/rollout-reader-cli.js"
+  if [ -f "$codex_reader" ]; then
+    cp "$codex_reader" "$dest/codex-rollout-reader-cli.js"; cnt=$((cnt + 1))
+  else
+    log "  WARN Codex rollout reader missing (run pnpm build first): ${codex_reader}"
+  fi
   log "  OK ${dest} (${cnt} core CLI(s) copied into runtime; kb skill no longer points at repo)"
 }
 
@@ -733,7 +741,7 @@ PY
   mkdir -p "$(dirname "$CODEX_HOOKS")"
   [ -f "$CODEX_HOOKS" ] && cp "$CODEX_HOOKS" "${CODEX_HOOKS}.pre-switch-$(date +%Y%m%d%H%M%S)"
   CODEX_HOOK_PATH="$codex_hook" python3 - "$CODEX_HOOKS" <<'PY'
-import json, os, sys
+import json, os, shlex, sys
 p = sys.argv[1]
 try:
     with open(p) as f: data = json.load(f)

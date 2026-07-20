@@ -477,7 +477,10 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
       sender_id: cfg.self_open_id,
       message_id: q.mid,
       ts: Math.floor(q.ts / 1000),
-      ...(attachment_path ? { attachment_path } : {}),
+      ...(attachment_path ? {
+        attachment_path,
+        attachment_kind: q.att?.kind ?? '',
+      } : {}),
     })
   }
 }

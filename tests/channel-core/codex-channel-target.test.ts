@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BindingStore } from '../../channels/core/src/bindings.ts'
 import { AppServerClient } from '../../channels/core/src/codex/app-server-client.ts'
-import { CodexChannelTarget, type CodexChannelEvent } from '../../channels/core/src/codex/channel-target.ts'
+import { buildCodexTurnInput, CodexChannelTarget, type CodexChannelEvent } from '../../channels/core/src/codex/channel-target.ts'
 
 const fake = fileURLToPath(new URL('../codex-app-server/fake-app-server.mjs', import.meta.url))
 
@@ -30,6 +30,20 @@ function target(dir: string, appServer: AppServerClient, events: CodexChannelEve
     onEvent: event => { events.push(event) },
   })
 }
+
+test('maps downloaded platform images to Codex localImage input', () => {
+  assert.deepEqual(buildCodexTurnInput({
+    content: 'describe this',
+    meta: { attachment_path: '/tmp/photo.jpg', attachment_kind: 'photo' },
+  }), [
+    { type: 'text', text: 'describe this' },
+    { type: 'localImage', path: '/tmp/photo.jpg' },
+  ])
+  assert.deepEqual(buildCodexTurnInput({
+    content: '[attachment: notes.pdf]',
+    meta: { attachment_path: '/tmp/notes.pdf', attachment_kind: 'document' },
+  }), [{ type: 'text', text: '[attachment: notes.pdf]' }])
+})
 
 test('serializes turns, emits normalized events, and persists a durable binding', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ka-codex-target-'))
@@ -103,6 +117,61 @@ test('fails an active turn promptly and resumes the binding on the next queued m
   await runtime.deliver({ content: 'after-restart', meta: {} })
   assert.equal(events.find(event => event.type === 'final')?.text, 'echo:after-restart')
   await appServer.stop()
+})
+
+test('classifies a transport close separately and does not leak an unhandled rejection', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-disconnect-'))
+  const events: CodexChannelEvent[] = []
+  const appServer = client(join(dir, 'fake-state.json'))
+  const runtime = target(dir, appServer, events)
+  const unhandled: unknown[] = []
+  const onUnhandled = (reason: unknown) => { unhandled.push(reason) }
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    const delivered = runtime.deliver({ content: 'wait-for-interrupt', meta: {} })
+    while (!events.some(event => event.type === 'turn-started')) await new Promise(resolve => setTimeout(resolve, 5))
+    const error = new Error('simulated local WebSocket reset')
+    ;(appServer as any).failAll(error)
+    appServer.emit('transport-close', { transport: 'websocket', error })
+    await assert.rejects(delivered, /connection was lost during an active turn/)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+    await appServer.stop()
+  }
+})
+
+test('contains simultaneous transport closes from two Codex targets', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'ka-codex-dual-disconnect-'))
+  const unhandled: unknown[] = []
+  const onUnhandled = (reason: unknown) => { unhandled.push(reason) }
+  process.on('unhandledRejection', onUnhandled)
+  const clients = [client(join(root, 'main-state.json')), client(join(root, 'mate-state.json'))]
+  const events: CodexChannelEvent[][] = [[], []]
+  const targets = clients.map((appServer, index) => {
+    const dir = join(root, String(index))
+    mkdirSync(dir)
+    return target(dir, appServer, events[index])
+  })
+  try {
+    const deliveries = targets.map(runtime => runtime.deliver({ content: 'wait-for-interrupt', meta: {} }))
+    while (events.some(list => !list.some(event => event.type === 'turn-started'))) {
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+    for (const appServer of clients) {
+      const error = new Error('simultaneous local WebSocket reset')
+      ;(appServer as any).failAll(error)
+      appServer.emit('transport-close', { transport: 'websocket', error })
+    }
+    const settled = await Promise.allSettled(deliveries)
+    assert.ok(settled.every(result => result.status === 'rejected' && /connection was lost/.test(String(result.reason))))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+    await Promise.all(clients.map(appServer => appServer.stop()))
+  }
 })
 
 test('waits for a TUI-owned turn before starting a Telegram turn on the shared thread', async () => {

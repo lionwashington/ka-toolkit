@@ -44,7 +44,7 @@ restore_state() {
 # Drive one spawn → wait → return "status|tier".
 run_and_collect() {
     local case_name="$1"
-    KA_HOME="$REPO" WORKSPACE_CWD="$WORKSPACE" \
+    KA_HOME="$REPO" KA_CONFIG="$TMP/no-test-config.yaml" KA_DISTILL_RUNTIME="${TEST_RUNTIME:-cc}" WORKSPACE_CWD="$WORKSPACE" \
         bash "$REPO/kb/ops/distill-bg.sh" --jsonl "$JSONL" --session-id "fake-${case_name}" \
         > /dev/null
     local state="$HOME/.knowledge-assistant/state/distill-current.json"
@@ -145,6 +145,24 @@ chmod +x "$FAKE_BIN/claude"
 out_d="$(run_and_collect "d-unknown")"
 echo "Case D: $out_d"
 [ "$out_d" = "done-stats-unknown|unknown" ] || { echo "FAIL Case D: got '$out_d'"; cat "$HOME/.knowledge-assistant/state/distill-current.json"; exit 1; }
+restore_state
+
+# ----- Case E: Codex exit 0 without stats/writes is a hard failure ----------
+reset_state "e-codex-missing-stats"
+cat > "$FAKE_BIN/codex" <<'EOFAKE'
+#!/bin/bash
+printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1}}'
+exit 0
+EOFAKE
+chmod +x "$FAKE_BIN/codex"
+
+TEST_RUNTIME=codex
+out_e="$(run_and_collect "e-codex-missing-stats")"
+unset TEST_RUNTIME
+echo "Case E: $out_e"
+[ "$out_e" = "failed|" ] || { echo "FAIL Case E: got '$out_e'"; cat "$HOME/.knowledge-assistant/state/distill-current.json"; exit 1; }
+grep -q 'without mandatory stats' "$HOME/.knowledge-assistant/state/distill-current.json"
+grep -q '"acked": false' "$HOME/.knowledge-assistant/state/distill-last-failure.json"
 restore_state
 
 echo "OK 22-distill-bg-result-parsing"

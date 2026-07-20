@@ -25,6 +25,23 @@ export interface CodexChannelTargetOptions {
   now?: () => Date
 }
 
+type CodexUserInput =
+  | { type: 'text'; text: string }
+  | { type: 'localImage'; path: string }
+
+const IMAGE_EXTENSIONS = /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|webp)$/i
+
+/** Map a platform message to the current Codex App Server UserInput schema. */
+export function buildCodexTurnInput(source: RuntimeTargetMessage): CodexUserInput[] {
+  const input: CodexUserInput[] = [{ type: 'text', text: source.content }]
+  const path = source.meta.attachment_path?.trim()
+  const kind = source.meta.attachment_kind?.trim().toLowerCase()
+  if (path && (kind === 'photo' || kind === 'image' || kind === 'sticker' || IMAGE_EXTENSIONS.test(path))) {
+    input.push({ type: 'localImage', path })
+  }
+  return input
+}
+
 interface PendingApproval {
   turnId: string
   resolve: (decision: { decision: 'accept' | 'decline' }) => void
@@ -182,12 +199,18 @@ export class CodexChannelTarget implements RuntimeTarget {
         const cleanup = () => {
           this.options.client.off('notification', onNotification)
           this.options.client.off('exit', onExit)
+          this.options.client.off('transport-close', onTransportClose)
           clearTimeout(timer)
         }
         const onExit = () => {
           cleanup()
           this.connected = false
           reject(new Error('Codex App Server exited during an active turn'))
+        }
+        const onTransportClose = () => {
+          cleanup()
+          this.connected = false
+          reject(new Error('Codex App Server connection was lost during an active turn'))
         }
         const onNotification = (message: any) => {
           const params = message.params ?? {}
@@ -209,14 +232,19 @@ export class CodexChannelTarget implements RuntimeTarget {
         }
         this.options.client.on('notification', onNotification)
         this.options.client.once('exit', onExit)
+        this.options.client.once('transport-close', onTransportClose)
         timer = setTimeout(() => {
           cleanup()
           reject(new Error('Codex turn completion timed out'))
         }, 10 * 60_000).unref()
       })
+      // `turn/start` and the completion watcher can reject from the same
+      // transport close. Mark the watcher handled immediately so a rejected
+      // start request cannot leave a second, orphaned rejection behind.
+      void completed.catch(() => {})
       const started = await this.options.client.request('turn/start', {
         threadId: binding.runtimeSessionId,
-        input: [{ type: 'text', text: source.content }],
+        input: buildCodexTurnInput(source),
       })
       turnId = started.turn.id
       this.activeTurnId = turnId

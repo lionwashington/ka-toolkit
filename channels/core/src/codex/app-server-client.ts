@@ -166,7 +166,7 @@ export class AppServerClient extends EventEmitter {
         if (this.socket === socket) this.socket = null
         const error = new Error('app-server socket closed')
         this.failAll(error)
-        this.emit('exit', { code: null, signal: null })
+        this.emit('transport-close', { transport: 'socket', error })
       })
     })
   }
@@ -191,7 +191,7 @@ export class AppServerClient extends EventEmitter {
         if (this.websocket === websocket) this.websocket = null
         const error = new Error('app-server WebSocket closed')
         this.failAll(error)
-        this.emit('exit', { code: null, signal: null })
+        this.emit('transport-close', { transport: 'websocket', endpoint, error })
       })
     })
   }
