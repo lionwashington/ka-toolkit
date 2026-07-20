@@ -1,8 +1,8 @@
 # lark-channel
 
-Standalone background daemon that bridges **Lark group chats** with **multiple Claude Code processes** in both directions:
-the owner routes group messages to different CCs with `to <name>: content`, and a CC replies back to the group via the `reply` tool (auto-prefixed with `[#<number>-<name>]`).
-The webhook token lives only at this single daemon exit; **CC processes never touch it**.
+Standalone background daemon that bridges **Lark group chats** with multiple agent-runtime sessions in both directions.
+The owner routes group messages to Claude Code or Codex targets with `to <name>: content`; replies are auto-prefixed with `[#<number>-<name>]`.
+The webhook token lives only at this single daemon exit; agent-runtime processes never receive it.
 
 > **Architecture design** is in [`ARCHITECTURE.md`](./ARCHITECTURE.md); ops/troubleshooting in the lark-channel skill (`channels/lark/skill/SKILL.md`).
 
@@ -11,20 +11,20 @@ Lark (group msg)
    │ ① lark-cli poll (per-group: base 1s, per-group override e.g. alert group 5s)
    ▼
 lark-channel daemon  (node @127.0.0.1:9876)
-   │ ② notifications/claude/channel over /mcp   │ ③ webhook bot POST
+   │ ② MCP notification or App Server turn   │ ③ webhook/CardKit
    ▼                                            ▼
-CC processes (started with claude-ch <name>)    Lark group (reply, auto-prefixed [#n-name])
+Claude Code / Codex runtime targets             Lark group (reply, auto-prefixed [#n-name])
 ```
 
-- **Independent from Claude Code lifecycle.** Daemon ppid=1, survives `/exit` / `/compact` / Claude crash.
+- **Independent daemon lifecycle.** The daemon survives runtime exits and crashes. Claude MCP clients reconnect through their normal MCP lifecycle; Workshop re-registers live Codex App Servers.
 - **Singleton.** `flock -n` on `.daemon.lock` (Linux); else the fixed HTTP port enforces it (`EADDRINUSE` → clean exit).
 - **Auto-revive.** Cron `* * * * * start.sh` brings it back within ~60s of any death.
-- **Named channel + numbers.** Each Claude process connects with `?name=<name>`; `to <name>:` / `to <number>:` targets on the Lark side; lenient prefix (`to`/`2`, optional colon).
+- **Named channel + numbers.** Claude processes connect with `?name=<name>` and Codex mates register the same logical names; `to <name>:` / `to <number>:` targets on the Lark side; lenient prefix (`to`/`2`, optional colon).
 - **Deliver to all same-named sessions + parallel timeout.** A single client opens two connections (tool + consumer), the consumer isn't necessarily the owner, so deliver to all same-named sessions; parallel + timeout prevents head-of-line.
 - 🔴 **notification meta must be all-string.** A numeric field makes Claude Code silently drop the entire notification (historical culprit `channel_number`).
 - **Dedup + self-heal.** message_id-level dedup (fixes the same-minute multiple-messages loss); after a daemon restart the client auto re-handshakes via 404 / re-adopt.
 - **Write-style keepalive probing (v0.6.2)**: a write-only `notification` round every 5s (no response required), evict only after 3 strikes, the newest 2 per name never evicted. **NEVER** use request-style ping (it falsely kills the one-way consumer).
-- **Watermark gated on sessions.** When there are no sessions, the watermark doesn't advance — messages during Claude's offline period are replayed after reconnect.
+- **Watermark gated on runtime targets.** When neither Claude MCP sessions nor Codex targets are online, the watermark doesn't advance, so messages are replayed after reconnect.
 
 ## Directory
 
@@ -79,11 +79,14 @@ See [`SETUP.md`](./SETUP.md) for the full credential-gathering walkthrough.
 
 Codex replies use CardKit 2.0 streaming through the authenticated `lark-cli` bot
 identity. The app must have message-send and card create/update scopes. If CardKit
-creation is unavailable, the daemon automatically sends the completed response
-through the configured group webhook instead.
+creation, send, or a later content update is unavailable, the daemon automatically
+sends the completed response through the configured group webhook instead. Interrupted,
+failed, and text-less turns also close their placeholder card rather than leaving it
+permanently in streaming mode.
 
 Codex mate names and working directories are owned exclusively by Workshop.
-Workshop registers each live App Server socket with Channel; the Lark daemon
+Workshop registers each live loopback App Server WebSocket endpoint and canonical
+thread ID with Channel; the Lark daemon
 does not read `workshop.yaml` and runtime targets are not duplicated under
 `channels.lark`.
 
@@ -145,7 +148,10 @@ Listens on `127.0.0.1:9876` (loopback only). DNS rebinding protection auto-appli
 | Method | Path | Purpose |
 |---|---|---|
 | `POST / GET / DELETE` | `/mcp` | MCP Streamable HTTP transport. Claude Code's MCP client lives here. Session-aware (per-Claude-process). |
-| `GET` | `/api/status` | JSON: `{pid, uptime_seconds, mcp_sessions, channels_online, active_owners, sessions[], poll_errors_total, dispatches_total, replies_total, keepalive_culled_total, route_miss_total, last_poll_at, watermarks}` |
+| `GET` | `/api/status` | Health, MCP sessions, `runtime_targets`, channel names/numbers, dispatch/reply/probe counters, Lark poll health, and per-chat watermarks. |
+| `POST` | `/api/runtimes/codex` | Workshop-only loopback registration of a Codex App Server endpoint + canonical thread. |
+| `DELETE` | `/api/runtimes/codex/:name` | Unregister a Workshop-managed Codex target. |
+| `POST` | `/api/runtimes/codex/:name/deliver` | Submit an automation prompt to an already registered Codex target. |
 | `GET` | `/api/metrics` | Prometheus exposition format (text/plain) |
 | `POST` | `/api/shutdown` | Graceful exit (loopback only) |
 
@@ -194,16 +200,16 @@ grep -E "error|fail|exception|uncaught" ~/.knowledge-assistant/channels/lark-dae
 
 ## Security Iron Rules
 
-- **The daemon holds the webhook tokens; CC processes (including every mate) never touch them.** CC only sends/receives via MCP; the credential lives at a single exit.
+- **The daemon holds the webhook tokens; agent-runtime processes never touch them.** Claude Code communicates through MCP and Codex through App Server; credentials remain at the single channel exit.
 - **self filter**: only messages whose `sender.id === self_open_id` (and `sender_type === user`) are processed; bot messages, other users' messages, and card messages are discarded (prevents prompt injection from other chat members).
 - `secrets.yaml` is `chmod 600` and gitignored; CC processes never see the webhook tokens.
 
 ## Debug checklist (when something stops working)
 
 1. **`status.sh` exit 1**: daemon dead. Check `tail -50 ~/.knowledge-assistant/channels/lark-daemon/channel.log` for crash trace. Re-launch via `start.sh`.
-2. **`mcp_sessions: 0`**: Claude Code not connected. Re-run `claude-ch <name>` / restart Claude Code.
+2. **Target absent**: for Claude Code, `mcp_sessions: 0` means no MCP client is connected; re-run `claude-ch <name>` or restart Claude Code. For Codex, inspect `runtime_targets` and repair/restart the corresponding Workshop mate if it is absent or `alive: false`.
 3. **`poll_errors_total` climbs**: lark-cli calls failing (auth expired? `lark_cli_bin` path? chat_id correct?). `grep "fetch failed" channel.log | tail` for cause; run the lark-cli command manually to see the error.
-4. **Watermark doesn't advance**: `mcp_sessions: 0` is the gating reason (intentional — replay on Claude reconnect). To genuinely skip ahead while no client is connected, manually edit `state.json`.
+4. **Watermark doesn't advance**: no Claude MCP session or Codex runtime target is online (intentional replay behavior). To genuinely skip ahead while no target is connected, manually edit `state.json`.
 5. **HTTP port 9876 occupied**: `lsof -nP -iTCP:9876 -sTCP:LISTEN` (or `ss -tlnp | grep 9876`) and kill the orphan.
 6. **Two daemons running somehow**: shouldn't happen due to flock, but if it does: `ps -ef | grep daemon.mjs`, kill the one without the flock-wrapped parent.
 

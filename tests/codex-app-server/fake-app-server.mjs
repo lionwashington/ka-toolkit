@@ -56,12 +56,16 @@ createInterface({ input: process.stdin }).on('line', line => {
     send({ method: 'turn/started', params: { threadId: message.params.threadId, turn } })
     const text = message.params.input?.find(item => item.type === 'text')?.text ?? ''
     const localImage = message.params.input?.find(item => item.type === 'localImage')?.path
-    const complete = () => {
+    const complete = (status = 'completed') => {
       if (!activeTurns.has(turn.id)) return
       activeTurns.delete(turn.id)
       const imageSuffix = localImage ? `|localImage:${localImage}` : ''
-      send({ method: 'item/agentMessage/delta', params: { threadId: message.params.threadId, turnId: turn.id, itemId: 'answer', delta: `echo:${text}${imageSuffix}` } })
-      send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn: { ...turn, status: 'completed' } } })
+      const finalText = `echo:${text}${imageSuffix}`
+      if (text !== 'complete-without-text' && text !== 'fail-without-text' && text !== 'final-item-only') {
+        send({ method: 'item/agentMessage/delta', params: { threadId: message.params.threadId, turnId: turn.id, itemId: 'answer', delta: finalText } })
+      }
+      const items = text === 'final-item-only' ? [{ type: 'agentMessage', id: 'answer', text: finalText }] : []
+      send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn: { ...turn, status, items } } })
     }
     activeTurns.set(turn.id, { threadId: message.params.threadId, turn })
     if (text === 'crash-process') {
@@ -73,6 +77,8 @@ createInterface({ input: process.stdin }).on('line', line => {
         complete()
       })
       send({ id, method: 'item/commandExecution/requestApproval', params: { threadId: message.params.threadId, turnId: turn.id, command: 'echo safe' } })
+    } else if (text === 'fail-without-text') {
+      complete('failed')
     } else if (text !== 'wait-for-interrupt') complete()
     return
   }

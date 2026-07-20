@@ -1,12 +1,12 @@
 # Installing the full ka stack on Ubuntu (incl. WSL2) — with the channel daemon on Lark
 
 Install the entire knowledge-assistant stack onto a single Linux machine: ka CLI + the various MCPs + hooks + skills +
-workshop (multi-CC tmux collaboration) + **channel daemon = Lark** (not telegram) +
-cron scheduled tasks. Each CC sends/receives through a Lark group: send a message in the group → the CC receives it; the CC calls `reply` → it goes back to the group.
+workshop (multi-agent tmux collaboration) + **channel daemon = Lark** (not telegram) +
+cron scheduled tasks. Each workshop mate can use Claude Code or Codex: a Lark message is routed to the selected mate, and its explicit runtime reply returns to the group.
 
 > Verified end-to-end in Docker Ubuntu (Linux aarch64 / Node 22 / pnpm / python3): the install flow,
 > the lark daemon build+run, the lark tests, the crontab cron backend — all passed (`tests/ubuntu-lark.Dockerfile`).
-> Lark attachments ARE supported (image/file/audio/video → downloaded via `lark-cli +messages-resources-download` to the daemon's `attachments/`, surfaced to the CC as `meta.attachment_path` to Read). Cross-platform cc2cc in workshop is not done (lark groups can talk to each other, isolated from telegram).
+> Lark attachments ARE supported (image/file/audio/video → downloaded via `lark-cli +messages-resources-download` to the daemon's `attachments/`, surfaced to Claude Code as `meta.attachment_path` or to Codex as `localImage`/a local file path). Claude Code and Codex targets can coexist in one workshop and share the same Lark routing bus.
 
 ---
 

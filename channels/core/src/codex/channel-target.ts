@@ -28,7 +28,7 @@ export interface CodexChannelTargetOptions {
 }
 
 type CodexUserInput =
-  | { type: 'text'; text: string }
+  | { type: 'text'; text: string; text_elements: [] }
   | { type: 'localImage'; path: string }
 
 const IMAGE_EXTENSIONS = /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|webp)$/i
@@ -43,7 +43,7 @@ export function buildCodexTurnInput(source: RuntimeTargetMessage): CodexUserInpu
   // input. Include the downloaded path for other attachment types so Codex can
   // inspect them with its normal filesystem tools.
   const text = path && !isImage ? `${source.content}\n\nLocal attachment path: ${path}` : source.content
-  const input: CodexUserInput[] = [{ type: 'text', text }]
+  const input: CodexUserInput[] = [{ type: 'text', text, text_elements: [] }]
   if (path && isImage) {
     input.push({ type: 'localImage', path })
   }
@@ -295,7 +295,8 @@ export class CodexChannelTarget implements RuntimeTarget {
       this.activeTurnId = turnId
       this.persistActiveTurn(binding, turnId)
       const result = await completed
-      if (result.text) await this.options.onEvent({ type: 'final', threadId: binding.runtimeSessionId, turnId, text: result.text }, source)
+      const finalText = result.text || finalAgentText(result.turn)
+      if (finalText) await this.options.onEvent({ type: 'final', threadId: binding.runtimeSessionId, turnId, text: finalText }, source)
       await this.options.onEvent({ type: 'turn-completed', threadId: binding.runtimeSessionId, turnId, status: result.turn.status }, source)
     } catch (error: any) {
       await this.options.onEvent({ type: 'error', threadId: binding?.runtimeSessionId, turnId, error }, source)

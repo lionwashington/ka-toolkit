@@ -124,10 +124,7 @@ export class CodexRuntimeManager {
     } else if (event.type === 'final') {
       const stream = this.streams.get(event.turnId)
       if (stream && this.platform.finishStream) {
-        if (stream.timer) clearTimeout(stream.timer)
-        if (stream.update) await stream.update
-        const error = await this.platform.finishStream(await stream.handle, `${stream.prefix}${event.text}`)
-        this.streams.delete(event.turnId)
+        const error = await this.finishStream(event.turnId, stream, event.text)
         if (error) throw new Error(error)
         counters.replies++
         log(`codex target ${name} replied (turn=${event.turnId})`)
@@ -151,8 +148,38 @@ export class CodexRuntimeManager {
     } else if (event.type === 'error') {
       log(`codex target ${name} failed: ${event.error.message}`)
       counters.repliesFailed++
+      const stream = event.turnId ? this.streams.get(event.turnId) : undefined
+      if (stream && this.platform.finishStream) {
+        const suffix = stream.text ? `\n\n⚠️ Codex turn failed: ${event.error.message}` : `⚠️ Codex turn failed: ${event.error.message}`
+        const streamError = await this.finishStream(event.turnId!, stream, `${stream.text}${suffix}`)
+          .catch(error => error?.message ?? String(error))
+        if (!streamError) return
+        log(`codex stream failure fallback failed: ${streamError}`)
+      }
       const target = this.platform.resolveReplyTarget(replyTarget)
       if (target) await this.platform.send(target, `⚠️ ${name}: Codex turn failed: ${event.error.message}`)
+    } else if (event.type === 'turn-completed') {
+      // A completed/interrupted/failed turn is not guaranteed to contain an
+      // agent-message delta. Close any placeholder stream so Lark never leaves
+      // a permanent "Generating response…" card behind.
+      const stream = this.streams.get(event.turnId)
+      if (stream && this.platform.finishStream) {
+        const text = stream.text || completionNotice(event.status)
+        const error = await this.finishStream(event.turnId, stream, text)
+        if (error) throw new Error(error)
+        counters.replies++
+        log(`codex target ${name} closed empty stream (turn=${event.turnId}, status=${event.status})`)
+      }
+    }
+  }
+
+  private async finishStream(turnId: string, stream: ActiveStream, text: string): Promise<string | null> {
+    try {
+      if (stream.timer) clearTimeout(stream.timer)
+      if (stream.update) await stream.update
+      return await this.platform.finishStream!(await stream.handle, `${stream.prefix}${text}`)
+    } finally {
+      this.streams.delete(turnId)
     }
   }
 
@@ -178,6 +205,12 @@ export class CodexRuntimeManager {
     if (!managed) throw new Error(`approval request for unknown Codex thread: ${threadId}`)
     return managed.target.requestApproval(request)
   }
+}
+
+function completionNotice(status: string): string {
+  if (status === 'interrupted') return 'Codex turn interrupted.'
+  if (status === 'failed') return 'Codex turn failed without a text response.'
+  return 'Codex completed without a text response.'
 }
 
 function sameRuntimeIdentity(left: CodexRuntimeRegistration, right: CodexRuntimeRegistration): boolean {
