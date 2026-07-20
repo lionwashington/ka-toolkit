@@ -89,11 +89,15 @@ APP_SERVER_ENDPOINT="ws://127.0.0.1:$APP_SERVER_PORT"
 
 # The legacy Telegram MCP may use the same bot identity as Channel and race its
 # getUpdates consumer. Replace that one transport with a disabled valid stdio
-# entry for this invocation only; the user's Codex configuration is untouched.
-codex \
-    -c 'mcp_servers.telegram.command="/usr/bin/true"' \
-    -c 'mcp_servers.telegram.args=[]' \
-    -c 'mcp_servers.telegram.enabled=false' \
+# entry for both App Server and remote TUI invocations; the user's Codex
+# configuration is untouched. The TUI also loads MCP configuration during its
+# own bootstrap even though it connects to an external App Server.
+TELEGRAM_MCP_OVERRIDES=(
+    -c 'mcp_servers.telegram.command="/usr/bin/true"'
+    -c 'mcp_servers.telegram.args=[]'
+    -c 'mcp_servers.telegram.enabled=false'
+)
+codex "${TELEGRAM_MCP_OVERRIDES[@]}" \
     app-server --listen "$APP_SERVER_ENDPOINT" >>"$SERVER_LOG" 2>&1 &
 APP_SERVER_PID=$!
 
@@ -170,7 +174,7 @@ register_loop &
 REGISTRAR_PID=$!
 
 run_codex() {
-    codex --remote "$APP_SERVER_ENDPOINT" "$@"
+    codex "${TELEGRAM_MCP_OVERRIDES[@]}" --remote "$APP_SERVER_ENDPOINT" "$@"
 }
 
 if [ "${#TUI_ARGS[@]}" -eq 0 ]; then

@@ -52,20 +52,20 @@ export KA_CODEX_THREAD_SELECTOR="$tmp_root/select-thread.mjs"
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" KA_CHANNEL=main \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" --model test-model >/dev/null 2>&1 \
     || fail "explicit Codex launch failed"
-grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --model test-model resume thread-current-cwd$' "$tmp_root/calls" || fail "channel endpoint, canonical thread, or explicit args were changed"
+grep -Eq -- 'mcp_servers\.telegram\.enabled=false --remote ws://127\.0\.0\.1:[0-9]+ --model test-model resume thread-current-cwd$' "$tmp_root/calls" || fail "channel endpoint, canonical thread, explicit args, or Telegram MCP isolation were changed"
 
 : > "$tmp_root/calls"
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" --last --dangerously-bypass-approvals-and-sandbox >/dev/null 2>&1 \
     || fail "legacy --last Codex launch failed"
-grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
+grep -Eq -- 'mcp_servers\.telegram\.enabled=false --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
     || fail "legacy --last did not select the current-cwd canonical thread"
 
 : > "$tmp_root/calls"
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" >/dev/null 2>&1 \
     || fail "fresh Codex launch failed"
-grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
+grep -Eq -- 'mcp_servers\.telegram\.enabled=false --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
     || fail "non-interactive default launch missing"
 ok "Codex launch preserves args and selects the current-cwd canonical thread"
 
@@ -75,7 +75,7 @@ FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" "resume --last" --dangerously-bypass-approvals-and-sandbox >/dev/null 2>&1 \
     || fail "legacy combined resume argument failed"
 if grep -q -- 'resume --last' "$tmp_root/calls"; then fail "combined resume directive leaked into Codex argv"; fi
-grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
+grep -Eq -- 'mcp_servers\.telegram\.enabled=false --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
     || fail "combined resume directive was not normalized"
 ok "Codex launch normalizes legacy combined resume arguments"
 
