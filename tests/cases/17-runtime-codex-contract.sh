@@ -16,6 +16,12 @@ done
 [ "$(runtime::launch_binary)" = codex ] || fail "launch binary is not codex"
 [ -x "$(runtime::launch_pane_script)" ] || fail "pane entrypoint is not executable"
 ok "Codex adapter contract is complete"
+if grep -q "thread/fork" "$OPS/runtimes/codex/select-thread.mjs"; then
+    fail "implicit Codex thread selection must not fork the latest thread"
+fi
+grep -q "thread/resume" "$OPS/runtimes/codex/select-thread.mjs" \
+    || fail "Codex thread selector does not resume the selected thread"
+ok "Codex implicit selection resumes the existing latest cwd thread"
 
 tag="$(runtime::ready_match $'header\n  ›  \n? for shortcuts')" || fail "ready fixture rejected"
 case "$tag" in prompt-chevron|status) ;; *) fail "unexpected ready tag: $tag" ;; esac
