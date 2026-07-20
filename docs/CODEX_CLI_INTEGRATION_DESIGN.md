@@ -464,15 +464,18 @@ rollout/jsonl
 
 ### 5.7 KB 安装面
 
-Codex adapter 负责：
+当前安装面如下：
 
-- 注册现有 KA MCP server；
-- 部署 `$CODEX_HOME/skills/<name>/SKILL.md`；
-- 在 `AGENTS.md` 中维护明确标记的 KA section；
-- 安装 capture hook；
-- 安装 Codex distill executor 配置。
+- `install.sh` 将 KA skills 复制到 `$KA_HOME/kb/skills/<name>/SKILL.md`；
+- `install.sh --switch` 将整个已部署 skill 目录链接到
+  `$CODEX_HOME/skills/<name>`，不链接回源码仓库；
+- Codex capture hook 构建到 `$KA_HOME/kb/hooks/`，再合并注册到
+  `$CODEX_HOME/hooks.json`，同时保留非 KA hook；
+- Codex rollout reader 复制到 `$KA_HOME/kb/core/dist/`；
+- distill runtime adapter 作为 `$KA_HOME/kb/ops/` 的一部分部署；
+- installer 不修改用户 workspace 的 `AGENTS.md`，也不把配置或凭据写入源码仓库。
 
-installer 不覆盖无关用户配置。Claude 和 Codex 都指向 `$KA_HOME` 下的部署产物，而不是设计态仓库。
+installer 不覆盖无关用户配置。Claude 和 Codex 都使用 `$KA_HOME` 下的部署产物，而不是设计态仓库。
 
 ### 5.8 KB 验收
 
@@ -552,40 +555,48 @@ ka kb distill --background
 - KB 可独立执行 distill，不依赖 Channel/Workshop 在线；
 - Cron 只调用公开 `ka` 命令，不进入任何部分的内部状态机。
 
-## 8. 建议源码布局
+## 8. 当前源码布局
 
 ```text
-channels/core/src/runtime/
-  types.ts
-  registry.ts
-  claude.ts
+channels/core/src/
+  targets.ts
+  bindings.ts
   codex/
-    client.ts
-    protocol.ts
-    adapter.ts
-    event-normalizer.ts
-    bindings.ts
+    app-server-client.ts
+    channel-target.ts
+    runtime-manager.ts
 
 workshop/ops/runtimes/
-  cc.sh
-  codex.sh
+  cc/
+    bin/start-pane.sh
+    launch.sh
+    ready-signals.sh
+    send-prompt.sh
+  codex/
+    bin/start-pane.sh
+    launch.sh
+    ready-signals.sh
+    select-thread.mjs
+    send-prompt.sh
 
 kb/
   adapter-cc/
   adapter-codex/
-    src/install.ts
-    src/capture.ts
-    src/hooks/
+    src/rollout.ts
+    src/rollout-reader-cli.ts
+    src/hooks/capture-hook.ts
   ops/distill-runtimes/
     cc.sh
     codex.sh
+    dispatch.sh
 ```
 
-这是目标布局，不代表 Phase 0 获得大范围目录迁移授权。
+这些文件属于 design side；生产运行时只使用 `install.sh` 构建或复制到
+`$KA_HOME` 的产物。
 
 ## 9. 研发分支与变更门禁
 
-正式研发已从经过验证的 `main` 基线创建专用分支 `feat/codex-runtime`。后续实现、测试和评审均在该分支按阶段推进：
+正式研发从经过验证的 `main` 基线创建专用分支 `feat/codex-runtime`，并已在验证完成后合并回 `main`。以下命令保留为当时的研发流程记录：
 
 ```bash
 git switch main

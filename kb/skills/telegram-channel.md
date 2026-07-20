@@ -7,12 +7,12 @@ user-invocable: true
 # Telegram-Channel Daemon Inspector
 
 The telegram-channel **daemon** is the single process that long-polls Telegram and
-routes each incoming message to the right CC session over MCP (StreamableHTTP).
+routes each incoming message to the right CC or Codex runtime target.
 It also serves the `reply` / `send_to_channel` MCP tools. One daemon, one port,
 many channels — each CC pane binds to a channel by name.
 
 - Default port: `9877` (override `KA_CHANNEL_PORT`; isolated test instances use 9878/9879).
-- Runtime location (post ka-gen2 switch): `~/.knowledge-assistant/runtime/daemon/`
+- Runtime location: `~/.knowledge-assistant/channels/telegram-daemon/`
   with `start.sh` / `stop.sh` / `status.sh`.
 - Full health is exposed at `GET http://127.0.0.1:<port>/api/status` (JSON).
 
@@ -58,7 +58,7 @@ pe = d.get("probe_evicted_total", 0); poe = d.get("poll_errors_total", 0)
 print(f"  probes_sent={ps}  probe_failures={pf}  probe_evicted={pe}  poll_errors={poe}")
 lp = d.get("last_poll_at", "?")
 print(f"  last_poll={lp}")
-' 2>/dev/null || echo "daemon DOWN on port $PORT (curl failed) — start it: ~/.knowledge-assistant/runtime/daemon/start.sh"
+' 2>/dev/null || echo "daemon DOWN on port $PORT (curl failed) — start it: ka channel start"
 ```
 
 Reading the table:
@@ -99,9 +99,8 @@ its MCP connection cleanly — this is exactly what cures half-open sessions.
 > tell the user to run it themselves.
 
 ```bash
-D="$HOME/.knowledge-assistant/runtime/daemon"
-"$D/stop.sh"; sleep 1; "$D/start.sh"
-"$D/status.sh"   # re-check
+ka channel restart
+ka channel status
 ```
 
 The daemon reloads `state.json` on start, so **channel numbers are preserved** across
@@ -110,6 +109,7 @@ restarts (they're persisted, not reassigned).
 ## Notes
 
 - This skill only *reads* `/api/status` and (on explicit request) restarts the daemon.
-  It never edits daemon config/secrets — those live in `runtime/daemon/{config.json,.env}`.
+  It never edits configuration or secrets; those live in
+  `~/.knowledge-assistant/config/{config.yaml,secrets.yaml}`.
 - `ka status` / `ka doctor` give a coarser one-line daemon check; use this skill when
   you need the per-channel breakdown or a half-open diagnosis.
