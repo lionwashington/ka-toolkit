@@ -104,3 +104,21 @@ test('fails an active turn promptly and resumes the binding on the next queued m
   assert.equal(events.find(event => event.type === 'final')?.text, 'echo:after-restart')
   await appServer.stop()
 })
+
+test('waits for a TUI-owned turn before starting a Telegram turn on the shared thread', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-shared-thread-'))
+  const events: CodexChannelEvent[] = []
+  const appServer = client(join(dir, 'fake-state.json'))
+  const runtime = target(dir, appServer, events)
+  await runtime.deliver({ content: 'seed', meta: {} })
+  events.length = 0
+  const threadId = new BindingStore(join(dir, 'bindings.json')).list()[0].runtimeSessionId
+  appServer.emit('notification', { method: 'turn/started', params: { threadId, turn: { id: 'tui-turn' } } })
+  const telegramTurn = runtime.deliver({ content: 'from-telegram', meta: {} })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(events.some(event => event.type === 'turn-started'), false)
+  appServer.emit('notification', { method: 'turn/completed', params: { threadId, turn: { id: 'tui-turn', status: 'completed' } } })
+  await telegramTurn
+  assert.equal(events.find(event => event.type === 'final')?.text, 'echo:from-telegram')
+  await appServer.stop()
+})

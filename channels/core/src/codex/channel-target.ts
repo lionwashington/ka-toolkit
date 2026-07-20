@@ -41,6 +41,9 @@ export class CodexChannelTarget implements RuntimeTarget {
   private activeSource?: RuntimeTargetMessage
   private connected = false
   private nextApprovalId = 1
+  private threadBusy = false
+  private observing = false
+  private readonly idleWaiters = new Set<() => void>()
   private readonly pendingApprovals = new Map<number, PendingApproval>()
 
   constructor(options: CodexChannelTargetOptions) {
@@ -69,6 +72,9 @@ export class CodexChannelTarget implements RuntimeTarget {
 
   shutdown(): void {
     this.connected = false
+    if (this.observing) this.options.client.off('notification', this.observeThreadState)
+    this.observing = false
+    this.markThreadIdle()
     for (const [requestId, pending] of this.pendingApprovals) {
       clearTimeout(pending.timer)
       pending.resolve({ decision: 'decline' })
@@ -81,8 +87,13 @@ export class CodexChannelTarget implements RuntimeTarget {
       await this.options.client.start()
       await this.options.client.initialize()
     }
+    if (!this.observing) {
+      this.options.client.on('notification', this.observeThreadState)
+      this.observing = true
+    }
     if (this.binding) {
-      await this.options.client.request('thread/resume', { threadId: this.binding.runtimeSessionId })
+      const resumed = await this.options.client.request('thread/resume', { threadId: this.binding.runtimeSessionId })
+      this.threadBusy = resumed.thread?.status?.type === 'active'
     }
     this.connected = true
   }
@@ -163,6 +174,7 @@ export class CodexChannelTarget implements RuntimeTarget {
     try {
       if (!this.connected || !this.options.client.running) await this.connect()
       binding = await this.ensureBinding()
+      await this.waitUntilThreadIdle()
       this.activeSource = source
       let text = ''
       const completed = new Promise<any>((resolve, reject) => {
@@ -238,5 +250,32 @@ export class CodexChannelTarget implements RuntimeTarget {
     const updatedAt = (this.options.now ?? (() => new Date()))().toISOString()
     this.binding = { ...binding, activeTurnId, updatedAt }
     this.options.bindings.put(this.binding)
+  }
+
+  private readonly observeThreadState = (message: any): void => {
+    if (!this.binding || message.params?.threadId !== this.binding.runtimeSessionId) return
+    if (message.method === 'turn/started') this.threadBusy = true
+    if (message.method === 'turn/completed' || (message.method === 'thread/status/changed' && message.params?.status?.type === 'idle')) {
+      this.markThreadIdle()
+    }
+  }
+
+  private markThreadIdle(): void {
+    this.threadBusy = false
+    for (const resolve of this.idleWaiters) resolve()
+    this.idleWaiters.clear()
+  }
+
+  private async waitUntilThreadIdle(): Promise<void> {
+    if (!this.threadBusy) return
+    await new Promise<void>((resolve, reject) => {
+      const done = () => { clearTimeout(timer); this.idleWaiters.delete(done); resolve() }
+      const timer = setTimeout(() => {
+        this.idleWaiters.delete(done)
+        reject(new Error('Codex thread remained busy for 10 minutes'))
+      }, 10 * 60_000)
+      timer.unref()
+      this.idleWaiters.add(done)
+    })
   }
 }

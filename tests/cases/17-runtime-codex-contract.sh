@@ -59,9 +59,19 @@ grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-approvals-a
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" >/dev/null 2>&1 \
     || fail "fresh Codex launch failed"
-grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --sandbox workspace-write --ask-for-approval on-request resume thread-current-cwd$' "$tmp_root/calls" \
-    || fail "isolated default launch missing"
+grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
+    || fail "non-interactive default launch missing"
 ok "Codex launch preserves args and selects the current-cwd canonical thread"
+
+: > "$tmp_root/calls"
+rm -f "$REPO/state/codex-app-servers/reviewer.thread"
+FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
+    "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" "resume --last" --dangerously-bypass-approvals-and-sandbox >/dev/null 2>&1 \
+    || fail "legacy combined resume argument failed"
+if grep -q -- 'resume --last' "$tmp_root/calls"; then fail "combined resume directive leaked into Codex argv"; fi
+grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
+    || fail "combined resume directive was not normalized"
+ok "Codex launch normalizes legacy combined resume arguments"
 
 : > "$tmp_root/calls"
 pids=""

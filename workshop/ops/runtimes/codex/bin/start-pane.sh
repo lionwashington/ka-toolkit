@@ -111,6 +111,17 @@ release_port_lock
 REQUESTED_THREAD_ID=""
 declare -a TUI_ARGS
 TUI_ARGS=("$@")
+# Older Workshop configs commonly stored `resume --last` or `resume <id>` as
+# one YAML list item. Treat those exact forms as resume directives instead of
+# passing them as a prompt-shaped argv to Codex.
+if [ "${1:-}" = "resume --last" ]; then
+    shift
+    TUI_ARGS=("$@")
+elif [[ "${1:-}" =~ ^resume[[:space:]]+([0-9a-fA-F-]+)[[:space:]]*$ ]]; then
+    REQUESTED_THREAD_ID="${BASH_REMATCH[1]}"
+    shift
+    TUI_ARGS=("$@")
+fi
 if [ "${1:-}" = "--last" ]; then
     shift
     TUI_ARGS=("$@")
@@ -124,6 +135,7 @@ elif [ "${1:-}" = "resume" ] && [ -n "${2:-}" ]; then
 fi
 
 THREAD_SELECTOR="${KA_CODEX_THREAD_SELECTOR:-$KA_RUNTIMES_DIR/codex/select-thread.mjs}"
+THREAD_OWNER_FILE="$SOCKET_DIR/$SAFE_NAME.thread"
 THREAD_JSON="$(node "$THREAD_SELECTOR" "$APP_SERVER_ENDPOINT" "$EXPECTED_CWD" "$REQUESTED_THREAD_ID")" || {
     echo "[start-pane:$PANE_NAME] ERROR: cannot select canonical Codex thread"
     exit 1
@@ -131,6 +143,12 @@ THREAD_JSON="$(node "$THREAD_SELECTOR" "$APP_SERVER_ENDPOINT" "$EXPECTED_CWD" "$
 CANONICAL_THREAD_ID="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).id))')"
 CANONICAL_THREAD_PATH="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).path||""))')"
 [ -n "$CANONICAL_THREAD_ID" ] || { echo "[start-pane:$PANE_NAME] ERROR: canonical thread id is empty"; exit 1; }
+if [ -z "$REQUESTED_THREAD_ID" ]; then
+    THREAD_OWNER_TMP="$THREAD_OWNER_FILE.$$"
+    printf '%s\n' "$CANONICAL_THREAD_ID" > "$THREAD_OWNER_TMP"
+    chmod 600 "$THREAD_OWNER_TMP" 2>/dev/null || true
+    mv "$THREAD_OWNER_TMP" "$THREAD_OWNER_FILE"
+fi
 
 register_loop() {
     local port="${KA_CHANNEL_PORT:-9877}"
@@ -156,8 +174,12 @@ run_codex() {
 }
 
 if [ "${#TUI_ARGS[@]}" -eq 0 ]; then
-    TUI_ARGS=(--sandbox workspace-write --ask-for-approval on-request)
+    TUI_ARGS=(--dangerously-bypass-approvals-and-sandbox)
 fi
 echo "[start-pane:$PANE_NAME] codex ${TUI_ARGS[*]} resume $CANONICAL_THREAD_ID (Workshop-managed App Server)"
+set +e
 run_codex "${TUI_ARGS[@]}" resume "$CANONICAL_THREAD_ID"
-exit $?
+TUI_STATUS=$?
+set -e
+printf '[start-pane:%s] Codex TUI exited with status %s\n' "$PANE_NAME" "$TUI_STATUS" | tee -a "$SERVER_LOG" >&2
+exit "$TUI_STATUS"

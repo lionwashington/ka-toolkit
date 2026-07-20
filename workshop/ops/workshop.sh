@@ -175,6 +175,11 @@ SESSION=""
 # =()) still makes `${#foo[@]}` report "unbound variable" when never assigned
 # (e.g. workshop.yaml has no mate → MATE_NAMES is never appended to).
 RUNTIME_DEFAULT="cc"
+TMUX_DETACHED_WIDTH="${KA_WORKSHOP_TMUX_WIDTH:-240}"
+TMUX_DETACHED_HEIGHT="${KA_WORKSHOP_TMUX_HEIGHT:-80}"
+case "$TMUX_DETACHED_WIDTH:$TMUX_DETACHED_HEIGHT" in
+    *[!0-9:]*|:*) log_err "KA_WORKSHOP_TMUX_WIDTH and KA_WORKSHOP_TMUX_HEIGHT must be positive integers"; exit 2 ;;
+esac
 declare -a PANE_NAMES=() PANE_CWDS=() PANE_MAINS=() PANE_ARGS=() PANE_RUNTIMES=()
 declare -a MATE_NAMES=() MATE_CWDS=() MATE_DEFAULTS=() MATE_ARGS=() MATE_RUNTIMES=()
 while IFS= read -r rec; do
@@ -368,9 +373,9 @@ cmd_start() {
             if [ "$i" = "0" ] && [ "$session_exists" = "0" ]; then
                 log_ts "Creating session '$SESSION' window 0, pane for $name (channel '$channel') at $cwd"
                 if [ "$DRY_RUN" = "1" ]; then
-                    echo "[dry-run] $TMUX_BIN new-session -d -s $SESSION -n $SESSION -c $cwd -- <start-pane: $name>"
+                    echo "[dry-run] $TMUX_BIN new-session -d -x $TMUX_DETACHED_WIDTH -y $TMUX_DETACHED_HEIGHT -s $SESSION -n $SESSION -c $cwd -- <start-pane: $name>"
                 else
-                    "$TMUX_BIN" new-session -d -s "$SESSION" -n "$SESSION" -c "$cwd" "$cmd"
+                    "$TMUX_BIN" new-session -d -x "$TMUX_DETACHED_WIDTH" -y "$TMUX_DETACHED_HEIGHT" -s "$SESSION" -n "$SESSION" -c "$cwd" "$cmd"
                     new_pane_id="$("$TMUX_BIN" list-panes -t "$SESSION:0" -F '#{pane_id}' 2>/dev/null | head -1)"
                 fi
             else
@@ -381,7 +386,7 @@ cmd_start() {
                     # If the session didn't exist and this isn't entry 0 (e.g.
                     # `start <name>` for a single mate), create it first.
                     if ! "$TMUX_BIN" has-session -t "$SESSION" 2>/dev/null; then
-                        "$TMUX_BIN" new-session -d -s "$SESSION" -n "$SESSION" -c "$cwd" "$cmd"
+                        "$TMUX_BIN" new-session -d -x "$TMUX_DETACHED_WIDTH" -y "$TMUX_DETACHED_HEIGHT" -s "$SESSION" -n "$SESSION" -c "$cwd" "$cmd"
                         new_pane_id="$("$TMUX_BIN" list-panes -t "$SESSION:0" -F '#{pane_id}' 2>/dev/null | head -1)"
                     else
                         new_pane_id="$("$TMUX_BIN" split-window -d -P -F '#{pane_id}' -t "$SESSION:0" -c "$cwd" "$cmd" 2>/dev/null || true)"
@@ -393,9 +398,9 @@ cmd_start() {
             if [ "$i" = "0" ] && [ "$session_exists" = "0" ]; then
                 log_ts "Creating session '$SESSION' + window 0 ($name → channel '$channel') at $cwd"
                 if [ "$DRY_RUN" = "1" ]; then
-                    echo "[dry-run] $TMUX_BIN new-session -d -s $SESSION -n $name -c $cwd -- <start-pane: $name>"
+                    echo "[dry-run] $TMUX_BIN new-session -d -x $TMUX_DETACHED_WIDTH -y $TMUX_DETACHED_HEIGHT -s $SESSION -n $name -c $cwd -- <start-pane: $name>"
                 else
-                    "$TMUX_BIN" new-session -d -s "$SESSION" -n "$name" -c "$cwd" "$cmd"
+                    "$TMUX_BIN" new-session -d -x "$TMUX_DETACHED_WIDTH" -y "$TMUX_DETACHED_HEIGHT" -s "$SESSION" -n "$name" -c "$cwd" "$cmd"
                     new_pane_id="$("$TMUX_BIN" list-panes -t "$SESSION:0" -F '#{pane_id}' 2>/dev/null | head -1)"
                 fi
             else
@@ -404,7 +409,7 @@ cmd_start() {
                     echo "[dry-run] $TMUX_BIN new-window -d -P -F '#{pane_id}' -t $SESSION:$i -n $name -c $cwd -- <start-pane: $name>"
                 else
                     if ! "$TMUX_BIN" has-session -t "$SESSION" 2>/dev/null; then
-                        "$TMUX_BIN" new-session -d -s "$SESSION" -n "$name" -c "$cwd" "$cmd"
+                        "$TMUX_BIN" new-session -d -x "$TMUX_DETACHED_WIDTH" -y "$TMUX_DETACHED_HEIGHT" -s "$SESSION" -n "$name" -c "$cwd" "$cmd"
                         new_pane_id="$("$TMUX_BIN" list-panes -t "$SESSION:0" -F '#{pane_id}' 2>/dev/null | head -1)"
                     else
                         new_pane_id="$("$TMUX_BIN" new-window -d -P -F '#{pane_id}' -t "$SESSION" -n "$name" -c "$cwd" "$cmd" 2>/dev/null || true)"

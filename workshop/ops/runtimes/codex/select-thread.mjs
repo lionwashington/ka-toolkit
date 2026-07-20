@@ -52,12 +52,28 @@ try {
   } else {
     const listed = await request('thread/list', {
       cwd,
-      limit: 1,
+      limit: 20,
       sortKey: 'recency_at',
       sortDirection: 'desc',
     })
-    thread = listed.data?.[0]
-    if (!thread) {
+    let latest
+    for (const candidate of listed.data ?? []) {
+      const read = await request('thread/read', {
+        threadId: candidate.id,
+        includeTurns: true,
+      })
+      const turns = read.thread?.turns ?? []
+      const lastTurn = turns.at(-1)
+      // An incomplete turn may still be owned by another Codex process and
+      // can contain host-specific tool calls whose outputs are unavailable to
+      // Workshop. Only auto-adopt a safely completed history. An explicit
+      // thread id above remains an intentional exact override.
+      if (!lastTurn || lastTurn.status === 'completed') {
+        latest = candidate
+        break
+      }
+    }
+    if (!latest) {
       const started = await request('thread/start', {
         cwd,
         ephemeral: false,
@@ -65,6 +81,17 @@ try {
         sandbox: 'workspace-write',
       })
       thread = started.thread
+    } else {
+      // Remote TUI resume can replay transient runtime events from any stored
+      // thread, including one previously owned by Workshop. That may render a
+      // permanent stale "Working" state even though App Server is idle, and
+      // large histories can make the TUI exit during replay. Fork on every
+      // implicit launch: history is preserved, while runtime state is clean.
+      const forked = await request('thread/fork', {
+        threadId: latest.id,
+        ephemeral: false,
+      })
+      thread = forked.thread
     }
   }
   process.stdout.write(`${JSON.stringify({ id: thread.id, path: thread.path ?? null, cwd: thread.cwd })}\n`)
