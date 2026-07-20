@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,10 +11,12 @@ const fake = fileURLToPath(new URL('../../../tests/codex-app-server/fake-app-ser
 
 async function registerFake(daemon: { baseUrl: string }, workspace: string, name: string) {
   const socketPath = join(workspace, 'app-server.sock')
-  const server = await startFakeSocketServer({ socketPath, fakePath: fake, statePath: join(workspace, 'fake-state.json') })
+  const statePath = join(workspace, 'fake-state.json')
+  writeFileSync(statePath, JSON.stringify({ threads: { 'thread-1': { id: 'thread-1', ephemeral: false, path: '/tmp/thread-1.jsonl', cwd: workspace } } }))
+  const server = await startFakeSocketServer({ socketPath, fakePath: fake, statePath })
   const response = await fetch(`${daemon.baseUrl}/api/runtimes/codex`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name, cwd: workspace, socket_path: socketPath }),
+    body: JSON.stringify({ name, cwd: workspace, socket_path: socketPath, thread_id: 'thread-1' }),
   })
   assert.equal(response.ok, true, await response.text())
   return server

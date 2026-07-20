@@ -32,33 +32,36 @@ if printf '%s\n' "$*" | grep -q 'app-server --listen'; then
     port="${endpoint##*:}"
     exec python3 -c 'import socket,sys,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(); time.sleep(30)' "$port"
 fi
-for arg in "$@"; do [ "$arg" = resume ] && exit 2; done
+printf '%s\n' "$*" | grep -q 'resume --last' && exit 2
 exit 0
 SH
 chmod +x "$tmp_root/bin/codex"
+cat > "$tmp_root/select-thread.mjs" <<'JS'
+const cwd = process.argv[3]
+const requested = process.argv[4]
+process.stdout.write(JSON.stringify({ id: requested || 'thread-current-cwd', path: '/tmp/thread.jsonl', cwd }))
+JS
+export KA_CODEX_THREAD_SELECTOR="$tmp_root/select-thread.mjs"
 
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" KA_CHANNEL=main \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" --model test-model >/dev/null 2>&1 \
     || fail "explicit Codex launch failed"
-grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --model test-model$' "$tmp_root/calls" || fail "channel endpoint or explicit args were changed"
+grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --model test-model resume thread-current-cwd$' "$tmp_root/calls" || fail "channel endpoint, canonical thread, or explicit args were changed"
 
 : > "$tmp_root/calls"
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" --last --dangerously-bypass-approvals-and-sandbox >/dev/null 2>&1 \
     || fail "legacy --last Codex launch failed"
-grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-approvals-and-sandbox resume --last$' "$tmp_root/calls" \
-    || fail "legacy --last was not translated to Codex resume --last"
-grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-approvals-and-sandbox$' "$tmp_root/calls" \
-    || fail "legacy --last did not fall back to a fresh Codex TUI"
+grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
+    || fail "legacy --last did not select the current-cwd canonical thread"
 
 : > "$tmp_root/calls"
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" >/dev/null 2>&1 \
     || fail "fresh Codex launch failed"
-grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --sandbox workspace-write --ask-for-approval on-request$' "$tmp_root/calls" \
+grep -Eq -- '^--remote ws://127\.0\.0\.1:[0-9]+ --sandbox workspace-write --ask-for-approval on-request resume thread-current-cwd$' "$tmp_root/calls" \
     || fail "isolated default launch missing"
-if grep -Eq -- 'resume --last' "$tmp_root/calls"; then fail "default launch reused a global Codex thread"; fi
-ok "Codex launch preserves args, migrates legacy --last, and isolates default threads"
+ok "Codex launch preserves args and selects the current-cwd canonical thread"
 
 : > "$tmp_root/calls"
 pids=""

@@ -8,8 +8,9 @@ commands.
 > adapter files in `workshop/ops/runtimes/cc/` (`launch.sh`, `ready-signals.sh`,
 > `send-prompt.sh`, `post-launch.sh`) plus `cc/bin/start-pane.sh`;
 > `workshop/ops/runtimes/dispatch.sh` loads them. Codex uses a Workshop-owned App
-> Server sidecar, connects its TUI through the same loopback WebSocket, and defaults to
-> `resume --last`; `gemini` remains reserved. This doc is the contract
+> Server sidecar, selects the most recent thread whose cwd exactly matches the
+> mate cwd, and connects both its TUI and Channel to that canonical thread;
+> `args: [resume, <thread-id>]` is the validated override. `gemini` remains reserved. This doc is the contract
 > the cc adapter satisfies and any new runtime must implement.
 
 ## Naming convention

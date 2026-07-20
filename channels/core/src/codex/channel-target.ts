@@ -17,6 +17,8 @@ export interface CodexChannelTargetOptions {
   externalChatId: string
   externalThreadId?: string
   cwd: string
+  canonicalThreadId?: string
+  canonicalThreadPath?: string
   client: AppServerClient
   bindings: BindingStore
   onEvent: (event: CodexChannelEvent, source: RuntimeTargetMessage) => void | Promise<void>
@@ -38,12 +40,29 @@ export class CodexChannelTarget implements RuntimeTarget {
   private activeTurnId?: string
   private activeSource?: RuntimeTargetMessage
   private connected = false
+  private nextApprovalId = 1
   private readonly pendingApprovals = new Map<number, PendingApproval>()
 
   constructor(options: CodexChannelTargetOptions) {
     this.options = options
     this.name = options.name
     this.binding = options.bindings.find(options)
+    if (options.canonicalThreadId) {
+      const timestamp = (options.now ?? (() => new Date()))().toISOString()
+      this.binding = {
+        channelName: this.name,
+        platform: options.platform,
+        externalChatId: options.externalChatId,
+        externalThreadId: options.externalThreadId,
+        runtime: 'codex',
+        runtimeSessionId: options.canonicalThreadId,
+        runtimeSessionPath: options.canonicalThreadPath || undefined,
+        cwd: options.cwd,
+        createdAt: this.binding?.runtimeSessionId === options.canonicalThreadId ? this.binding.createdAt : timestamp,
+        updatedAt: timestamp,
+      }
+      options.bindings.put(this.binding)
+    }
   }
 
   isAlive(): boolean { return this.connected && this.options.client.running }
@@ -89,8 +108,8 @@ export class CodexChannelTarget implements RuntimeTarget {
   async requestApproval(request: Record<string, any>): Promise<unknown> {
     const threadId = String(request.params?.threadId ?? '')
     const turnId = String(request.params?.turnId ?? '')
-    const requestId = Number(request.id)
-    if (!this.ownsThread(threadId) || !turnId || !Number.isFinite(requestId) || !this.activeSource) {
+    const requestId = this.nextApprovalId++
+    if (!this.ownsThread(threadId) || !turnId || !this.activeSource) {
       throw new Error('approval request does not match an active Codex turn')
     }
     await this.options.onEvent({ type: 'approval', threadId, turnId, requestId, request }, this.activeSource)

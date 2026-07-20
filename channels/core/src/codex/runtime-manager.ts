@@ -12,6 +12,8 @@ export interface CodexRuntimeRegistration {
   cwd: string
   endpoint?: string
   socketPath?: string
+  threadId?: string
+  threadPath?: string
 }
 
 export interface CodexRuntimeConfig {
@@ -58,6 +60,8 @@ export class CodexRuntimeManager {
     const target = new CodexChannelTarget({
       name: item.name,
       cwd: item.cwd,
+      canonicalThreadId: item.threadId,
+      canonicalThreadPath: item.threadPath,
       platform: this.config.platform,
       externalChatId: this.config.externalChatId,
       client,
@@ -131,8 +135,8 @@ export class CodexRuntimeManager {
     } else if (event.type === 'approval') {
       const target = this.platform.resolveReplyTarget(replyTarget)
       if (target) {
-        const command = String(event.request.params?.command ?? 'requested action')
-        await this.platform.send(target, `⚠️ ${name} requests approval ${event.requestId}: ${command}\nReply with \`to ${name}: /approve ${event.requestId}\` or \`to ${name}: /deny ${event.requestId}\`.`)
+        const action = describeApproval(event.request)
+        await this.platform.send(target, `⚠️ ${name} requests approval ${event.requestId}: ${action}\nReply with \`to ${name}: /approve ${event.requestId}\` or \`to ${name}: /deny ${event.requestId}\`.`)
       }
     } else if (event.type === 'error') {
       log(`codex target ${name} failed: ${event.error.message}`)
@@ -164,4 +168,17 @@ export class CodexRuntimeManager {
     if (!managed) throw new Error(`approval request for unknown Codex thread: ${threadId}`)
     return managed.target.requestApproval(request)
   }
+}
+
+export function describeApproval(request: Record<string, any>): string {
+  const params = request.params ?? {}
+  if (typeof params.command === 'string' && params.command.trim()) return params.command.trim()
+  if (typeof params.reason === 'string' && params.reason.trim()) return params.reason.trim()
+  if (params.permissions) return `permissions: ${JSON.stringify(params.permissions)}`
+  if (typeof params.grantRoot === 'string' && params.grantRoot) return `write access: ${params.grantRoot}`
+  const method = String(request.method ?? '')
+  if (method.includes('fileChange')) return 'apply file changes'
+  if (method.includes('commandExecution')) return 'execute command'
+  if (method.includes('permissions')) return 'change permissions'
+  return 'requested action'
 }

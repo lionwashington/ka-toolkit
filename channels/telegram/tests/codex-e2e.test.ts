@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,14 +22,16 @@ test('Telegram routes an owner message through a persistent Codex target', async
   const workspace = mkdtempSync(join(tmpdir(), 'ka-telegram-codex-'))
   const telegram = await startMockTelegram()
   const socketPath = join(workspace, 'app-server.sock')
-  const appServer = await startFakeSocketServer({ socketPath, fakePath: fake, statePath: join(workspace, 'fake-state.json') })
+  const statePath = join(workspace, 'fake-state.json')
+  writeFileSync(statePath, JSON.stringify({ threads: { 'thread-1': { id: 'thread-1', ephemeral: false, path: '/tmp/thread-1.jsonl', cwd: workspace } } }))
+  const appServer = await startFakeSocketServer({ socketPath, fakePath: fake, statePath })
   const daemon = await startDaemon({
     apiRoot: telegram.url,
   })
   try {
     const registered = await fetch(`${daemon.baseUrl}/api/runtimes/codex`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'codex-main', cwd: workspace, socket_path: socketPath }),
+      body: JSON.stringify({ name: 'codex-main', cwd: workspace, socket_path: socketPath, thread_id: 'thread-1' }),
     })
     assert.equal(registered.ok, true, await registered.text())
     const online = await waitForAsync(async () => {
@@ -49,8 +51,8 @@ test('Telegram routes an owner message through a persistent Codex target', async
     assert.equal(telegram.sent().filter(message => message.text.includes('echo:hello')).length, 1)
 
     push(2, 'to codex-main: approve-me')
-    assert.equal(await waitFor(() => telegram.sent().some(message => message.text.includes('requests approval 10000')), 5_000), true)
-    push(3, 'to codex-main: /approve 10000')
+    assert.equal(await waitFor(() => telegram.sent().some(message => message.text.includes('requests approval 1')), 5_000), true)
+    push(3, 'to codex-main: /approve 1')
     const approved = await waitFor(() => telegram.sent().some(message => message.text.includes('echo:approve-me')), 5_000)
     const approvalLog = (() => { try { return readFileSync(join(daemon.dataDir, 'channel.log'), 'utf8') } catch { return '' } })()
     assert.equal(approved, true, `sent=${JSON.stringify(telegram.sent())}\nlog=${approvalLog}`)

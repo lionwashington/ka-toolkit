@@ -4,7 +4,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { CodexRuntimeManager } from '../../channels/core/src/codex/runtime-manager.ts'
+import { CodexRuntimeManager, describeApproval } from '../../channels/core/src/codex/runtime-manager.ts'
 import { dispatchTargets } from '../../channels/core/src/dispatch.ts'
 import { runtimeTargetOf } from '../../channels/core/src/targets.ts'
 import type { Platform } from '../../channels/core/src/platform.ts'
@@ -20,6 +20,12 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
     await new Promise(resolve => setTimeout(resolve, 5))
   }
 }
+
+test('describes approval actions without exposing the JSON-RPC request id', () => {
+  assert.equal(describeApproval({ id: 0, method: 'item/commandExecution/requestApproval', params: { command: 'pnpm test' } }), 'pnpm test')
+  assert.equal(describeApproval({ id: 0, method: 'item/fileChange/requestApproval', params: { grantRoot: '/tmp/work' } }), 'write access: /tmp/work')
+  assert.equal(describeApproval({ id: 0, method: 'item/permissions/requestApproval', params: { permissions: { network: true } } }), 'permissions: {"network":true}')
+})
 
 test('routes platform input through Codex and sends the final reply back through the platform', async () => {
   const repliesBefore = counters.replies
@@ -79,15 +85,15 @@ test('binds an approval to its target and accepts a single-use owner command', a
   const appServer = await startFakeSocketServer({ socketPath, fakePath: fake, statePath: join(dir, 'fake-state.json') })
   await manager.register({ name: 'codex-main', cwd: dir, socketPath })
   await dispatchTargets(platform, ['codex-main'], 'approve-me', { chat_id: 'owner' })
-  while (!sent.some(message => message.text.includes('requests approval 10000'))) {
+  while (!sent.some(message => message.text.includes('requests approval 1'))) {
     await new Promise(resolve => setTimeout(resolve, 5))
   }
-  await dispatchTargets(platform, ['codex-main'], '/approve 10000', { chat_id: 'owner' })
+  await dispatchTargets(platform, ['codex-main'], '/approve 1', { chat_id: 'owner' })
   await waitFor(() => sent.some(message => message.text.includes('echo:approve-me')))
-  assert.ok(sent.some(message => message.text.includes('Approval 10000 accepted.')))
+  assert.ok(sent.some(message => message.text.includes('Approval 1 accepted.')))
   assert.ok(sent.some(message => message.text.includes('echo:approve-me')))
   const before = sent.length
-  await dispatchTargets(platform, ['codex-main'], '/approve 10000', { chat_id: 'owner' })
+  await dispatchTargets(platform, ['codex-main'], '/approve 1', { chat_id: 'owner' })
   await waitFor(() => sent.length === before + 1)
   assert.equal(sent.length, before + 1)
   assert.match(sent.at(-1)!.text, /not pending/)

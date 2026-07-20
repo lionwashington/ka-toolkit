@@ -108,11 +108,35 @@ done
 kill -0 "$APP_SERVER_PID" 2>/dev/null || { echo "[start-pane:$PANE_NAME] ERROR: App Server did not start"; exit 1; }
 release_port_lock
 
+REQUESTED_THREAD_ID=""
+declare -a TUI_ARGS
+TUI_ARGS=("$@")
+if [ "${1:-}" = "--last" ]; then
+    shift
+    TUI_ARGS=("$@")
+elif [ "${1:-}" = "resume" ] && [ "${2:-}" = "--last" ]; then
+    shift 2
+    TUI_ARGS=("$@")
+elif [ "${1:-}" = "resume" ] && [ -n "${2:-}" ]; then
+    REQUESTED_THREAD_ID="$2"
+    shift 2
+    TUI_ARGS=("$@")
+fi
+
+THREAD_SELECTOR="${KA_CODEX_THREAD_SELECTOR:-$KA_RUNTIMES_DIR/codex/select-thread.mjs}"
+THREAD_JSON="$(node "$THREAD_SELECTOR" "$APP_SERVER_ENDPOINT" "$EXPECTED_CWD" "$REQUESTED_THREAD_ID")" || {
+    echo "[start-pane:$PANE_NAME] ERROR: cannot select canonical Codex thread"
+    exit 1
+}
+CANONICAL_THREAD_ID="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).id))')"
+CANONICAL_THREAD_PATH="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).path||""))')"
+[ -n "$CANONICAL_THREAD_ID" ] || { echo "[start-pane:$PANE_NAME] ERROR: canonical thread id is empty"; exit 1; }
+
 register_loop() {
     local port="${KA_CHANNEL_PORT:-9877}"
     local status body
-    body="$(PANE_NAME="$SAFE_NAME" PANE_CWD="$EXPECTED_CWD" APP_SERVER_ENDPOINT="$APP_SERVER_ENDPOINT" node -e \
-        'process.stdout.write(JSON.stringify({name:process.env.PANE_NAME,cwd:process.env.PANE_CWD,endpoint:process.env.APP_SERVER_ENDPOINT}))')"
+    body="$(PANE_NAME="$SAFE_NAME" PANE_CWD="$EXPECTED_CWD" APP_SERVER_ENDPOINT="$APP_SERVER_ENDPOINT" THREAD_ID="$CANONICAL_THREAD_ID" THREAD_PATH="$CANONICAL_THREAD_PATH" node -e \
+        'process.stdout.write(JSON.stringify({name:process.env.PANE_NAME,cwd:process.env.PANE_CWD,endpoint:process.env.APP_SERVER_ENDPOINT,thread_id:process.env.THREAD_ID,thread_path:process.env.THREAD_PATH||undefined}))')"
     while kill -0 "$APP_SERVER_PID" 2>/dev/null; do
         status="$(curl -sf --max-time 1 "http://127.0.0.1:$port/api/status" 2>/dev/null || true)"
         if ! printf '%s' "$status" | PANE_NAME="$SAFE_NAME" node -e \
@@ -131,40 +155,9 @@ run_codex() {
     codex --remote "$APP_SERVER_ENDPOINT" "$@"
 }
 
-run_resume_last() {
-    started_at="$(date +%s)"
-    set +e
-    run_codex "$@" resume --last
-    rc=$?
-    set -e
-    elapsed=$(( $(date +%s) - started_at ))
-    if [ "$rc" -ne 0 ] && [ "$elapsed" -lt 10 ]; then
-        echo "[start-pane:$PANE_NAME] no resumable Codex session; starting fresh"
-        run_codex "$@"
-        return $?
-    fi
-    return "$rc"
-}
-
-# Explicit arguments are authoritative. This supports session IDs via
-# `args: [resume, <session-id>]` and any documented global flags.
-if [ "$#" -gt 0 ]; then
-    # Claude Code used a top-level `--last`; Codex exposes it under `resume`.
-    # Preserve the remaining global flags when an existing Workshop config is
-    # migrated by changing only its runtime.
-    if [ "$1" = "--last" ]; then
-        shift
-        echo "[start-pane:$PANE_NAME] codex $* resume --last (Workshop-managed App Server)"
-        run_resume_last "$@"
-    else
-        echo "[start-pane:$PANE_NAME] codex $* (Workshop-managed App Server)"
-        run_codex "$@"
-    fi
-    exit $?
+if [ "${#TUI_ARGS[@]}" -eq 0 ]; then
+    TUI_ARGS=(--sandbox workspace-write --ask-for-approval on-request)
 fi
-
-# `resume --last` is global and can attach several concurrently-started mates to
-# the same thread. Start an isolated TUI by default; callers that need continuity
-# must provide `args: [resume, <thread-id>]` explicitly.
-run_codex --sandbox workspace-write --ask-for-approval on-request
+echo "[start-pane:$PANE_NAME] codex ${TUI_ARGS[*]} resume $CANONICAL_THREAD_ID (Workshop-managed App Server)"
+run_codex "${TUI_ARGS[@]}" resume "$CANONICAL_THREAD_ID"
 exit $?
