@@ -23,6 +23,7 @@ export interface CodexChannelTargetOptions {
   bindings: BindingStore
   onEvent: (event: CodexChannelEvent, source: RuntimeTargetMessage) => void | Promise<void>
   now?: () => Date
+  turnInactivityTimeoutMs?: number
 }
 
 type CodexUserInput =
@@ -209,6 +210,14 @@ export class CodexChannelTarget implements RuntimeTarget {
       let text = ''
       const completed = new Promise<any>((resolve, reject) => {
         let timer: NodeJS.Timeout
+        const armInactivityTimer = () => {
+          clearTimeout(timer)
+          timer = setTimeout(() => {
+            cleanup()
+            reject(new Error('Codex turn produced no activity before the inactivity timeout'))
+          }, this.options.turnInactivityTimeoutMs ?? 60 * 60_000)
+          timer.unref()
+        }
         const cleanup = () => {
           this.options.client.off('notification', onNotification)
           this.options.client.off('exit', onExit)
@@ -244,6 +253,10 @@ export class CodexChannelTarget implements RuntimeTarget {
           if (params.threadId !== binding!.runtimeSessionId) return
           const eventTurnId = params.turnId ?? params.turn?.id
           if (turnId && eventTurnId && eventTurnId !== turnId) return
+          // A Codex turn may legitimately run for hours. Any notification for
+          // this turn proves that it is still making progress, so only fail on
+          // prolonged inactivity rather than total wall-clock duration.
+          if (!turnId || !eventTurnId || eventTurnId === turnId) armInactivityTimer()
           if (message.method === 'turn/started') {
             turnId = params.turn.id
             this.activeTurnId = turnId
@@ -260,10 +273,7 @@ export class CodexChannelTarget implements RuntimeTarget {
         this.options.client.on('notification', onNotification)
         this.options.client.once('exit', onExit)
         this.options.client.once('transport-close', onTransportClose)
-        timer = setTimeout(() => {
-          cleanup()
-          reject(new Error('Codex turn completion timed out'))
-        }, 10 * 60_000).unref()
+        armInactivityTimer()
       })
       // `turn/start` and the completion watcher can reject from the same
       // transport close. Mark the watcher handled immediately so a rejected

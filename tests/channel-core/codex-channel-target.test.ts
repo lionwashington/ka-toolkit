@@ -19,7 +19,7 @@ function client(statePath: string): AppServerClient {
   })
 }
 
-function target(dir: string, appServer: AppServerClient, events: CodexChannelEvent[]): CodexChannelTarget {
+function target(dir: string, appServer: AppServerClient, events: CodexChannelEvent[], turnInactivityTimeoutMs?: number): CodexChannelTarget {
   return new CodexChannelTarget({
     name: 'codex-main',
     platform: 'telegram',
@@ -27,6 +27,7 @@ function target(dir: string, appServer: AppServerClient, events: CodexChannelEve
     cwd: dir,
     client: appServer,
     bindings: new BindingStore(join(dir, 'bindings.json')),
+    turnInactivityTimeoutMs,
     onEvent: event => { events.push(event) },
   })
 }
@@ -126,6 +127,26 @@ test('/stop bypasses the FIFO and interrupts the active turn', async () => {
   await runtime.deliver({ content: '/stop', meta: {} })
   await active
   assert.equal(events.find(event => event.type === 'activity')?.text, 'Interrupt requested.')
+  assert.equal(events.find(event => event.type === 'turn-completed')?.status, 'interrupted')
+  await appServer.stop()
+})
+
+test('refreshes the inactivity timeout while a long-running turn is making progress', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-active-timeout-'))
+  const events: CodexChannelEvent[] = []
+  const appServer = client(join(dir, 'fake-state.json'))
+  const runtime = target(dir, appServer, events, 50)
+  const delivered = runtime.deliver({ content: 'wait-for-interrupt', meta: {} })
+  while (!events.some(event => event.type === 'turn-started')) await new Promise(resolve => setTimeout(resolve, 5))
+  const started = events.find(event => event.type === 'turn-started') as Extract<CodexChannelEvent, { type: 'turn-started' }>
+  await new Promise(resolve => setTimeout(resolve, 35))
+  appServer.emit('notification', {
+    method: 'item/reasoning/summaryTextDelta',
+    params: { threadId: started.threadId, turnId: started.turnId, delta: 'still working' },
+  })
+  await new Promise(resolve => setTimeout(resolve, 35))
+  assert.equal(await runtime.interrupt(), true)
+  await delivered
   assert.equal(events.find(event => event.type === 'turn-completed')?.status, 'interrupted')
   await appServer.stop()
 })
