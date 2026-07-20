@@ -105,11 +105,27 @@ run_cmd() {
             local channels; channels="$("$node_bin" "$cfgcli" inject 2>/dev/null || true)"
             if [ -z "$channels" ]; then
                 echo "inject-prompt: channels.inject empty/unset — nothing injected (fail-closed)" >&2
-                return 0
+                return 1
             fi
             local ch pane injected=0
             while IFS= read -r ch; do
                 [ -n "$ch" ] || continue
+                # A Codex cron turn enters through Channel rather than tmux so
+                # its final response is delivered to the Telegram/Lark owner.
+                local port="${KA_CHANNEL_PORT:-9877}" status body
+                status="$(curl -sf --max-time 2 "http://127.0.0.1:$port/api/status" 2>/dev/null || true)"
+                if printf '%s' "$status" | CHANNEL_NAME="$ch" "$node_bin" -e '
+let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const j=JSON.parse(s);process.exit(j.runtime_targets?.some(x=>x.name===process.env.CHANNEL_NAME&&x.runtime==="codex"&&x.alive)?0:1)}catch{process.exit(1)}})
+' 2>/dev/null; then
+                    body="$(PROMPT_TEXT="$command_str" "$node_bin" -e 'process.stdout.write(JSON.stringify({content:process.env.PROMPT_TEXT}))')"
+                    if curl -sf -H 'content-type: application/json' -d "$body" \
+                        "http://127.0.0.1:$port/api/runtimes/codex/$ch/deliver" >/dev/null; then
+                        injected=1
+                    else
+                        echo "inject-prompt: Codex Channel delivery failed for '$ch'" >&2
+                    fi
+                    continue
+                fi
                 pane="$(tmux_pane_for_channel "$ch" || true)"
                 if [ -z "$pane" ]; then
                     echo "inject-prompt: channel '$ch' has no running pane — skipping" >&2
@@ -117,13 +133,41 @@ run_cmd() {
                 fi
                 "$inject" "$pane" "$command_str" && injected=1
             done <<< "$channels"
-            [ "$injected" = 1 ] || echo "inject-prompt: no pane resolved for channels.inject — nothing injected" >&2
+            if [ "$injected" != 1 ]; then
+                echo "inject-prompt: no pane resolved for channels.inject — nothing injected" >&2
+                return 1
+            fi
             ;;
         ka-cli)
             local ka="$KA_HOME/shared/bin/ka"
             [ -x "$ka" ] || { echo "missing $ka" >&2; return 127; }
             # shellcheck disable=SC2086
-            "$ka" $command_str
+            local output rc
+            set +e
+            output="$("$ka" $command_str 2>&1)"
+            rc=$?
+            set -e
+            printf '%s\n' "$output"
+            [ "$rc" -eq 0 ] || return "$rc"
+
+            # A launchd/cron runner that exits immediately may take a detached
+            # child with it. Keep the scheduled job alive until the distill
+            # worker finishes, then validate its durable result instead of
+            # recording the spawn itself as success.
+            if [ "$command_str" = "kb distill --background" ]; then
+                local worker_pid
+                worker_pid="$(printf '%s\n' "$output" | sed -n 's/^distill-bg: pid=\([0-9][0-9]*\).*/\1/p' | tail -1)"
+                [ -n "$worker_pid" ] || { echo "kb-distill: worker pid missing from spawn output" >&2; return 1; }
+                while kill -0 "$worker_pid" 2>/dev/null; do sleep 2; done
+                local state="$KA_STATE_DIR/distill-current.json" verdict
+                verdict="$(node -e '
+const fs=require("fs");
+try { process.stdout.write(String(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).status || "unknown")); }
+catch { process.stdout.write("missing"); }
+' "$state")"
+                printf 'kb-distill: worker %s finished with status=%s\n' "$worker_pid" "$verdict"
+                case "$verdict" in done|done-stats-unknown) ;; *) return 1 ;; esac
+            fi
             ;;
         *)
             echo "cron-run: unknown kind '$kind'" >&2

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ka — Knowledge Assistant CLI.
-#   ka workshop [start|stop|restart|spawn-mates] [name]   tmux panes / CCs
+#   ka workshop [start|stop|restart|status|spawn-mates] [name]   tmux panes / agents
 #   ka workshop peek <name> [lines] | poke <name> <keys…>  inspect/unstick a pane (out-of-band)
 #   ka channel  [start|stop|restart|status|config]        the channel daemon (telegram|lark)
 #   ka kb       [start|stop|restart|status]                the kb retrieval daemon (kb_search backend)

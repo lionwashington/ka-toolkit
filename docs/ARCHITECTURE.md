@@ -8,7 +8,7 @@
 > `workshop/ops/workshop.sh`, `shared/bin/ka`, `docs/channels/telegram/ARCHITECTURE.md`).
 >
 > **The two pillars of ka-gen2**:
-> - **Startup converges onto `ka workshop` + the telegram-channel daemon**: a mate = its own independent CC process
+> - **Startup converges onto `ka workshop` + the active Channel daemon**: a mate = its own independent runtime process
 >   (independent tmux pane + independent cwd + independent channel), and it **does not use CC's team-mate mechanism**.
 > - **Thorough design / runtime separation**: the repo is pure design-time source; `install.sh` copies the build products into
 >   `~/.knowledge-assistant/` (the single runtime root, `KA_HOME`), and at runtime everything runs the deployed copy — **never pointing back at the repo**.
@@ -34,11 +34,11 @@ Four kinds of things must be kept distinct:
 
 | runtime | Vendor / project | Current KA support |
 |---|---|---|
-| **Claude Code** (CC) | Anthropic | ✅ primary (the only one actually implemented) |
-| **Codex** | OpenAI | 🔜 reserved name, deferred |
+| **Claude Code** (CC) | Anthropic | ✅ supported |
+| **Codex** | OpenAI | ✅ supported: Workshop TUI/App Server, Channel, KB distill |
 | **Gemini CLI** | Google | 🔜 reserved name, deferred |
 
-ka-gen2 decision: **runtime keeps only `cc`**, retaining the adapter boundary; codex / gemini get no directory and no investment for now.
+Runtime selection is explicit per Workshop (`cc` or `codex`). Gemini remains a reserved, fail-closed value.
 
 Core thesis: **your workspace is itself a complete, portable Agent that depends on no tool.** KA is its
 application-layer tool set and **does not usurp runtime responsibilities** (CC's team mechanism, plugin system, MCP protocol, etc. are all out of KA's scope).
@@ -62,7 +62,7 @@ application-layer tool set and **does not usurp runtime responsibilities** (CC's
                       │
    ┌─────────────────────────────────────────┐
    │  agent runtime                          │  ← execution environment (replaceable)
-   │  Claude Code (current) | Codex | Gemini │
+   │  Claude Code | Codex | Gemini (reserved) │
    └─────────────────────────────────────────┘
                       ▲  runs on
                       │
@@ -204,7 +204,7 @@ KA distill is a persistent cross-session knowledge base.
 
 ---
 
-## §3 runtime model: daemon + workshop (independent CC processes)
+## §3 runtime model: daemon + workshop (independent agent-runtime processes)
 
 ka-gen2 converges "multi-agent collaboration + external channel" into two pillars: the **telegram-channel daemon** handles
 the outward channel, and **`ka workshop`** orchestrates a set of independent CC processes. **There is no longer any CC team-mate mechanism.**
@@ -260,7 +260,7 @@ workshop verbs (`workshop/ops/workshop.sh`):
 | `ka workshop [--pane\|--window]` | bare = start all mates with `default=true` (= `start` with no name) |
 | `ka workshop start [<name>]` | no name → start all; with a name → pure launcher (starts it if in the yaml, reports missing if not; never registers a new mate) |
 | `ka workshop stop [<name>]` | no name → stop the whole session; with a name → stop only that pane |
-| `ka workshop restart <name>` | restart a single mate's pane (⚠️ loses that CC's runtime context; don't use it merely to reconnect a dropped channel — triggering one tool call is enough to re-init) |
+| `ka workshop restart <name>` | restart a single mate's pane (⚠️ loses that agent runtime's in-memory context; don't use it merely to reconnect a dropped channel) |
 | `ka workshop spawn-mates <name> [<workdir>]` | with a workdir = registrar (write/replace yaml + start); without = alias for `start <name>` |
 
 **workshop.yaml** (declarative layout; `config/workshop.example.yaml` is the template, seeded on install to
@@ -384,7 +384,7 @@ the capability is provided by the runtime; `planned` = not yet delivered.
 | **ibkr** | shipped | `kb/tools/ibkr-mcp/` | IBKR position / quote query MCP |
 | **nutrition** | shipped (experimental) | `kb/tools/mcp-opennutrition/` | OpenNutrition nutrition-database MCP |
 
-Skill-form capabilities are currently delivered as CC skills (markdown / frontmatter); porting them to another runtime requires re-packaging.
+Skill-form capabilities are delivered as markdown/frontmatter skills into both Claude Code and Codex discovery roots. A future runtime may require its own packaging adapter.
 
 ---
 

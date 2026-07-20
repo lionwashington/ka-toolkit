@@ -43,7 +43,7 @@ test('maps downloaded platform images to Codex localImage input', () => {
   assert.deepEqual(buildCodexTurnInput({
     content: '[attachment: notes.pdf]',
     meta: { attachment_path: '/tmp/notes.pdf', attachment_kind: 'document' },
-  }), [{ type: 'text', text: '[attachment: notes.pdf]' }])
+  }), [{ type: 'text', text: '[attachment: notes.pdf]\n\nLocal attachment path: /tmp/notes.pdf' }])
 })
 
 test('serializes turns, emits normalized events, and persists a durable binding', async () => {

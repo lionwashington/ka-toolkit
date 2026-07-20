@@ -109,10 +109,10 @@ powershell -Command 'taobao-native add_to_cart --args ''{"sku":["50g 【抗皱�
 
 ```bash
 taobao-native navigate --args '{"page":"home","sourceApp":"Qcoderwork"}'
-taobao-native search_products --args '{"keyword":"iPhone","sourceApp":"openClaw"}'
+taobao-native search_products --args '{"keyword":"iPhone","sourceApp":"your-agent"}'
 ```
 
-The `sourceApp` value is determined by the current AI client, e.g. `Qcoderwork`, `openClaw`, `copaw`, etc.
+The `sourceApp` value is determined by the current AI client, for example `your-agent`.
 
 ### Step 1: Check tool help
 

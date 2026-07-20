@@ -16,6 +16,8 @@
 #       no name  → stop the whole workshop (kill session).
 #       <name>   → session down: report not running; name not in tmux: report
 #                  missing; in tmux: stop just that pane.
+#   ka workshop status
+#       backwards-compatible alias for `ka status`.
 #   ka workshop restart <name>
 #       restart a single mate's pane (stop that pane + start <name>). For when a
 #       CC is stuck / needs a cwd change / state reset. ⚠️ loses that CC's runtime
@@ -73,8 +75,12 @@ LAYOUT="pane"     # default (P2): all CCs as split-panes in ONE window (one scre
 
 VERB="start"
 case "${1:-}" in
-    start|stop|restart|spawn-mates|peek|poke|remove-mate|remove) VERB="$1"; shift ;;
+    start|stop|restart|status|spawn-mates|peek|poke|remove-mate|remove) VERB="$1"; shift ;;
 esac
+
+if [ "$VERB" = "status" ]; then
+    exec "$KA_SHARED_DIR/status.sh" "$@"
+fi
 
 declare -a POSITIONAL
 prev_arg=""
@@ -597,10 +603,9 @@ cmd_spawn_mates() {
 #               session (a plain terminal): stopping the session kills the
 #               invoking pane otherwise.
 #   <name>    → restart just that one mate's pane (stop it + start <name>).
-#   ⚠️ A restart loses that CC's in-memory context (--resume only restores the
+#   ⚠️ A restart loses that agent runtime's in-memory context (resume only restores the
 #     on-disk transcript). If a channel merely dropped (e.g. after a daemon
-#     restart) and you want to keep context, do NOT restart — trigger a tool
-#     call in that CC's window to re-init (see telegram-channel-design A5).
+#     restart), let the runtime's reconnect path recover before restarting.
 # ============================================================================
 cmd_restart() {
     if [ -z "$TARGET" ]; then

@@ -31,6 +31,7 @@ COPY workshop /repo/workshop
 COPY cron /repo/cron
 COPY channels/ops /repo/channels/ops
 COPY kb/ops /repo/kb/ops
+COPY kb/skills /repo/kb/skills
 COPY tests /repo/tests
 # install.sh + config templates: the channel-kind tests run `install.sh --only
 # config` in an isolated fake runtime root (never touches a real machine).
@@ -43,9 +44,11 @@ COPY config /repo/config
 # Built on the host by run.sh (tsup → standalone node bundles).
 COPY kb/core/dist/jsonl-reader-cli.js /repo/kb/core/dist/jsonl-reader-cli.js
 COPY kb/core/dist/distill-result-parser-cli.js /repo/kb/core/dist/distill-result-parser-cli.js
+COPY kb/adapter-codex/dist/rollout-reader-cli.js /repo/kb/adapter-codex/dist/rollout-reader-cli.js
 # The bundles are ES modules (@ka/core is "type":"module"); mark this dir so
 # node treats the .js as ESM instead of CommonJS.
 RUN printf '{"type":"module"}\n' > /repo/kb/core/dist/package.json
+RUN printf '{"type":"module"}\n' > /repo/kb/adapter-codex/dist/package.json
 
 ENV KA_HOME=/repo \
     TMUX_TMPDIR=/tmp/tmux-test \

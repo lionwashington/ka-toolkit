@@ -49,7 +49,15 @@ export class CodexRuntimeManager {
 
   async register(item: CodexRuntimeRegistration): Promise<void> {
     const current = this.targets.get(item.name)
-    if (current && sameRegistration(current.registration, item)) return
+    // The Workshop registrar intentionally retries registration whenever its
+    // status probe is inconclusive. Treat the App Server endpoint + canonical
+    // thread as the runtime identity. Metadata such as threadPath may be absent
+    // in one retry and present in the next; replacing the client for that change
+    // closes an otherwise healthy WebSocket and aborts an active channel turn.
+    if (current && sameRuntimeIdentity(current.registration, item)) {
+      current.registration = { ...current.registration, ...item }
+      return
+    }
     await this.unregister(item.name)
     const client = new AppServerClient({
       endpoint: item.endpoint,
@@ -172,9 +180,9 @@ export class CodexRuntimeManager {
   }
 }
 
-function sameRegistration(left: CodexRuntimeRegistration, right: CodexRuntimeRegistration): boolean {
+function sameRuntimeIdentity(left: CodexRuntimeRegistration, right: CodexRuntimeRegistration): boolean {
   return left.name === right.name && left.cwd === right.cwd && left.endpoint === right.endpoint &&
-    left.socketPath === right.socketPath && left.threadId === right.threadId && left.threadPath === right.threadPath
+    left.socketPath === right.socketPath && left.threadId === right.threadId
 }
 
 export function describeApproval(request: Record<string, any>): string {

@@ -25,8 +25,8 @@
 # record (like `mate_runtime`) so existing 4-field consumers need no change.
 # `~` at the start of a cwd is expanded via $HOME.
 #
-# `runtime: <name>` at top level sets the default agent runtime (cc / codex /
-# gemini — only `cc` is implemented today, see docs/KA_CLI_RUNTIME_DESIGN.md).
+# `runtime: <name>` at top level sets the default agent runtime. `cc` and
+# `codex` are implemented; `gemini` remains reserved and fails closed.
 # Same key on an entry overrides the default for that entity.
 # Consumers that don't care about runtime / mate_args can safely ignore those
 # records — unknown `kind` values are dropped by all current

@@ -62,6 +62,42 @@ test('routes platform input through Codex and sends the final reply back through
   assert.equal(runtimeTargetOf('codex-main'), undefined)
 })
 
+test('keeps a runtime connection when a registrar retry only changes thread metadata', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-register-idempotent-'))
+  const platform: Platform = {
+    name: 'telegram',
+    resolveReplyTarget: value => value,
+    isSelf: () => true,
+    startInbound: () => {},
+    send: async () => null,
+    fetchAttachment: async () => '',
+    instructions: () => '',
+    replyToolDescription: '',
+  }
+  const manager = new CodexRuntimeManager(platform, {
+    platform: 'telegram',
+    bindingsPath: join(dir, 'bindings.json'),
+    externalChatId: 'owner',
+    requestTimeoutMs: 500,
+  })
+  const socketPath = join(dir, 'app-server.sock')
+  const appServer = await startFakeSocketServer({ socketPath, fakePath: fake, statePath: join(dir, 'fake-state.json') })
+  await manager.register({ name: 'codex-main', cwd: dir, socketPath })
+  const original = runtimeTargetOf('codex-main')
+
+  await manager.register({
+    name: 'codex-main',
+    cwd: dir,
+    socketPath,
+    threadPath: join(dir, 'thread-1.jsonl'),
+  })
+
+  assert.equal(runtimeTargetOf('codex-main'), original)
+  assert.equal(original?.isAlive(), true)
+  await manager.stop()
+  await appServer.close()
+})
+
 test('binds an approval to its target and accepts a single-use owner command', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ka-codex-approval-manager-'))
   const sent: Array<{ target: string; text: string }> = []

@@ -24,6 +24,7 @@ export interface CodexChannelTargetOptions {
   onEvent: (event: CodexChannelEvent, source: RuntimeTargetMessage) => void | Promise<void>
   now?: () => Date
   turnInactivityTimeoutMs?: number
+  transportRecoveryTimeoutMs?: number
 }
 
 type CodexUserInput =
@@ -35,10 +36,15 @@ const DANGER_FULL_ACCESS = { type: 'dangerFullAccess' } as const
 
 /** Map a platform message to the current Codex App Server UserInput schema. */
 export function buildCodexTurnInput(source: RuntimeTargetMessage): CodexUserInput[] {
-  const input: CodexUserInput[] = [{ type: 'text', text: source.content }]
   const path = source.meta.attachment_path?.trim()
   const kind = source.meta.attachment_kind?.trim().toLowerCase()
-  if (path && (kind === 'photo' || kind === 'image' || kind === 'sticker' || IMAGE_EXTENSIONS.test(path))) {
+  const isImage = Boolean(path && (kind === 'photo' || kind === 'image' || kind === 'sticker' || IMAGE_EXTENSIONS.test(path)))
+  // App Server exposes a first-class localImage input but no generic local-file
+  // input. Include the downloaded path for other attachment types so Codex can
+  // inspect them with its normal filesystem tools.
+  const text = path && !isImage ? `${source.content}\n\nLocal attachment path: ${path}` : source.content
+  const input: CodexUserInput[] = [{ type: 'text', text }]
+  if (path && isImage) {
     input.push({ type: 'localImage', path })
   }
   return input
@@ -303,8 +309,10 @@ export class CodexChannelTarget implements RuntimeTarget {
 
   private async recoverActiveTurn(binding: ChannelBinding, turnId: string | undefined): Promise<any | undefined> {
     if (!turnId) throw new Error('active Codex turn id was not recorded')
+    const deadline = Date.now() + (this.options.transportRecoveryTimeoutMs ?? 60_000)
     let lastError: unknown
-    for (let attempt = 0; attempt < 10; attempt++) {
+    let attempt = 0
+    while (Date.now() < deadline) {
       if (this.shuttingDown) throw new Error('Codex target is shutting down')
       try {
         await this.options.client.reconnect()
@@ -323,10 +331,16 @@ export class CodexChannelTarget implements RuntimeTarget {
         return turn.status === 'inProgress' ? undefined : turn
       } catch (error) {
         lastError = error
-        await new Promise(resolve => setTimeout(resolve, Math.min(100 * (attempt + 1), 1_000)))
+        attempt++
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) break
+        await new Promise(resolve => setTimeout(resolve, Math.min(250 * attempt, 2_000, remaining)))
       }
     }
-    throw lastError instanceof Error ? lastError : new Error(String(lastError))
+    const detail = lastError instanceof Error ? lastError.message : String(lastError)
+    throw new Error(`Codex App Server did not recover within the transport recovery window: ${detail}`, {
+      cause: lastError,
+    })
   }
 
   private async answerApproval(requestId: number, accept: boolean, source: RuntimeTargetMessage): Promise<void> {

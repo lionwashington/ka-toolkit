@@ -28,7 +28,7 @@ canonical entry point is `ka workshop`. The whole tree is deployed to
 | `lib/tmux-helpers.sh`         | Shared tmux shell helpers (incl. `tmux_pane_for_channel` — find a pane by `@ka_channel`). |
 | `lib/inject-prompt.sh`        | Send a prompt + Enter into an explicit target pane (used by the cron `inject-prompt` kind). |
 | `lib/runtimes/cc/`            | The CC runtime adapter (`launch.sh` / `ready-signals.sh` / `send-prompt.sh`).    |
-| `lib/runtimes/dispatch.sh`    | Runtime-adapter loader (`runtime_load <name>`); only `cc` is implemented.         |
+| `lib/runtimes/dispatch.sh`    | Runtime-adapter loader (`runtime_load <name>`); `cc` and `codex` are implemented. |
 | `lib/cron/`                   | Cron internals — yaml parse, schedule parse, plist gen, backend adapter.         |
 | `scripts/cron-run.sh`         | Unified trigger entrypoint launchd invokes for each cron job.                    |
 | `panes/<name>.env`            | Optional per-pane env file; sourced by `start-pane.sh`.                          |
@@ -69,7 +69,7 @@ list. The lead is the entry marked `main: true`.
 ```yaml
 session: workshop
 runtime: cc                # top-level default agent runtime; omit to accept cc.
-                           # codex / gemini are reserved names — only cc is built.
+                           # codex is supported; gemini remains reserved.
 mates:
   - name: main
     cwd: ~/workspace/<lead-project>
@@ -150,8 +150,9 @@ Scheduled jobs are declared in `~/.knowledge-assistant/cron.yaml` and managed vi
 `ka cron` (`add` / `remove` / `enable` / `disable` / `install` / `list` / …),
 which syncs the yaml to the OS scheduler (macOS launchd plists). At fire time
 launchd invokes `cron/ops/cron-run.sh <name>`, which resolves the job, takes a
-per-name flock, and runs it by `kind`: `shell`, `inject-prompt` (sends a prompt
-into a CC pane), or `ka-cli`. Full design: `docs/KA_CRON_DESIGN.md`.
+per-name flock, and runs it by `kind`: `shell`, `inject-prompt` (Channel-owned
+delivery for Codex, tmux pane injection for CC), or `ka-cli`. Full design:
+`docs/KA_CRON_DESIGN.md`.
 
 ## Deploy
 

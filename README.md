@@ -73,7 +73,7 @@ cd kb/tools/hkprop-mcp && uv run pytest      # Python MCP
 ## Status & scope
 
 This started as a personal tool and is shared as-is. The Claude Code runtime adapter is
-the only one implemented; Codex / Gemini CLI are reserved seams. Expect rough edges and
+the default runtime; Codex is also implemented, while Gemini CLI remains a reserved seam. Expect rough edges and
 opinions baked in — it is optimized for one person's workflow, not as a turnkey product.
 
 ## License

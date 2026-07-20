@@ -40,6 +40,14 @@ test('Telegram routes an owner message through a persistent Codex target', async
     }, 5_000)
     assert.equal(online, true)
     await assert.rejects(connectClient(daemon.baseUrl, 'codex-main'), /409|conflict|already owned/i)
+
+    const scheduled = await fetch(`${daemon.baseUrl}/api/runtimes/codex/codex-main/deliver`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: '/daily-brief' }),
+    })
+    assert.equal(scheduled.ok, true, await scheduled.text())
+    assert.equal(await waitFor(() => telegram.sent().some(message => message.text.includes('echo:/daily-brief')), 5_000), true)
+
     const push = (id: number, text: string) => telegram.push({
       update_id: id,
       message: { message_id: id, date: Math.floor(Date.now() / 1000), from: { id: 12345 }, chat: { id: 12345 }, text },
@@ -66,16 +74,33 @@ test('Telegram routes an owner message through a persistent Codex target', async
     ), 5_000)
     assert.equal(imageDelivered, true, `image input not delivered: ${JSON.stringify(telegram.sent())}`)
 
-    push(3, 'to codex-main: approve-me')
+    telegram.push({
+      update_id: 3,
+      message: {
+        message_id: 3,
+        date: Math.floor(Date.now() / 1000),
+        from: { id: 12345 },
+        chat: { id: 12345 },
+        caption: 'to codex-main: inspect-document',
+        document: { file_id: 'document-1', file_unique_id: 'codex-document', file_name: 'report.pdf' },
+      },
+    })
+    const documentDelivered = await waitFor(() => telegram.sent().some(message =>
+      message.text.includes('echo:inspect-document') &&
+      message.text.includes('Local attachment path:') && message.text.includes('report.pdf'),
+    ), 5_000)
+    assert.equal(documentDelivered, true, `document path not delivered: ${JSON.stringify(telegram.sent())}`)
+
+    push(4, 'to codex-main: approve-me')
     assert.equal(await waitFor(() => telegram.sent().some(message => message.text.includes('requests approval 1')), 5_000), true)
-    push(4, 'to codex-main: /approve 1')
+    push(5, 'to codex-main: /approve 1')
     const approved = await waitFor(() => telegram.sent().some(message => message.text.includes('echo:approve-me')), 5_000)
     const approvalLog = (() => { try { return readFileSync(join(daemon.dataDir, 'channel.log'), 'utf8') } catch { return '' } })()
     assert.equal(approved, true, `sent=${JSON.stringify(telegram.sent())}\nlog=${approvalLog}`)
 
-    push(5, 'to codex-main: wait-for-interrupt')
+    push(6, 'to codex-main: wait-for-interrupt')
     await new Promise(resolve => setTimeout(resolve, 100))
-    push(6, 'to codex-main: /stop')
+    push(7, 'to codex-main: /stop')
     assert.equal(await waitFor(() => telegram.sent().some(message => message.text.includes('Interrupt requested.')), 5_000), true)
   } finally {
     await daemon.stop()

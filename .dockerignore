@@ -10,6 +10,9 @@
 kb/core/dist/*
 !kb/core/dist/jsonl-reader-cli.js
 !kb/core/dist/distill-result-parser-cli.js
+!kb/adapter-codex/dist
+kb/adapter-codex/dist/*
+!kb/adapter-codex/dist/rollout-reader-cli.js
 **/build
 kb/tools/mcp-opennutrition/data_local
 runtime

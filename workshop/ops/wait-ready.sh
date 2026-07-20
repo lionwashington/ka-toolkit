@@ -1,5 +1,5 @@
 #!/bin/bash
-# ka wait-ready — poll a tmux pane until its CC runtime is ready to accept
+# ka wait-ready — poll a tmux pane until its agent runtime is ready to accept
 # injected prompts (resume + hooks + MCP init settled, prompt box idle).
 #
 # Intended callers:

@@ -26,7 +26,7 @@ Collect data in parallel where possible:
 - Do not use a city name based on inference or impression
 - Do not skip Steps 1-2 and just use amap's default parameters
 
-📌 **Lesson learned**: the daily brief once used the wrong city for 14 days in a row — a college name mentioned in conversation (actually a school in a different region) was mistaken for the user's city, causing the weather to be wrong the whole time. Root cause = trusting a second-hand place name from conversation history without checking the authoritative source. Fix = mandatory Step 1 read USER.md for the place of residence, no longer trusting second-hand data from conversation history.
+📌 **Reliability rule**: location references in conversation may be stale or unrelated to the user's residence. Always read the authoritative `Location:` field from `USER.md` before fetching weather.
 
 ### 2. Calendar
 Run `gog auth list` to find accounts, then for the calendar account:

@@ -73,8 +73,8 @@ All paths below are relative to `KA_HOME` (`~/.knowledge-assistant`).
 | Python MCP: ibkr, hkprop | `kb/venvs/{ibkr,hkprop}/` | `uv build` wheel → install into venv |
 | Channel daemons (telegram + lark) | `channels/{telegram,lark}-daemon/` | esbuild `--bundle` + scripts (no secrets) |
 | CC hooks (capture/compact) | `kb/hooks/` | esbuild `--bundle` (folds in `@ka/core`) |
-| core CLIs (used by `/kb`) | `kb/core/dist/` | plain copy (tsup self-contained) |
-| skills (kb, daily-brief, …) | `kb/skills/<name>/SKILL.md` | plain copy |
+| core CLIs (used by `/kb`) | `kb/core/dist/` | plain copy (tsup self-contained ESM + runtime `package.json`) |
+| skills (kb, daily-brief, …) | `kb/skills/<name>/SKILL.md` | plain copy; `--switch` links both Claude and Codex discovery roots |
 | config templates + data dirs | `config/` (`*.example.*` templates) + `state/` + `raw/` + `pending-topics/` | seeded, never overwritten |
 
 ### Single-component deploys and other flags

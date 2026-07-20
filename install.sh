@@ -33,6 +33,7 @@ LAUNCHAGENTS_DIR="${KA_LAUNCHAGENTS:-$HOME/Library/LaunchAgents}"     # cron pli
 CLAUDE_SETTINGS="${KA_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"  # hooks registration
 CODEX_HOOKS="${KA_CODEX_HOOKS:-${CODEX_HOME:-$HOME/.codex}/hooks.json}" # Codex lifecycle hooks
 CLAUDE_SKILLS_DIR="${KA_CLAUDE_SKILLS:-$HOME/.claude/skills}"         # skills symlink landing spot
+CODEX_SKILLS_DIR="${KA_CODEX_SKILLS:-${CODEX_HOME:-$HOME/.codex}/skills}" # Codex skill discovery root
 TELEGRAM_DIR="${KA_TELEGRAM_DIR:-$HOME/.telegram-channel}"            # old daemon location
 LARK_DIR="${KA_LARK_DIR:-$HOME/.lark-channel}"                        # old lark daemon location
 # The active channel daemon (telegram|lark) is chosen via `--channel-kind` and
@@ -114,8 +115,9 @@ resolve_active_kind
 #     daemon/           telegram-channel daemon (moved from ~/.telegram-channel; D2/P1.4)
 #     core-cli/*-cli.js  core CLI (called by the kb skill; tsup dist self-contained, plain copy)
 #     skills/<name>/SKILL.md  skills (design→runtime copy; switch_skills then symlinks)
-#   Pointers into runtime/ (cc's turf, but the symlink points at runtime, §1.1):
+#   Pointers into runtime/ (tool-owned discovery roots; symlinks point at runtime, §1.1):
 #     ~/.claude/skills/<name>/SKILL.md  → runtime/skills/<name>/SKILL.md (created by switch_skills)
+#     ~/.codex/skills/<name>            → runtime/skills/<name>          (created by switch_skills)
 #     ~/.claude.json           MCP registration (cc's turf; register_mcp points it at runtime/mcp)
 #     ~/Library/LaunchAgents/  launchd plist (platform-mandated)
 #   Runtime data (already lives in KA_HOME; install leaves it alone):
@@ -543,7 +545,7 @@ deploy_core_cli() {      # core CLI (called by kb skill) → runtime/core-cli (t
   local src="$REPO_ROOT/kb/core/dist" dest="$RUNTIME/kb/core/dist"
   log "core CLI → ${dest} (kb/core/dist/*-cli.js, already tsup-bundled self-contained, plain copy)"
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  [dry-run] cp ${src}/*-cli.js -> ${dest}/"
+    echo "  [dry-run] cp ${src}/*-cli.js -> ${dest}/; write ${dest}/package.json with type=module"
     return 0
   fi
   if [ ! -d "$src" ]; then
@@ -551,6 +553,10 @@ deploy_core_cli() {      # core CLI (called by kb skill) → runtime/core-cli (t
     return 0
   fi
   mkdir -p "$dest"
+  # These tsup bundles are ESM. Node 22+ can infer module syntax, but the
+  # Debian/Ubuntu Node versions supported by KA require an explicit package
+  # boundary when the files are copied outside the repository.
+  printf '%s\n' '{"type":"module"}' > "$dest/package.json"
   local f cnt=0
   for f in "$src"/*-cli.js; do
     [ -f "$f" ] || continue
@@ -859,29 +865,47 @@ switch_lark_daemon() {   # switch ⑤b: start runtime/lark-daemon IFF lark is th
   fi
 }
 
-switch_skills() {        # switch ⑥: ~/.claude/skills/<name>/SKILL.md symlink → runtime/skills (back up old target)
+switch_skills() {        # switch ⑥: runtime skill symlinks for Claude Code and Codex
   want skills || return 0
-  [ "$DO_SWITCH" = 1 ] || { log "switch skills → SKIPPED (needs --switch; won't change cc's turf symlink on its own)"; return 0; }
+  [ "$DO_SWITCH" = 1 ] || { log "switch skills → SKIPPED (needs --switch; won't change skill discovery roots on its own)"; return 0; }
   local src="$RUNTIME/kb/skills"
-  log "switch ⑥ skills symlink → ${CLAUDE_SKILLS_DIR}/<name>/SKILL.md pointed at ${src} (back up old target)"
+  log "switch ⑥ skills symlink → Claude Code + Codex discovery roots pointed at ${src}"
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  [dry-run] for each runtime/skills/<name>: record old symlink target → .pre-switch-target; ln -sf to runtime"
+    echo "  [dry-run] for each runtime skill: link SKILL.md into ${CLAUDE_SKILLS_DIR}; link the skill directory into ${CODEX_SKILLS_DIR}"
     return 0
   fi
   [ -d "$src" ] || { log "  WARN ${src} does not exist (run deploy_skills first), skipping"; return 0; }
-  local d name link tgt cnt=0
+  local d name link tgt codex_link cnt=0
   for d in "$src"/*/; do
     [ -d "$d" ] || continue
     name="$(basename "$d")"
+
     link="$CLAUDE_SKILLS_DIR/$name/SKILL.md"
     mkdir -p "$CLAUDE_SKILLS_DIR/$name"
-    # Back up the old symlink target (only when it's currently a symlink and not yet backed up; for the record, cleanup removes it)
     if [ -L "$link" ] && [ ! -f "${link}.pre-switch-target" ]; then
       tgt="$(readlink "$link")"; printf '%s' "$tgt" > "${link}.pre-switch-target"
     fi
     ln -sf "$src/$name/SKILL.md" "$link"; cnt=$((cnt + 1))
+
+    # Codex discovers symlinked skill directories, but deliberately ignores a
+    # symlinked SKILL.md inside a real directory. Migrate the old KA layout when
+    # it is the only managed entry; never replace a directory containing user files.
+    codex_link="$CODEX_SKILLS_DIR/$name"
+    mkdir -p "$CODEX_SKILLS_DIR"
+    if [ -d "$codex_link" ] && [ ! -L "$codex_link" ] && \
+       [ -L "$codex_link/SKILL.md" ] && \
+       [ "$(readlink "$codex_link/SKILL.md")" = "$src/$name/SKILL.md" ]; then
+      rm "$codex_link/SKILL.md"
+      [ -f "$codex_link/SKILL.md.pre-switch-target" ] && rm "$codex_link/SKILL.md.pre-switch-target"
+      rmdir "$codex_link" 2>/dev/null || true
+    fi
+    if [ -e "$codex_link" ] && [ ! -L "$codex_link" ]; then
+      log "  WARN ${codex_link} already exists and is not KA-managed; skipping Codex link"
+      continue
+    fi
+    ln -sfn "$src/$name" "$codex_link"; cnt=$((cnt + 1))
   done
-  log "  OK ${cnt} skill symlink(s) pointed at runtime/skills (design/runtime separation)"
+  log "  OK ${cnt} skill symlink(s) pointed at runtime skills across Claude Code and Codex"
 }
 
 do_cleanup_old() {       # --cleanup-old: after switch is verified OK, remove old standalone deploy + backups (irreversible, use with care)

@@ -214,6 +214,25 @@ export function createHttpApp(platform: Platform, runtimeManager?: CodexRuntimeM
     res.json({ ok: true, name, removed: await runtimeManager.unregister(name) })
   })
 
+  // Loopback automation entrypoint. Unlike tmux injection, this creates a
+  // Channel-owned turn, so the normal runtime event path sends the final answer
+  // to Telegram/Lark. It is scoped to an already registered Codex target.
+  app.post('/api/runtimes/codex/:name/deliver', async (req, res) => {
+    const name = sanitizeChannelName(req.params.name)
+    const content = String(req.body?.content ?? '')
+    const target = runtimeTargetOf(name)
+    if (!content) { res.status(400).json({ ok: false, error: 'content is required' }); return }
+    if (!target || target.runtime !== 'codex') {
+      res.status(404).json({ ok: false, error: `Codex runtime target is not online: ${name}` }); return
+    }
+    try {
+      await target.deliver({ content, meta: { channel_name: name, routed_target: name, source: 'cron' } })
+      res.json({ ok: true, name })
+    } catch (error: any) {
+      res.status(502).json({ ok: false, error: error?.message ?? String(error) })
+    }
+  })
+
   // /api/send — deterministic re-send of a reply the MODEL leaked as TEXT instead of
   // emitting a real tool_use (the Opus tool-call-as-text bug). The Stop hook detects
   // that leak, extracts {channel, target, text}, and POSTs here so the owner still

@@ -88,6 +88,7 @@ ka workshop [<verb>] [<name> [<workdir>]] [flags]
 | `ka workshop` (bare) | = `ka workshop start` (no name): start all `default=true` mates |
 | `ka workshop start [<name>]` | no name → start all default mates; `<name>` → start a single **declared** mate (if already running, just report, don't rebuild). Pure launcher, won't register a new mate |
 | `ka workshop stop [<name>]` | no name → stop the whole workshop (kill the session); `<name>` → stop only that pane |
+| `ka workshop status` | backwards-compatible alias for `ka status` |
 | `ka workshop restart [<name>]` | no name → restart the **whole** workshop (stop all → start all; run from a plain terminal); `<name>` → restart a single mate's pane. ⚠️ See the warning below |
 | `ka workshop spawn-mates <name> [<workdir>]` | with `<workdir>` → register and start; without → equivalent to `start <name>` |
 | `ka workshop remove-mate <name>` (alias `remove`) | the inverse of spawn-mates: stop the mate's pane if running, then delete its entry from `workshop.yaml`. Refuses the lead `main`; `--dry-run` previews; interactive `[y/N]` confirm unless `--yes` |
@@ -100,10 +101,10 @@ ka workshop [<verb>] [<name> [<workdir>]] [flags]
 |---|---|
 | `--dry-run` | only print the tmux / daemon commands that would run, don't actually create anything |
 | `--all` | include optional mates with `default: false` |
-| `--only NAME[,NAME...]` | start only the specified CCs (comma-separated) |
+| `--only NAME[,NAME...]` | start only the specified mates (comma-separated) |
 | `--skip-daemon` | don't even check the daemon (workshop never starts/stops it; this just suppresses the down-warning) |
-| `--pane` | **default**: arrange all CCs as split-panes in **one window** (all on one screen) |
-| `--window` | one independent window per CC (switch with `Ctrl-b 0/1/2/w`) |
+| `--pane` | **default**: arrange all mates as split-panes in **one window** (all on one screen) |
+| `--window` | one independent window per mate (switch with `Ctrl-b 0/1/2/w`) |
 
 ### Examples
 
@@ -144,7 +145,7 @@ text (not a timed blind send). In the rare case it doesn't auto-pass, attach and
 
 ### `ka workshop restart <name>` — ⚠️ loses runtime context
 
-restart a single mate = stop that pane + re-start. **Restarting loses that CC's in-memory runtime context**
+restart a single mate = stop that pane + re-start. **Restarting loses that agent runtime's in-memory context**
 (`--resume` only restores the on-disk conversation history, not the in-memory working state).
 
 > **If your channel merely dropped** (e.g. the CC went flat after a daemon restart and isn't receiving messages), **don't use
@@ -321,7 +322,7 @@ ka doctor
 Checks:
 
 1. **config** exists
-2. whether **runtime** is cc (the only implemented adapter; codex/gemini are reserved names only)
+2. whether **runtime** is a supported adapter (`cc` or `codex`; Gemini remains reserved)
 3. whether the **channel daemon** is up on port 9877 (telegram/lark)
 3b. whether the **kb retrieval daemon** is up on port 7705 (ready / warming / `warm_error`); down ⇒ error with a `ka kb start` hint
 4. **session + per-pane invariants**:
@@ -411,12 +412,12 @@ every agent — the lead (marked `main: true`) and the mates:
 
 ```yaml
 session: workshop
-runtime: cc                # top-level default; can be omitted. Only the cc adapter is implemented
+runtime: cc                # top-level default; can be omitted. cc and codex are implemented
 mates:
   - name: main
     cwd: ~/workspace/knowledge-assistant
     main: true             # the lead — bound to the daemon's "main" channel
-    # runtime: cc          # each entry can override individually (parsed, but nothing beyond cc is implemented yet)
+    # runtime: codex       # each entry can override individually with cc or codex
   - name: ka-dev2
     cwd: ~/workspace/knowledge-assistant
     description: Development and maintenance of the knowledge-assistant project

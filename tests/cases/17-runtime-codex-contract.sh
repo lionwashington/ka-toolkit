@@ -44,6 +44,16 @@ ok "Codex ready detection accepts idle TUI only"
 
 tmp_root="$(mktemp -d)"
 mkdir -p "$tmp_root/bin" "$tmp_root/work"
+cat > "$tmp_root/bin/fake-tmux" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$FAKE_TMUX_CALLS"
+SH
+chmod +x "$tmp_root/bin/fake-tmux"
+FAKE_TMUX_CALLS="$tmp_root/tmux-calls" TMUX_BIN="$tmp_root/bin/fake-tmux" \
+    runtime::inject_prompt workshop:0.0 /daily-brief
+grep -q 'send-keys -t workshop:0.0 -l /daily-brief' "$tmp_root/tmux-calls" \
+    || fail "KA slash-style prompt was not preserved"
+ok "Codex prompt injection preserves KA slash-style prompts"
 export KA_STATE_DIR="$tmp_root/state"
 cat > "$tmp_root/bin/codex" <<'SH'
 #!/bin/bash

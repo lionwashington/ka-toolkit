@@ -76,7 +76,7 @@ test('dispatch rejects an unavailable runtime', () => {
   assert.match(result.stderr, /unknown runtime 'missing'/)
 })
 
-test('codex distill runtime is ephemeral, JSONL, and workspace sandboxed', () => {
+test('codex distill runtime is ephemeral, JSONL, and non-interactive', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ka-distill-codex-'))
   const bin = join(dir, 'bin')
   const argsFile = join(dir, 'args.txt')
@@ -103,8 +103,7 @@ test('codex distill runtime is ephemeral, JSONL, and workspace sandboxed', () =>
     '--json',
     '--ephemeral',
     '--skip-git-repo-check',
-    '--sandbox',
-    'workspace-write',
+    '--dangerously-bypass-approvals-and-sandbox',
     '--model',
     'test-codex-model',
     'test prompt',

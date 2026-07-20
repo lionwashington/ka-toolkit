@@ -334,7 +334,7 @@ cron: 4 jobs (3 enabled, 1 disabled)
 3. acquires the flock (per-name, to prevent concurrency)
 4. dispatches by `kind`:
    - `shell`: `bash -c "$command"` (with the `env` field added to the environment)
-   - `inject-prompt`: cron-run reads config.yaml's `channels.inject` → for each channel name resolves the corresponding pane (`@ka_channel`) → `workshop/ops/inject-prompt.sh <pane> "$command"`
+   - `inject-prompt`: cron-run reads config.yaml's `channels.inject`; an online Codex target receives the unchanged prompt through the Channel runtime so its final answer is delivered to Telegram/Lark, while a CC target uses `workshop/ops/inject-prompt.sh <pane> "$command"`
    - `ka-cli`: `shared/bin/ka $command`
 5. write the log header `=== 2026-04-16 07:00:00 start ===`
 6. execute the command, appending both stdout/stderr to the log
