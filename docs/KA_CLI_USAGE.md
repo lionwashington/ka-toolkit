@@ -5,15 +5,16 @@
 
 `ka` is the command-line entry point of Knowledge Assistant, used to:
 
-- start/stop the **workshop** — a set of **mutually independent CC processes**, each running in its own tmux pane + its own
-  cwd, conversing with the user through the **telegram-channel daemon**;
+- start/stop the **workshop** — a set of mutually independent Claude Code or Codex
+  runtime processes, each running in its own tmux pane + its own cwd and conversing
+  through the active Channel daemon;
 - run health diagnostics (`ka status` / `ka doctor`);
 - manage declarative **cron** scheduled jobs (`ka cron`);
 - trigger background knowledge-base distillation (`ka kb distill`).
 
-> **mate = an independent CC process**, not a subagent inside CC. Each mate has an independent cwd, an independent
-> `KA_CHANNEL`, and an independent process; they share no context. The pane / window layout is a purely visual choice.
-> The user routes a message to a specific CC in Telegram with `to <name>:` or `to <number>:` (no prefix →
+> **mate = an independent runtime process**, not a subagent inside another agent. Each mate has an independent cwd,
+> `KA_CHANNEL`, process and runtime session; they share no context. The pane / window layout is a purely visual choice.
+> The user routes a message to a specific mate in Telegram with `to <name>:` or `to <number>:` (no prefix →
 > `main`).
 
 ---
@@ -75,7 +76,7 @@ ka workshop stop   # wrap up
 ## `ka workshop` — workshop lifecycle
 
 `ka workshop` is the sole entry point for managing the workshop panes. It reads `workshop.yaml`, warns
-if the channel daemon is down (it does not start it — see `ka channel`), then pulls each CC into its own tmux pane (or window).
+if the channel daemon is down (it does not start it — see `ka channel`), then launches each declared runtime in its own tmux pane (or window).
 
 ```
 ka workshop [<verb>] [<name> [<workdir>]] [flags]
@@ -105,6 +106,20 @@ ka workshop [<verb>] [<name> [<workdir>]] [flags]
 | `--skip-daemon` | don't even check the daemon (workshop never starts/stops it; this just suppresses the down-warning) |
 | `--pane` | **default**: arrange all mates as split-panes in **one window** (all on one screen) |
 | `--window` | one independent window per mate (switch with `Ctrl-b 0/1/2/w`) |
+
+### Codex session selection and fresh startup
+
+Each Codex mate gets a Workshop-owned loopback App Server. With no explicit
+thread ID, Workshop resumes the newest session whose recorded cwd exactly matches
+the mate cwd. `args: [resume, <thread-id>]` selects a specific same-cwd thread;
+legacy `resume --last` and `resume latest` forms select the latest match.
+
+If that cwd has no prior Codex session, startup does not fail and does not create a
+hidden Channel-only conversation. Workshop starts the TUI normally, adopts the
+thread created by the TUI, registers it with Channel, and upgrades the same live
+registration after its rollout becomes resumable. This transition is what enables
+Telegram/Lark text deltas for a brand-new session. Restarting Channel does not
+require restarting the Codex pane; the registration loop converges again.
 
 ### Examples
 

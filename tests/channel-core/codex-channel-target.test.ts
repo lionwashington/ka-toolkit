@@ -10,16 +10,16 @@ import { buildCodexTurnInput, CodexChannelTarget, type CodexChannelEvent } from 
 
 const fake = fileURLToPath(new URL('../codex-app-server/fake-app-server.mjs', import.meta.url))
 
-function client(statePath: string): AppServerClient {
+function client(statePath: string, extraEnv: Record<string, string> = {}): AppServerClient {
   return new AppServerClient({
     command: process.execPath,
     args: [fake],
-    env: { ...process.env, FAKE_CODEX_STATE: statePath },
+    env: { ...process.env, ...extraEnv, FAKE_CODEX_STATE: statePath },
     requestTimeoutMs: 500,
   })
 }
 
-function target(dir: string, appServer: AppServerClient, events: CodexChannelEvent[], turnInactivityTimeoutMs?: number): CodexChannelTarget {
+function target(dir: string, appServer: AppServerClient, events: CodexChannelEvent[], turnInactivityTimeoutMs?: number, completionPollIntervalMs?: number, completionNotificationGraceMs?: number): CodexChannelTarget {
   return new CodexChannelTarget({
     name: 'codex-main',
     platform: 'telegram',
@@ -28,6 +28,8 @@ function target(dir: string, appServer: AppServerClient, events: CodexChannelEve
     client: appServer,
     bindings: new BindingStore(join(dir, 'bindings.json')),
     turnInactivityTimeoutMs,
+    completionPollIntervalMs,
+    completionNotificationGraceMs,
     onEvent: event => { events.push(event) },
   })
 }
@@ -52,6 +54,31 @@ test('uses the completed turn item when no agent-message delta was emitted', asy
   const appServer = client(join(dir, 'fake-state.json'))
   await target(dir, appServer, events).deliver({ content: 'final-item-only', meta: {} })
   assert.equal(events.find(event => event.type === 'final')?.text, 'echo:final-item-only')
+  await appServer.stop()
+})
+
+test('polls thread state when a multi-client App Server omits turn/completed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-poll-completion-'))
+  const statePath = join(dir, 'fake-state.json')
+  const events: CodexChannelEvent[] = []
+  const appServer = client(statePath, { FAKE_SUPPRESS_TURN_COMPLETED: '1' })
+  await target(dir, appServer, events, undefined, 10, 20).deliver({ content: 'poll-fallback', meta: {} })
+  assert.equal(events.find(event => event.type === 'final')?.text, 'echo:poll-fallback')
+  const state = JSON.parse(readFileSync(statePath, 'utf8'))
+  assert.equal(state.requests.some((request: any) => request.method === 'thread/read'), true)
+  await appServer.stop()
+})
+
+test('lets delayed completion notifications preserve streaming before the polling fallback', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-poll-stream-race-'))
+  const events: CodexChannelEvent[] = []
+  const appServer = client(join(dir, 'fake-state.json'), { FAKE_COMPLETION_NOTIFICATION_DELAY_MS: '50' })
+  await target(dir, appServer, events, undefined, 5, 100).deliver({ content: 'delayed-stream', meta: {} })
+  const deltaIndex = events.findIndex(event => event.type === 'text-delta')
+  const finalIndex = events.findIndex(event => event.type === 'final')
+  assert.ok(deltaIndex >= 0, 'the polling fallback must not detach before the delayed delta arrives')
+  assert.ok(finalIndex > deltaIndex, 'the streamed delta must be observed before the final event')
+  assert.equal(events[finalIndex]?.text, 'echo:delayed-stream')
   await appServer.stop()
 })
 

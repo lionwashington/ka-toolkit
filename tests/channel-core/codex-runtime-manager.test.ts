@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -94,6 +94,75 @@ test('keeps a runtime connection when a registrar retry only changes thread meta
 
   assert.equal(runtimeTargetOf('codex-main'), original)
   assert.equal(original?.isAlive(), true)
+  await manager.stop()
+  await appServer.close()
+})
+
+test('binds a live fresh TUI thread without requiring a rollout resume', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-register-fresh-'))
+  const statePath = join(dir, 'fake-state.json')
+  writeFileSync(statePath, JSON.stringify({
+    threads: { 'thread-fresh': { id: 'thread-fresh', ephemeral: false, path: '/tmp/thread-fresh.jsonl', cwd: dir } },
+    requests: [],
+  }))
+  const sent: string[] = []
+  const platform: Platform = {
+    name: 'telegram',
+    resolveReplyTarget: value => value,
+    isSelf: () => true,
+    startInbound: () => {},
+    send: async (_target, text) => { sent.push(text); return null },
+    fetchAttachment: async () => '',
+    instructions: () => '',
+    replyToolDescription: '',
+  }
+  const manager = new CodexRuntimeManager(platform, {
+    platform: 'telegram',
+    bindingsPath: join(dir, 'bindings.json'),
+    externalChatId: 'owner',
+    requestTimeoutMs: 500,
+  })
+  const socketPath = join(dir, 'app-server.sock')
+  const appServer = await startFakeSocketServer({ socketPath, fakePath: fake, statePath })
+  await manager.register({
+    name: 'codex-fresh', cwd: dir, socketPath, threadId: 'thread-fresh', allowUnpersistedThread: true,
+  })
+  let state = JSON.parse(readFileSync(statePath, 'utf8'))
+  assert.equal(state.requests.some((request: any) => request.method === 'thread/resume'), false)
+  await dispatchTargets(platform, ['codex-fresh'], 'hello-fresh', { chat_id: 'owner' })
+  await waitFor(() => sent.some(text => text.includes('echo:hello-fresh')))
+  state = JSON.parse(readFileSync(statePath, 'utf8'))
+  assert.equal(state.requests.some((request: any) => request.method === 'turn/start' && request.params.threadId === 'thread-fresh'), true)
+  await manager.stop()
+  await appServer.close()
+})
+
+test('subscribes an existing fresh target once its thread becomes resumable', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-register-promote-'))
+  const statePath = join(dir, 'fake-state.json')
+  writeFileSync(statePath, JSON.stringify({
+    threads: { 'thread-fresh': { id: 'thread-fresh', ephemeral: false, path: '/tmp/thread-fresh.jsonl', cwd: dir } },
+    requests: [],
+  }))
+  const platform: Platform = {
+    name: 'telegram', resolveReplyTarget: value => value, isSelf: () => true,
+    startInbound: () => {}, send: async () => null, fetchAttachment: async () => '',
+    instructions: () => '', replyToolDescription: '',
+  }
+  const manager = new CodexRuntimeManager(platform, {
+    platform: 'telegram', bindingsPath: join(dir, 'bindings.json'), externalChatId: 'owner', requestTimeoutMs: 1_500,
+  })
+  const socketPath = join(dir, 'app-server.sock')
+  const appServer = await startFakeSocketServer({ socketPath, fakePath: fake, statePath })
+  await manager.register({ name: 'codex-fresh', cwd: dir, socketPath, threadId: 'thread-fresh', allowUnpersistedThread: true })
+  const original = runtimeTargetOf('codex-fresh')
+  await manager.register({
+    name: 'codex-fresh', cwd: dir, socketPath, threadId: 'thread-fresh',
+    threadPath: '/tmp/thread-fresh.jsonl', allowUnpersistedThread: false,
+  })
+  assert.equal(runtimeTargetOf('codex-fresh'), original, 'promotion must not replace the live target')
+  const state = JSON.parse(readFileSync(statePath, 'utf8'))
+  assert.equal(state.requests.filter((request: any) => request.method === 'thread/resume').length, 1)
   await manager.stop()
   await appServer.close()
 })

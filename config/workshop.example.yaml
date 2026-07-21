@@ -1,8 +1,8 @@
 # config/workshop.example.yaml — copy to ~/.knowledge-assistant/config/workshop.yaml and edit.
 #
-# Declares the workshop agents. `ka start` (forwards to `ka workshop`, workshop/ops/workshop.sh) reads this file:
-# it bootstraps the lead pane, then `ka spawn-mates` asks the lead to spawn the
-# rest (each in its own tmux pane via the Agent tool).
+# Declares the workshop agents. `ka start` (forwards to `ka workshop`,
+# workshop/ops/workshop.sh) reads this file and launches each selected entry as
+# an independent runtime process in its own tmux pane or window.
 #
 # Every agent — the lead and the mates — is ONE entry under `mates:`. The lead
 # is just the entry marked `main: true`.
@@ -41,7 +41,9 @@ mates:
   #   default: false
 
   # Workshop starts a per-mate Codex App Server and registers its loopback endpoint
-  # with the active Channel daemon. Channel never reads this file.
+  # with the active Channel daemon. Channel never reads this file. An exact-cwd
+  # existing session is resumed; if none exists, the TUI creates a fresh canonical
+  # thread and Workshop adopts it automatically.
   # - name: codex-reviewer
   #   cwd: ~/workspace/your-workspace
   #   runtime: codex

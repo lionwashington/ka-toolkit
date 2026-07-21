@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
-const [endpoint, cwd, requestedThreadId = ''] = process.argv.slice(2)
+const [endpoint, cwd, requestedThreadId = '', mode = 'select'] = process.argv.slice(2)
 if (!endpoint || !cwd) throw new Error('usage: select-thread.mjs <endpoint> <cwd> [thread-id]')
+if (!['select', 'wait'].includes(mode)) throw new Error(`invalid selection mode: ${mode}`)
 
 const websocket = new WebSocket(endpoint)
 let nextId = 1
 const pending = new Map()
+let notifiedThread
 
 function request(method, params) {
   const id = nextId++
@@ -26,6 +28,9 @@ await new Promise((resolve, reject) => {
 
 websocket.addEventListener('message', event => {
   const message = JSON.parse(String(event.data))
+  if (message.method === 'thread/started' && message.params?.thread?.cwd === cwd) {
+    notifiedThread = message.params.thread
+  }
   if (message.id === undefined || (!('result' in message) && !('error' in message))) return
   const item = pending.get(message.id)
   if (!item) return
@@ -42,35 +47,42 @@ try {
   })
   websocket.send(JSON.stringify({ method: 'initialized', params: {} }))
 
-  let thread
-  if (requestedThreadId) {
-    const resumed = await request('thread/resume', { threadId: requestedThreadId })
-    thread = resumed.thread
-    if (thread.cwd !== cwd) {
-      throw new Error(`thread ${requestedThreadId} belongs to ${thread.cwd}, expected ${cwd}`)
-    }
-  } else {
+  const listLatest = async () => {
     const listed = await request('thread/list', {
       cwd,
       limit: 1,
       sortKey: 'recency_at',
       sortDirection: 'desc',
     })
-    const latest = listed.data?.[0]
+    return listed.data?.[0]
+  }
+
+  let thread
+  let fresh = false
+  if (requestedThreadId) {
+    const resumed = await request('thread/resume', { threadId: requestedThreadId })
+    thread = resumed.thread
+    if (thread.cwd !== cwd) {
+      throw new Error(`thread ${requestedThreadId} belongs to ${thread.cwd}, expected ${cwd}`)
+    }
+  } else if (mode === 'wait') {
+    const deadline = Date.now() + 15_000
+    while (!thread && Date.now() < deadline) {
+      thread = notifiedThread ?? await listLatest()
+      if (!thread) await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    if (!thread) throw new Error(`timed out waiting for the TUI to create a thread in ${cwd}`)
+  } else {
+    const latest = await listLatest()
     if (!latest) {
-      const started = await request('thread/start', {
-        cwd,
-        ephemeral: false,
-        approvalPolicy: 'on-request',
-        sandbox: 'workspace-write',
-      })
-      thread = started.thread
+      fresh = true
     } else {
       const resumed = await request('thread/resume', { threadId: latest.id })
       thread = resumed.thread
     }
   }
-  process.stdout.write(`${JSON.stringify({ id: thread.id, path: thread.path ?? null, cwd: thread.cwd })}\n`)
+  if (fresh) process.stdout.write(`${JSON.stringify({ id: '', path: null, cwd, fresh: true })}\n`)
+  else process.stdout.write(`${JSON.stringify({ id: thread.id, path: thread.path ?? null, cwd: thread.cwd, fresh: false })}\n`)
 } finally {
   websocket.close()
 }

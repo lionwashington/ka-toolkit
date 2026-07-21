@@ -48,10 +48,24 @@ createInterface({ input: process.stdin }).on('line', line => {
     else send({ id: message.id, result: { thread, cwd: thread.cwd, model: 'fake', modelProvider: 'fake' } })
     return
   }
+  if (message.method === 'thread/read') {
+    state.requests.push({ method: message.method, params: message.params })
+    save()
+    const thread = state.threads[message.params.threadId]
+    if (!thread) send({ id: message.id, error: { code: -32004, message: 'thread not found' } })
+    else send({ id: message.id, result: { thread } })
+    return
+  }
   if (message.method === 'turn/start') {
     state.requests.push({ method: message.method, params: message.params })
     save()
     const turn = { id: `turn-${turnId++}`, status: 'inProgress', items: [] }
+    const thread = state.threads[message.params.threadId]
+    if (thread) {
+      thread.turns ??= []
+      thread.turns.push(turn)
+      save()
+    }
     send({ id: message.id, result: { turn } })
     send({ method: 'turn/started', params: { threadId: message.params.threadId, turn } })
     const text = message.params.input?.find(item => item.type === 'text')?.text ?? ''
@@ -61,11 +75,27 @@ createInterface({ input: process.stdin }).on('line', line => {
       activeTurns.delete(turn.id)
       const imageSuffix = localImage ? `|localImage:${localImage}` : ''
       const finalText = `echo:${text}${imageSuffix}`
-      if (text !== 'complete-without-text' && text !== 'fail-without-text' && text !== 'final-item-only') {
-        send({ method: 'item/agentMessage/delta', params: { threadId: message.params.threadId, turnId: turn.id, itemId: 'answer', delta: finalText } })
-      }
+      const hasDelta = text !== 'complete-without-text' && text !== 'fail-without-text' && text !== 'final-item-only'
       const items = text === 'final-item-only' ? [{ type: 'agentMessage', id: 'answer', text: finalText }] : []
-      send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn: { ...turn, status, items } } })
+      const completedItems = items.length ? items :
+        (text === 'complete-without-text' || text === 'fail-without-text' ? [] : [{ type: 'agentMessage', id: 'answer', text: finalText }])
+      const completedTurn = { ...turn, status, items: completedItems }
+      if (thread) {
+        const index = thread.turns.findIndex(candidate => candidate.id === turn.id)
+        if (index >= 0) thread.turns[index] = completedTurn
+        save()
+      }
+      const sendCompletionNotifications = () => {
+        if (hasDelta) {
+          send({ method: 'item/agentMessage/delta', params: { threadId: message.params.threadId, turnId: turn.id, itemId: 'answer', delta: finalText } })
+        }
+        if (process.env.FAKE_SUPPRESS_TURN_COMPLETED !== '1') {
+          send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn: completedTurn } })
+        }
+      }
+      const notificationDelayMs = Number(process.env.FAKE_COMPLETION_NOTIFICATION_DELAY_MS ?? 0)
+      if (notificationDelayMs > 0) setTimeout(sendCompletionNotifications, notificationDelayMs)
+      else sendCompletionNotifications()
     }
     activeTurns.set(turn.id, { threadId: message.params.threadId, turn })
     if (text === 'crash-process') {

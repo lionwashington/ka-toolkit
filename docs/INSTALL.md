@@ -178,9 +178,15 @@ ka workshop --dry-run       # preview the layout without launching
 `ka workshop` starts every mate declared with `default: true` in
 `~/.knowledge-assistant/config/workshop.yaml` (seeded from
 `config/workshop.example.yaml` on first install — edit it to declare your
-panes/cwds), each as an independent
-`claude` process in its own tmux pane + cwd, and ensures the telegram daemon is
-running. Route to a mate from Telegram with `to <name>: <message>`.
+panes/cwds), each as an independent configured runtime (`cc` or `codex`) in its
+own tmux pane + cwd. Route to a mate from Telegram with
+`to <name>: <message>`.
+
+For a Codex mate, Workshop owns a per-mate loopback App Server. It resumes the
+latest exact-cwd session (or an explicitly configured same-cwd thread). If no
+session exists, the TUI creates the canonical thread and Workshop adopts it;
+Channel registration is promoted after the rollout becomes resumable so a fresh
+session receives the same streaming behavior as a resumed one.
 
 Useful verbs:
 

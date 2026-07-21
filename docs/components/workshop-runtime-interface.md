@@ -10,7 +10,9 @@ commands.
 > `workshop/ops/runtimes/dispatch.sh` loads them. Codex uses a Workshop-owned App
 > Server sidecar, selects the most recent thread whose cwd exactly matches the
 > mate cwd, and connects both its TUI and Channel to that canonical thread;
-> `args: [resume, <thread-id>]` is the validated override. `gemini` remains reserved. This doc is the contract
+> `args: [resume, <thread-id>]` is the validated override. If no matching session
+> exists, the TUI creates a fresh canonical thread and Workshop adopts it instead
+> of creating a separate Channel-only thread. `gemini` remains reserved. This doc is the contract
 > the cc adapter satisfies and any new runtime must implement.
 
 ## Naming convention
@@ -60,6 +62,21 @@ The Codex implementation also owns the App Server sidecar lifecycle. While the
 pane is alive it registers the socket with Channel's loopback API and retries
 registration after Channel restarts. Pane exit unregisters the target and stops
 the sidecar.
+
+For an existing session, the selector resumes either the explicit validated
+thread ID or the latest exact-cwd thread (`resume --last` and `resume latest` are
+accepted compatibility aliases). For a fresh cwd, Workshop launches the TUI
+without `resume`, waits for its `thread/started`/`thread/list` result, and registers
+that ID immediately. Because the rollout may not yet be resumable, the first
+registration carries `allow_unpersisted_thread`; after persistence the registrar
+reposts the same runtime identity without that flag. Channel promotes the existing
+client with `thread/resume`, preserving the active WebSocket and enabling delta
+notifications used by platform streaming.
+
+Channel completion snapshots are a fallback, not a progress transport. It polls
+`thread/read` only after notification inactivity and briefly waits for queued
+deltas before accepting a polled completion. Runtime adapters must not introduce
+eager polling that can starve or overtake the notification stream.
 
 ### `runtime::post_launch <tmux_target> <name>` (optional)
 

@@ -19,11 +19,14 @@ export interface CodexChannelTargetOptions {
   cwd: string
   canonicalThreadId?: string
   canonicalThreadPath?: string
+  allowUnpersistedThread?: boolean
   client: AppServerClient
   bindings: BindingStore
   onEvent: (event: CodexChannelEvent, source: RuntimeTargetMessage) => void | Promise<void>
   now?: () => Date
   turnInactivityTimeoutMs?: number
+  completionPollIntervalMs?: number
+  completionNotificationGraceMs?: number
   transportRecoveryTimeoutMs?: number
 }
 
@@ -124,7 +127,7 @@ export class CodexChannelTarget implements RuntimeTarget {
       this.options.client.on('notification', this.observeThreadState)
       this.observing = true
     }
-    if (this.binding) {
+    if (this.binding && !this.options.allowUnpersistedThread) {
       const resumed = await this.options.client.request('thread/resume', {
         threadId: this.binding.runtimeSessionId,
         approvalPolicy: 'never',
@@ -133,6 +136,25 @@ export class CodexChannelTarget implements RuntimeTarget {
       this.threadBusy = resumed.thread?.status?.type === 'active'
     }
     this.connected = true
+  }
+
+  /**
+   * A brand-new TUI thread is registered before its rollout exists, so the
+   * initial connection cannot thread/resume. Once Workshop observes that the
+   * thread has become resumable, subscribe this already-live client without
+   * replacing it. App Server sends turn/delta notifications only to clients
+   * that resumed the thread; polling alone can recover the final text but
+   * cannot provide editable Telegram streaming.
+   */
+  async promotePersistedThread(): Promise<void> {
+    if (!this.options.allowUnpersistedThread || !this.binding) return
+    const resumed = await this.options.client.request('thread/resume', {
+      threadId: this.binding.runtimeSessionId,
+      approvalPolicy: 'never',
+      sandbox: 'danger-full-access',
+    })
+    this.threadBusy = resumed.thread?.status?.type === 'active'
+    this.options.allowUnpersistedThread = false
   }
 
   deliver(message: RuntimeTargetMessage): Promise<void> {
@@ -214,13 +236,15 @@ export class CodexChannelTarget implements RuntimeTarget {
       await this.waitUntilThreadIdle()
       this.activeSource = source
       let text = ''
+      let lastNotificationAt = Date.now()
+      let completionSettled = false
+      let resolveCompleted!: (value: any) => void
       const completed = new Promise<any>((resolve, reject) => {
         let timer: NodeJS.Timeout
         const armInactivityTimer = () => {
           clearTimeout(timer)
           timer = setTimeout(() => {
-            cleanup()
-            reject(new Error('Codex turn produced no activity before the inactivity timeout'))
+            fail(new Error('Codex turn produced no activity before the inactivity timeout'))
           }, this.options.turnInactivityTimeoutMs ?? 60 * 60_000)
           timer.unref()
         }
@@ -230,28 +254,37 @@ export class CodexChannelTarget implements RuntimeTarget {
           this.options.client.off('transport-close', onTransportClose)
           clearTimeout(timer)
         }
-        const onExit = () => {
+        const finish = (value: any) => {
+          if (completionSettled) return
+          completionSettled = true
           cleanup()
+          resolve(value)
+        }
+        const fail = (error: Error) => {
+          if (completionSettled) return
+          completionSettled = true
+          cleanup()
+          reject(error)
+        }
+        resolveCompleted = finish
+        const onExit = () => {
           this.connected = false
-          reject(new Error('Codex App Server exited during an active turn'))
+          fail(new Error('Codex App Server exited during an active turn'))
         }
         const onTransportClose = () => {
           this.connected = false
           if (this.shuttingDown || !this.options.client.reconnectable) {
-            cleanup()
-            reject(new Error('Codex App Server connection was lost during an active turn'))
+            fail(new Error('Codex App Server connection was lost during an active turn'))
             return
           }
           void this.recoverActiveTurn(binding!, turnId).then(recovered => {
             if (recovered) {
-              cleanup()
-              resolve({ turn: recovered, text: finalAgentText(recovered) || text })
+              finish({ turn: recovered, text: finalAgentText(recovered) || text })
             } else {
               this.options.client.once('transport-close', onTransportClose)
             }
           }, error => {
-            cleanup()
-            reject(new Error('Codex App Server connection was lost during an active turn', { cause: error }))
+            fail(new Error('Codex App Server connection was lost during an active turn', { cause: error }))
           })
         }
         const onNotification = (message: any) => {
@@ -262,7 +295,10 @@ export class CodexChannelTarget implements RuntimeTarget {
           // A Codex turn may legitimately run for hours. Any notification for
           // this turn proves that it is still making progress, so only fail on
           // prolonged inactivity rather than total wall-clock duration.
-          if (!turnId || !eventTurnId || eventTurnId === turnId) armInactivityTimer()
+          if (!turnId || !eventTurnId || eventTurnId === turnId) {
+            lastNotificationAt = Date.now()
+            armInactivityTimer()
+          }
           if (message.method === 'turn/started') {
             turnId = params.turn.id
             this.activeTurnId = turnId
@@ -272,8 +308,7 @@ export class CodexChannelTarget implements RuntimeTarget {
             text += String(params.delta ?? '')
             void this.options.onEvent({ type: 'text-delta', threadId: binding!.runtimeSessionId, turnId: eventTurnId, delta: String(params.delta ?? '') }, source)
           } else if (message.method === 'turn/completed') {
-            cleanup()
-            resolve({ turn: params.turn, text })
+            finish({ turn: params.turn, text })
           }
         }
         this.options.client.on('notification', onNotification)
@@ -294,6 +329,9 @@ export class CodexChannelTarget implements RuntimeTarget {
       turnId = started.turn.id
       this.activeTurnId = turnId
       this.persistActiveTurn(binding, turnId)
+      void this.pollTurnCompletion(binding, turnId, () => completionSettled, () => lastNotificationAt).then(turn => {
+        if (turn) resolveCompleted({ turn, text: finalAgentText(turn) || text })
+      }).catch(() => {})
       const result = await completed
       const finalText = result.text || finalAgentText(result.turn)
       if (finalText) await this.options.onEvent({ type: 'final', threadId: binding.runtimeSessionId, turnId, text: finalText }, source)
@@ -306,6 +344,45 @@ export class CodexChannelTarget implements RuntimeTarget {
       this.activeSource = undefined
       if (binding) this.persistActiveTurn(binding, undefined)
     }
+  }
+
+  private async pollTurnCompletion(binding: ChannelBinding, turnId: string, stopped: () => boolean, lastNotificationAt: () => number): Promise<any | undefined> {
+    // Polling exists only for App Server connections that omit turn/completed.
+    // Do not compete with a healthy notification stream: thread/read with full
+    // turns is comparatively expensive and, when run every second from turn
+    // start, can overtake/delay the delta notifications used for Telegram edits.
+    const interval = this.options.completionPollIntervalMs ?? 10_000
+    let lastPollAt = 0
+    while (!stopped() && !this.shuttingDown) {
+      const baseline = Math.max(lastNotificationAt(), lastPollAt)
+      const delay = Math.max(1, interval - (Date.now() - baseline))
+      await new Promise(resolve => setTimeout(resolve, delay))
+      if (stopped() || this.shuttingDown) return undefined
+      if (Date.now() - lastNotificationAt() < interval) continue
+      try {
+        const read = await this.options.client.request('thread/read', {
+          threadId: binding.runtimeSessionId,
+          includeTurns: true,
+        })
+        lastPollAt = Date.now()
+        const turn = read.thread?.turns?.find((candidate: any) => candidate.id === turnId)
+        if (turn && turn.status !== 'inProgress') {
+          // thread/read can observe the persisted completed turn before the App
+          // Server's queued delta + turn/completed notifications reach this
+          // client. Give the normal notification stream a short chance to win;
+          // otherwise the polling fallback would clean up its listener and turn
+          // an editable Telegram stream into one final, all-at-once message.
+          await new Promise(resolve => setTimeout(resolve, this.options.completionNotificationGraceMs ?? 1_500))
+          if (stopped() || this.shuttingDown) return undefined
+          return turn
+        }
+      } catch {
+        lastPollAt = Date.now()
+        // Notifications remain the primary completion path. Polling is only a
+        // fallback for multi-client App Servers that do not fan completion out.
+      }
+    }
+    return undefined
   }
 
   private async recoverActiveTurn(binding: ChannelBinding, turnId: string | undefined): Promise<any | undefined> {

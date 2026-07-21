@@ -14,6 +14,7 @@ export interface CodexRuntimeRegistration {
   socketPath?: string
   threadId?: string
   threadPath?: string
+  allowUnpersistedThread?: boolean
 }
 
 export interface CodexRuntimeConfig {
@@ -55,6 +56,10 @@ export class CodexRuntimeManager {
     // in one retry and present in the next; replacing the client for that change
     // closes an otherwise healthy WebSocket and aborts an active channel turn.
     if (current && sameRuntimeIdentity(current.registration, item)) {
+      if (current.registration.allowUnpersistedThread && !item.allowUnpersistedThread) {
+        await current.target.promotePersistedThread()
+        log(`codex target subscribed to persisted thread: ${item.name} (${item.threadId})`)
+      }
       current.registration = { ...current.registration, ...item }
       return
     }
@@ -72,6 +77,7 @@ export class CodexRuntimeManager {
       cwd: item.cwd,
       canonicalThreadId: item.threadId,
       canonicalThreadPath: item.threadPath,
+      allowUnpersistedThread: item.allowUnpersistedThread,
       platform: this.config.platform,
       externalChatId: this.config.externalChatId,
       client,

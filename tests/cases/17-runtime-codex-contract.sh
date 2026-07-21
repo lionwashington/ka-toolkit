@@ -35,6 +35,8 @@ if grep -q "thread/fork" "$OPS/runtimes/codex/select-thread.mjs"; then
 fi
 grep -q "thread/resume" "$OPS/runtimes/codex/select-thread.mjs" \
     || fail "Codex thread selector does not resume the selected thread"
+grep -q "allow_unpersisted_thread" "$OPS/runtimes/codex/bin/start-pane.sh" \
+    || fail "fresh Codex thread registration still requires an impossible rollout resume"
 ok "Codex implicit selection resumes the existing latest cwd thread"
 
 tag="$(runtime::ready_match $'header\n  ›  \n? for shortcuts')" || fail "ready fixture rejected"
@@ -64,13 +66,29 @@ if printf '%s\n' "$*" | grep -q 'app-server --listen'; then
     exec python3 -c 'import socket,sys,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",int(sys.argv[1]))); s.listen(); time.sleep(30)' "$port"
 fi
 printf '%s\n' "$*" | grep -q 'resume --last' && exit 2
+if [ -n "${FAKE_TUI_STARTED_MARKER:-}" ]; then
+    printf 'started\n' > "$FAKE_TUI_STARTED_MARKER"
+    sleep 0.2
+fi
 exit 0
 SH
 chmod +x "$tmp_root/bin/codex"
 cat > "$tmp_root/select-thread.mjs" <<'JS'
+import { existsSync } from 'node:fs'
 const cwd = process.argv[3]
 const requested = process.argv[4]
-process.stdout.write(JSON.stringify({ id: requested || 'thread-current-cwd', path: '/tmp/thread.jsonl', cwd }))
+const mode = process.argv[5]
+if (process.env.FAKE_SELECTOR_FRESH === '1' && mode === 'select') {
+  process.stdout.write(JSON.stringify({ id: '', path: null, cwd, fresh: true }))
+} else {
+  if (process.env.FAKE_SELECTOR_FRESH === '1') {
+    const deadline = Date.now() + 5000
+    while (!existsSync(process.env.FAKE_TUI_STARTED_MARKER) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+  }
+  process.stdout.write(JSON.stringify({ id: requested || 'thread-current-cwd', path: '/tmp/thread.jsonl', cwd, fresh: false }))
+}
 JS
 export KA_CODEX_THREAD_SELECTOR="$tmp_root/select-thread.mjs"
 export KA_CODEX_KEEP_APP_SERVER_ON_TUI_EXIT=0
@@ -119,6 +137,28 @@ if grep -q -- 'resume --last' "$tmp_root/calls"; then fail "combined resume dire
 grep -Eq -- 'mcp_servers\.telegram\.enabled=false --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
     || fail "combined resume directive was not normalized"
 ok "Codex launch normalizes legacy combined resume arguments"
+
+: > "$tmp_root/calls"
+FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
+    "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" "resume latest" --dangerously-bypass-approvals-and-sandbox >/dev/null 2>&1 \
+    || fail "legacy combined resume latest argument failed"
+if grep -q -- 'resume latest' "$tmp_root/calls"; then fail "combined resume latest directive leaked into Codex argv"; fi
+grep -Eq -- 'mcp_servers\.telegram\.enabled=false --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
+    || fail "combined resume latest directive was not normalized"
+ok "Codex launch normalizes legacy combined resume latest arguments"
+
+: > "$tmp_root/calls"
+rm -f "$tmp_root/fresh-tui-started"
+FAKE_CODEX_CALLS="$tmp_root/calls" FAKE_SELECTOR_FRESH=1 FAKE_TUI_STARTED_MARKER="$tmp_root/fresh-tui-started" \
+    PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" KA_CODEX_TUI_STDIN=/dev/null \
+    "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" >/dev/null 2>&1 \
+    || fail "fresh Codex TUI launch failed"
+[ -f "$tmp_root/fresh-tui-started" ] || fail "fresh Codex TUI was not started"
+fresh_tui_call="$(grep -- '--remote ' "$tmp_root/calls" | tail -1)"
+if printf '%s\n' "$fresh_tui_call" | grep -q -- ' resume '; then
+    fail "fresh Codex TUI incorrectly tried to resume an empty thread"
+fi
+ok "missing Codex session starts a new TUI thread"
 
 : > "$tmp_root/calls"
 pids=""

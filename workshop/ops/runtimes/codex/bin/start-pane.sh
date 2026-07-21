@@ -48,6 +48,9 @@ SERVER_LOG="$SOCKET_DIR/$SAFE_NAME.log"
 PORT_LOCK_DIR="$SOCKET_DIR/.port-allocation.lock"
 PORT_LOCK_HELD=0
 APP_SERVER_PID=""
+THREAD_SELECTOR_PID=""
+THREAD_SELECTOR_OUTPUT=""
+TUI_PID=""
 
 release_port_lock() {
     if [ "$PORT_LOCK_HELD" = "1" ]; then
@@ -59,6 +62,11 @@ release_port_lock() {
 
 cleanup() {
     release_port_lock
+    [ -n "$THREAD_SELECTOR_PID" ] && kill "$THREAD_SELECTOR_PID" 2>/dev/null || true
+    [ -n "$THREAD_SELECTOR_PID" ] && wait "$THREAD_SELECTOR_PID" 2>/dev/null || true
+    [ -n "$THREAD_SELECTOR_OUTPUT" ] && rm -f "$THREAD_SELECTOR_OUTPUT"
+    [ -n "$TUI_PID" ] && kill "$TUI_PID" 2>/dev/null || true
+    [ -n "$TUI_PID" ] && wait "$TUI_PID" 2>/dev/null || true
     [ -n "${REGISTRAR_PID:-}" ] && kill "$REGISTRAR_PID" 2>/dev/null || true
     curl -sf -X DELETE "http://127.0.0.1:${KA_CHANNEL_PORT:-9877}/api/runtimes/codex/$SAFE_NAME" >/dev/null 2>&1 || true
     [ -n "$APP_SERVER_PID" ] && kill "$APP_SERVER_PID" 2>/dev/null || true
@@ -123,7 +131,7 @@ TUI_ARGS=("$@")
 # Older Workshop configs commonly stored `resume --last` or `resume <id>` as
 # one YAML list item. Treat those exact forms as resume directives instead of
 # passing them as a prompt-shaped argv to Codex.
-if [ "${1:-}" = "resume --last" ]; then
+if [ "${1:-}" = "resume --last" ] || [ "${1:-}" = "resume latest" ]; then
     shift
     TUI_ARGS=("$@")
 elif [[ "${1:-}" =~ ^resume[[:space:]]+([0-9a-fA-F-]+)[[:space:]]*$ ]]; then
@@ -134,7 +142,7 @@ fi
 if [ "${1:-}" = "--last" ]; then
     shift
     TUI_ARGS=("$@")
-elif [ "${1:-}" = "resume" ] && [ "${2:-}" = "--last" ]; then
+elif [ "${1:-}" = "resume" ] && { [ "${2:-}" = "--last" ] || [ "${2:-}" = "latest" ]; }; then
     shift 2
     TUI_ARGS=("$@")
 elif [ "${1:-}" = "resume" ] && [ -n "${2:-}" ]; then
@@ -142,41 +150,6 @@ elif [ "${1:-}" = "resume" ] && [ -n "${2:-}" ]; then
     shift 2
     TUI_ARGS=("$@")
 fi
-
-THREAD_SELECTOR="${KA_CODEX_THREAD_SELECTOR:-$KA_RUNTIMES_DIR/codex/select-thread.mjs}"
-THREAD_OWNER_FILE="$SOCKET_DIR/$SAFE_NAME.thread"
-THREAD_JSON="$(node "$THREAD_SELECTOR" "$APP_SERVER_ENDPOINT" "$EXPECTED_CWD" "$REQUESTED_THREAD_ID")" || {
-    echo "[start-pane:$PANE_NAME] ERROR: cannot select canonical Codex thread"
-    exit 1
-}
-CANONICAL_THREAD_ID="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).id))')"
-CANONICAL_THREAD_PATH="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).path||""))')"
-[ -n "$CANONICAL_THREAD_ID" ] || { echo "[start-pane:$PANE_NAME] ERROR: canonical thread id is empty"; exit 1; }
-if [ -z "$REQUESTED_THREAD_ID" ]; then
-    THREAD_OWNER_TMP="$THREAD_OWNER_FILE.$$"
-    printf '%s\n' "$CANONICAL_THREAD_ID" > "$THREAD_OWNER_TMP"
-    chmod 600 "$THREAD_OWNER_TMP" 2>/dev/null || true
-    mv "$THREAD_OWNER_TMP" "$THREAD_OWNER_FILE"
-fi
-
-register_loop() {
-    local port="${KA_CHANNEL_PORT:-9877}"
-    local status body
-    body="$(PANE_NAME="$SAFE_NAME" PANE_CWD="$EXPECTED_CWD" APP_SERVER_ENDPOINT="$APP_SERVER_ENDPOINT" THREAD_ID="$CANONICAL_THREAD_ID" THREAD_PATH="$CANONICAL_THREAD_PATH" node -e \
-        'process.stdout.write(JSON.stringify({name:process.env.PANE_NAME,cwd:process.env.PANE_CWD,endpoint:process.env.APP_SERVER_ENDPOINT,thread_id:process.env.THREAD_ID,thread_path:process.env.THREAD_PATH||undefined}))')"
-    while kill -0 "$APP_SERVER_PID" 2>/dev/null; do
-        status="$(curl -sf --max-time 1 "http://127.0.0.1:$port/api/status" 2>/dev/null || true)"
-        if ! printf '%s' "$status" | PANE_NAME="$SAFE_NAME" node -e \
-            'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const j=JSON.parse(s);process.exit(j.runtime_targets?.some(x=>x.name===process.env.PANE_NAME)?0:1)}catch{process.exit(1)}})' \
-            2>/dev/null; then
-            curl -sf --max-time 5 -H 'content-type: application/json' -d "$body" \
-                "http://127.0.0.1:$port/api/runtimes/codex" >/dev/null 2>&1 || true
-        fi
-        sleep 5
-    done
-}
-register_loop &
-REGISTRAR_PID=$!
 
 run_codex() {
     codex "${TELEGRAM_MCP_OVERRIDES[@]}" --remote "$APP_SERVER_ENDPOINT" "$@"
@@ -203,10 +176,101 @@ fi
 if [ "$HAS_HOOK_TRUST_BYPASS" -eq 0 ]; then
     TUI_ARGS=(--dangerously-bypass-hook-trust "${TUI_ARGS[@]}")
 fi
-echo "[start-pane:$PANE_NAME] codex ${TUI_ARGS[*]} resume $CANONICAL_THREAD_ID (Workshop-managed App Server)"
+
+THREAD_SELECTOR="${KA_CODEX_THREAD_SELECTOR:-$KA_RUNTIMES_DIR/codex/select-thread.mjs}"
+THREAD_OWNER_FILE="$SOCKET_DIR/$SAFE_NAME.thread"
+THREAD_JSON="$(node "$THREAD_SELECTOR" "$APP_SERVER_ENDPOINT" "$EXPECTED_CWD" "$REQUESTED_THREAD_ID" select)" || {
+    echo "[start-pane:$PANE_NAME] ERROR: cannot select canonical Codex thread"
+    exit 1
+}
+FRESH_THREAD="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).fresh?"1":"0"))')"
+
+if [ "$FRESH_THREAD" = "1" ]; then
+    echo "[start-pane:$PANE_NAME] no existing Codex session; starting a new TUI thread"
+    THREAD_SELECTOR_OUTPUT="$SOCKET_DIR/.$SAFE_NAME.thread-select.$$"
+    node "$THREAD_SELECTOR" "$APP_SERVER_ENDPOINT" "$EXPECTED_CWD" "" wait > "$THREAD_SELECTOR_OUTPUT" &
+    THREAD_SELECTOR_PID=$!
+    CODEX_TUI_STDIN="${KA_CODEX_TUI_STDIN:-/dev/tty}"
+    run_codex "${TUI_ARGS[@]}" <"$CODEX_TUI_STDIN" &
+    TUI_PID=$!
+    for _ in $(seq 1 300); do
+        [ -s "$THREAD_SELECTOR_OUTPUT" ] && break
+        kill -0 "$THREAD_SELECTOR_PID" 2>/dev/null || break
+        kill -0 "$TUI_PID" 2>/dev/null || break
+        sleep 0.05
+    done
+    if [ ! -s "$THREAD_SELECTOR_OUTPUT" ]; then
+        wait "$THREAD_SELECTOR_PID" 2>/dev/null || true
+        THREAD_SELECTOR_PID=""
+        echo "[start-pane:$PANE_NAME] ERROR: TUI did not create a canonical Codex thread"
+        exit 1
+    fi
+    THREAD_JSON="$(cat "$THREAD_SELECTOR_OUTPUT")"
+    wait "$THREAD_SELECTOR_PID" 2>/dev/null || true
+    THREAD_SELECTOR_PID=""
+    rm -f "$THREAD_SELECTOR_OUTPUT"
+    THREAD_SELECTOR_OUTPUT=""
+fi
+
+CANONICAL_THREAD_ID="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).id))')"
+CANONICAL_THREAD_PATH="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).path||""))')"
+[ -n "$CANONICAL_THREAD_ID" ] || { echo "[start-pane:$PANE_NAME] ERROR: canonical thread id is empty"; exit 1; }
+if [ -z "$REQUESTED_THREAD_ID" ]; then
+    THREAD_OWNER_TMP="$THREAD_OWNER_FILE.$$"
+    printf '%s\n' "$CANONICAL_THREAD_ID" > "$THREAD_OWNER_TMP"
+    chmod 600 "$THREAD_OWNER_TMP" 2>/dev/null || true
+    mv "$THREAD_OWNER_TMP" "$THREAD_OWNER_FILE"
+fi
+
+register_loop() {
+    local port="${KA_CHANNEL_PORT:-9877}"
+    local status body persisted_json resolved_path
+    local thread_path="$CANONICAL_THREAD_PATH"
+    local allow_unpersisted="$FRESH_THREAD"
+    local last_registered_allow=""
+    while kill -0 "$APP_SERVER_PID" 2>/dev/null; do
+        # A fresh thread is visible to thread/list before its rollout can be
+        # resumed. Keep the initial allow_unpersisted registration, then detect
+        # the first successful resume and promote Channel to a subscribed
+        # registration. Without this transition Channel can poll the final turn
+        # but receives no turn/started or agent-message delta notifications.
+        if [ "$allow_unpersisted" = "1" ]; then
+            persisted_json="$(node "$THREAD_SELECTOR" "$APP_SERVER_ENDPOINT" "$EXPECTED_CWD" "$CANONICAL_THREAD_ID" select 2>/dev/null || true)"
+            resolved_path="$(printf '%s' "$persisted_json" | THREAD_ID="$CANONICAL_THREAD_ID" node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const j=JSON.parse(s);if(j.id===process.env.THREAD_ID)process.stdout.write(j.path||"resumable")}catch{}})' 2>/dev/null || true)"
+            if [ -n "$resolved_path" ]; then
+                [ "$resolved_path" = "resumable" ] || thread_path="$resolved_path"
+                allow_unpersisted=0
+            fi
+        fi
+        body="$(PANE_NAME="$SAFE_NAME" PANE_CWD="$EXPECTED_CWD" APP_SERVER_ENDPOINT="$APP_SERVER_ENDPOINT" THREAD_ID="$CANONICAL_THREAD_ID" THREAD_PATH="$thread_path" ALLOW_UNPERSISTED_THREAD="$allow_unpersisted" node -e \
+            'process.stdout.write(JSON.stringify({name:process.env.PANE_NAME,cwd:process.env.PANE_CWD,endpoint:process.env.APP_SERVER_ENDPOINT,thread_id:process.env.THREAD_ID,thread_path:process.env.THREAD_PATH||undefined,allow_unpersisted_thread:process.env.ALLOW_UNPERSISTED_THREAD==="1"}))')"
+        status="$(curl -sf --max-time 1 "http://127.0.0.1:$port/api/status" 2>/dev/null || true)"
+        if [ "$last_registered_allow" != "$allow_unpersisted" ] || ! printf '%s' "$status" | PANE_NAME="$SAFE_NAME" node -e \
+            'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const j=JSON.parse(s);process.exit(j.runtime_targets?.some(x=>x.name===process.env.PANE_NAME)?0:1)}catch{process.exit(1)}})' \
+            2>/dev/null; then
+            if curl -sf --max-time 5 -H 'content-type: application/json' -d "$body" \
+                "http://127.0.0.1:$port/api/runtimes/codex" >/dev/null 2>&1; then
+                last_registered_allow="$allow_unpersisted"
+            fi
+        fi
+        sleep 5
+    done
+}
+register_loop &
+REGISTRAR_PID=$!
+
 set +e
-run_codex "${TUI_ARGS[@]}" resume "$CANONICAL_THREAD_ID"
-TUI_STATUS=$?
+if [ "$FRESH_THREAD" = "1" ]; then
+    printf '[start-pane:%s] codex %s (new thread %s; Workshop-managed App Server)\n' \
+        "$PANE_NAME" "${TUI_ARGS[*]}" "$CANONICAL_THREAD_ID" >> "$SERVER_LOG"
+    wait "$TUI_PID"
+    TUI_STATUS=$?
+    TUI_PID=""
+else
+    echo "[start-pane:$PANE_NAME] codex ${TUI_ARGS[*]} resume $CANONICAL_THREAD_ID (Workshop-managed App Server)"
+    run_codex "${TUI_ARGS[@]}" resume "$CANONICAL_THREAD_ID"
+    TUI_STATUS=$?
+fi
 set -e
 printf '[start-pane:%s] Codex TUI exited with status %s\n' "$PANE_NAME" "$TUI_STATUS" | tee -a "$SERVER_LOG" >&2
 # A Channel-owned turn runs in the App Server, not in the TUI. Keep the

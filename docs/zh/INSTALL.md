@@ -137,7 +137,9 @@ ka workshop --window        # 每个 CC 一个 tmux 窗口，而非 pane
 ka workshop --dry-run       # 预览布局，不实际启动
 ```
 
-`ka workshop` 会启动 `~/.knowledge-assistant/config/workshop.yaml`（首次安装时由 `config/workshop.example.yaml` 初始化播种 —— 编辑它来声明你的 pane/cwd）中所有标记为 `default: true` 的 mate，每个 mate 都是一个独立的 `claude` 进程，运行在各自的 tmux pane + cwd 里，并确保 telegram 守护进程在运行。在 Telegram 里用 `to <name>: <message>` 把消息路由给某个 mate。
+`ka workshop` 会启动 `~/.knowledge-assistant/config/workshop.yaml`（首次安装时由 `config/workshop.example.yaml` 初始化播种 —— 编辑它来声明 pane/cwd）中所有标记为 `default: true` 的 mate。每个 mate 都是在独立 tmux pane + cwd 中运行的已配置运行时（`cc` 或 `codex`）。在 Telegram 里用 `to <name>: <message>` 把消息路由给某个 mate。
+
+对于 Codex mate，Workshop 会管理每个 mate 独立的 loopback App Server，并恢复 cwd 精确匹配的最新会话（或显式指定且 cwd 匹配的 thread）。如果没有既有会话，TUI 会创建 canonical thread，Workshop 随即接管；rollout 可恢复后，Channel 在原连接上升级订阅，因此新会话与恢复会话具有相同的流式输出行为。
 
 常用动作：
 
