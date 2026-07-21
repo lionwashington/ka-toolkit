@@ -93,7 +93,8 @@ ka workshop          # each mate pane connects to the active daemon (lark, from 
 ```
 
 The active daemon comes from `config/config.yaml channel_kind` (set above) — **no env var needed,
-on any command**. In the group, use `to <channel name>: …` to target, no prefix → `main`.
+on any command**. In the group, use `to <channel name>: …` to target. A bare message
+uses the most recently selected single target; if none exists, the daemon asks you to choose.
 
 > To switch the active daemon later: `./install.sh --channel-kind=telegram` (rewrites
 > `config/config.yaml`), then restart the workshop. Both daemons are already deployed, so no

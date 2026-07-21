@@ -137,7 +137,7 @@ claude-ch main --dangerously-skip-permissions --dangerously-load-development-cha
    - Messages from others, from bots, or card messages → won't come in (self filter + card filter).
 2. **Outbound**: have cc call `reply` (passing the `chat_id` from the incoming tag). The group receives a message
    with `**[#<number>-main]**` in its own paragraph above the response body.
-3. **Routing**: send `to <another channel name>: content` in the group → delivered to that channel; no prefix → `main`.
+3. **Routing**: send `to <another channel name>: content` in the group → delivered to that channel. A bare message uses the most recently selected single target; if none exists, the bot asks you to choose.
 4. **Offline replay**: messages sent in the group while cc is disconnected are delivered after cc reconnects (the watermark doesn't advance).
 5. **Daemon-restart auto-recovery**: restart the daemon (`stop.sh` then `start.sh`); cc **needs no restart, no touch**,
    the receive line is reconnected automatically via re-adopt (when downtime is short; see `docs/channels/telegram/ARCHITECTURE.md` §6c/§6d).

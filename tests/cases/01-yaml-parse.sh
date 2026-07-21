@@ -2,8 +2,8 @@
 # Verifies yaml-parse.sh emits the expected flat records.
 #
 # NEW SCHEMA (single `mates:` section): every agent lives under `mates:`.
-# `main: true` marks the lead (emitted as a `pane` record, channel forced to
-# `main` downstream); everything else is a spawned mate (`mate` record).
+# `main: true` is an optional side record that forces only the downstream
+# channel alias; every entry is otherwise emitted identically as `mate`.
 # Each entry supports: name / cwd / args / description / main / default.
 #   - main    defaults to false
 #   - default defaults to true
@@ -19,7 +19,7 @@ set -euo pipefail
 REPO="${REPO:-/repo}"
 YAML_PARSE="$REPO/workshop/ops/yaml-parse.sh"
 
-# --- main (main: true) → pane record; plain entry → mate record --------------
+# --- main:true remains a mate plus an optional channel-alias side record -----
 cat > /tmp/c.yaml <<'EOF'
 session: tsess
 mates:
@@ -36,10 +36,12 @@ EOF
 out="$("$YAML_PARSE" /tmp/c.yaml)"
 echo "$out"
 echo "$out" | grep -qx "session	tsess"
-# main: true → pane record, main=1, args verbatim.
-echo "$out" | grep -qx "pane	a	/tmp	1	--flag|x" \
-    || { echo "FAIL: main entry should emit a pane record with verbatim args"; echo "$out"; exit 1; }
-# plain entry → mate record, default defaults to 1, no main.
+echo "$out" | grep -qx "mate	a	/tmp		1" \
+    || { echo "FAIL: main:true entry should remain a normal mate record"; echo "$out"; exit 1; }
+echo "$out" | grep -qx "mate_main	a	1" \
+    || { echo "FAIL: main:true entry should emit its channel-alias side record"; echo "$out"; exit 1; }
+echo "$out" | grep -qx "mate_args	a	--flag|x" \
+    || { echo "FAIL: main:true entry args should use the normal mate_args path"; echo "$out"; exit 1; }
 echo "$out" | grep -qx "mate	b	/root		1" \
     || { echo "FAIL: plain entry should emit a mate record with default=1"; echo "$out"; exit 1; }
 
@@ -59,8 +61,10 @@ mates:
       - "claude-opus-4-8"
 EOF
 out2="$("$YAML_PARSE" /tmp/c2.yaml)"
-echo "$out2" | grep -qx "pane	lead	/tmp	1	" \
-    || { echo "FAIL: lead pane (no args) should be main=1 with empty args"; echo "$out2"; exit 1; }
+echo "$out2" | grep -qx "mate	lead	/tmp		1" \
+    || { echo "FAIL: main alias should remain a normal default mate"; echo "$out2"; exit 1; }
+echo "$out2" | grep -qx "mate_main	lead	1" \
+    || { echo "FAIL: main alias side record missing"; echo "$out2"; exit 1; }
 echo "$out2" | grep -qx "mate	opt	/opt	optional one	0" \
     || { echo "FAIL: default:false mate should emit default=0 with its description"; echo "$out2"; exit 1; }
 echo "$out2" | grep -qx "mate_args	opt	--model|claude-opus-4-8" \
@@ -88,6 +92,34 @@ mates:
 EOF
 if "$YAML_PARSE" /tmp/c4.yaml >/dev/null 2>&1; then
     echo "FAIL: legacy telegram: key should be rejected"; exit 1
+fi
+
+# --- zero main entries is valid; multiple main aliases fail closed -----------
+cat > /tmp/c5.yaml <<'EOF'
+session: no-main
+mates:
+  - name: alpha
+    cwd: /tmp
+  - name: beta
+    cwd: /opt
+EOF
+out5="$("$YAML_PARSE" /tmp/c5.yaml)"
+echo "$out5" | grep -qx "mate	alpha	/tmp		1" || { echo "FAIL: zero-main alpha missing"; exit 1; }
+echo "$out5" | grep -qx "mate	beta	/opt		1" || { echo "FAIL: zero-main beta missing"; exit 1; }
+echo "$out5" | grep -q '^mate_main' && { echo "FAIL: zero-main config emitted main alias"; exit 1; }
+
+cat > /tmp/c6.yaml <<'EOF'
+session: two-main
+mates:
+  - name: alpha
+    cwd: /tmp
+    main: true
+  - name: beta
+    cwd: /opt
+    main: true
+EOF
+if "$YAML_PARSE" /tmp/c6.yaml >/dev/null 2>&1; then
+    echo "FAIL: multiple main aliases should be rejected"; exit 1
 fi
 
 echo "01-yaml-parse OK"

@@ -92,7 +92,7 @@ ka workshop [<verb>] [<name> [<workdir>]] [flags]
 | `ka workshop status` | backwards-compatible alias for `ka status` |
 | `ka workshop restart [<name>]` | no name → restart the **whole** workshop (stop all → start all; run from a plain terminal); `<name>` → restart a single mate's pane. ⚠️ See the warning below |
 | `ka workshop spawn-mates <name> [<workdir>]` | with `<workdir>` → register and start; without → equivalent to `start <name>` |
-| `ka workshop remove-mate <name>` (alias `remove`) | the inverse of spawn-mates: stop the mate's pane if running, then delete its entry from `workshop.yaml`. Refuses the lead `main`; `--dry-run` previews; interactive `[y/N]` confirm unless `--yes` |
+| `ka workshop remove-mate <name>` (alias `remove`) | the inverse of spawn-mates: stop the agent's pane if running, then delete its entry from `workshop.yaml`. An optional `main: true` alias is removable; `--dry-run` previews; interactive `[y/N]` confirm unless `--yes` |
 
 `ka workshop` does **not** manage the channel daemon — it only warns if the daemon is down (the panes don't depend on it to launch). Daemon lifecycle lives in [`ka channel`](#ka-channel--the-channel-daemon).
 
@@ -287,7 +287,7 @@ ka status
 | config | `resolve_workshop_config` | degraded |
 | runtime | the `runtime:` field of `workshop.yaml` (default cc) | informational only, doesn't change the exit code |
 | session | `tmux has-session` | broken |
-| mates | the `default=true` declared in `workshop.yaml` vs the actually-running `@ka_channel` panes (excluding main) | degraded |
+| mates | the `default=true` entries declared in `workshop.yaml` vs the actually-running `@ka_channel` panes | degraded |
 | telegram (channel daemon) | daemon liveness probe `http://127.0.0.1:9877/api/status` | degraded |
 | kb (retrieval daemon) | daemon liveness probe `http://127.0.0.1:7705/api/status` (ready/warming) | degraded |
 
@@ -423,15 +423,15 @@ If a worker is already running, it refuses to start another.
 ## workshop.yaml
 
 `workshop.yaml` declares the session name and a single `mates:` list holding
-every agent — the lead (marked `main: true`) and the mates:
+equivalent agents. A `main` channel alias is optional:
 
 ```yaml
 session: workshop
 runtime: cc                # top-level default; can be omitted. cc and codex are implemented
 mates:
-  - name: main
-    cwd: ~/workspace/knowledge-assistant
-    main: true             # the lead — bound to the daemon's "main" channel
+  - name: project-one
+    cwd: ~/workspace/project-one
+    # main: true           # optional: bind this agent to channel "main"
     # runtime: codex       # each entry can override individually with cc or codex
   - name: ka-dev2
     cwd: ~/workspace/knowledge-assistant
@@ -450,7 +450,7 @@ mates:
 | `cwd` | ✔ | — | startup directory (`~` is expanded) |
 | `args` | – | `[]` | extra CLI args passed verbatim to the agent |
 | `description` | – | `""` | one-line role description |
-| `main` | – | `false` | exactly one entry sets `true` — the lead, bound to channel `main` |
+| `main` | – | `false` | zero or one entry may set `true`; it changes only that entry's channel alias to `main` |
 | `default` | – | `true` | when `false`, `ka workshop` skips it unless `--all` / `--only` / `start <name>` |
 
 > Legacy `panes:` + `telegram: true` configs migrate with

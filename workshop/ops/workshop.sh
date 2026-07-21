@@ -30,15 +30,15 @@
 #   ka workshop remove-mate <name> [--dry-run] [--yes]   (alias: remove)
 #       registrar removal — symmetric with spawn-mates: stop the mate's pane if
 #       it's running, then delete its entry from workshop.yaml. Refuses to remove
-#       the lead 'main'. --dry-run previews; interactive [y/N] confirm unless --yes.
+#       any entry, including an optional main alias. --dry-run previews.
 #   ka workshop peek <name> [lines]    capture-pane: see a pane's live screen (READ; safe)
 #   ka workshop poke <name> <keys…>    send-keys: unstick a hung pane (WRITE; recovery only)
 #       out-of-band fallback for when the channel can't reach a pane; normal comms = the channel.
 #
-# Each CC gets its own tmux pane, its own cwd (`-c`), and its own KA_CHANNEL —
+# Each agent gets its own tmux pane, its own cwd (`-c`), and its own KA_CHANNEL —
 # separate processes, separate working dirs, separate channels. No cwd/context is
 # shared; the layout (pane/window) is PURELY a visual choice. The owner drives
-# each CC from Telegram with `to <name>: …` (no-prefix → "main").
+# each agent from a Channel with `to <name>: …`; bare messages use sticky routing.
 #
 # Env:
 #   KA_CHANNEL_PORT  telegram-channel daemon port (default 9877)
@@ -56,7 +56,7 @@ YAML_PARSE="$KA_WORKSHOP_DIR/yaml-parse.sh"
 START_PANE="$KA_WORKSHOP_DIR/start-pane.sh"
 # Channel kind + port = single source of truth: config.yaml channel_kind +
 # channels.<kind>.port (resolved in common.sh). Daemon dir is
-# <kind>-daemon. The lead passes kind+port to each pane's CC child via env
+# <kind>-daemon. Workshop passes kind+port to each pane's runtime via env
 # (the start-pane launch below) — that internal hand-off is the only place a
 # channel env var is set, and its values originate from config.
 CHANNEL_KIND="$(ka_channel_kind)" || exit 2
@@ -186,8 +186,7 @@ TMUX_DETACHED_HEIGHT="${KA_WORKSHOP_TMUX_HEIGHT:-80}"
 case "$TMUX_DETACHED_WIDTH:$TMUX_DETACHED_HEIGHT" in
     *[!0-9:]*|:*) log_err "KA_WORKSHOP_TMUX_WIDTH and KA_WORKSHOP_TMUX_HEIGHT must be positive integers"; exit 2 ;;
 esac
-declare -a PANE_NAMES=() PANE_CWDS=() PANE_MAINS=() PANE_ARGS=() PANE_RUNTIMES=()
-declare -a MATE_NAMES=() MATE_CWDS=() MATE_DEFAULTS=() MATE_ARGS=() MATE_RUNTIMES=()
+declare -a MATE_NAMES=() MATE_CWDS=() MATE_DEFAULTS=() MATE_MAINS=() MATE_ARGS=() MATE_RUNTIMES=()
 while IFS= read -r rec; do
     [ -z "$rec" ] && continue
     # tab is an IFS-whitespace char, so `read` folds consecutive tabs and drops
@@ -198,13 +197,11 @@ while IFS= read -r rec; do
     case "$kind" in
         session) SESSION="$a" ;;
         runtime_default) RUNTIME_DEFAULT="$a" ;;
-        pane)
-            PANE_NAMES+=("$a"); PANE_CWDS+=("$b"); PANE_MAINS+=("$c"); PANE_ARGS+=("$d"); PANE_RUNTIMES+=("$RUNTIME_DEFAULT") ;;
-        pane_runtime)
-            PANE_RUNTIMES[$(( ${#PANE_RUNTIMES[@]} - 1 ))]="$b" ;;
         mate)
-            # Keep MATE_ARGS parallel; a following mate_args record fills it in.
-            MATE_NAMES+=("$a"); MATE_CWDS+=("$b"); MATE_DEFAULTS+=("$d"); MATE_ARGS+=(""); MATE_RUNTIMES+=("$RUNTIME_DEFAULT") ;;
+            # Keep side-record arrays parallel; following records fill the last slot.
+            MATE_NAMES+=("$a"); MATE_CWDS+=("$b"); MATE_DEFAULTS+=("$d"); MATE_MAINS+=("0"); MATE_ARGS+=(""); MATE_RUNTIMES+=("$RUNTIME_DEFAULT") ;;
+        mate_main)
+            MATE_MAINS[$(( ${#MATE_NAMES[@]} - 1 ))]="$b" ;;
         mate_args)
             # Emitted immediately after its own `mate` record → set the last slot.
             MATE_ARGS[$(( ${#MATE_NAMES[@]} - 1 ))]="$b" ;;
@@ -213,8 +210,8 @@ while IFS= read -r rec; do
     esac
 done < <("$YAML_PARSE" "$CONFIG")
 
-if [ -z "$SESSION" ] || [ "${#PANE_NAMES[@]}" -eq 0 ]; then
-    log_err "config parsed empty (session='$SESSION' panes=${#PANE_NAMES[@]})"
+if [ -z "$SESSION" ] || [ "${#MATE_NAMES[@]}" -eq 0 ]; then
+    log_err "config parsed empty (session='$SESSION' agents=${#MATE_NAMES[@]})"
     exit 1
 fi
 
@@ -236,13 +233,6 @@ build_entries() {
     [ -n "$TARGET" ] && only_eff="$TARGET"
 
     local i name cwd main raw channel
-    for i in "${!PANE_NAMES[@]}"; do
-        name="${PANE_NAMES[$i]}"; cwd="${PANE_CWDS[$i]}"
-        main="${PANE_MAINS[$i]}"; raw="${PANE_ARGS[$i]}"
-        if [ "$main" = "1" ]; then channel="main"; else channel="$(sanitize_channel "$name")"; fi
-        ENTRY_NAMES+=("$name"); ENTRY_CWDS+=("$cwd"); ENTRY_CHANNELS+=("$channel"); ENTRY_ARGS+=("$raw"); ENTRY_RUNTIMES+=("${PANE_RUNTIMES[$i]}")
-    done
-
     if [ "${#MATE_NAMES[@]}" -gt 0 ]; then
         for i in "${!MATE_NAMES[@]}"; do
             name="${MATE_NAMES[$i]}"; cwd="${MATE_CWDS[$i]}"
@@ -254,12 +244,13 @@ build_entries() {
                 skipped_optional=$((skipped_optional + 1)); continue
             fi
             raw="${MATE_ARGS[$i]}"
-            ENTRY_NAMES+=("$name"); ENTRY_CWDS+=("$cwd"); ENTRY_CHANNELS+=("$(sanitize_channel "$name")"); ENTRY_ARGS+=("$raw"); ENTRY_RUNTIMES+=("${MATE_RUNTIMES[$i]}")
+            main="${MATE_MAINS[$i]}"
+            if [ "$main" = "1" ]; then channel="main"; else channel="$(sanitize_channel "$name")"; fi
+            ENTRY_NAMES+=("$name"); ENTRY_CWDS+=("$cwd"); ENTRY_CHANNELS+=("$channel"); ENTRY_ARGS+=("$raw"); ENTRY_RUNTIMES+=("${MATE_RUNTIMES[$i]}")
         done
     fi
 
-    # TARGET → prune to the single entry whose name == TARGET (drops the main
-    # pane that --only always carries). Missing → caller reports "not in yaml".
+    # TARGET → prune to the single entry whose name == TARGET.
     if [ -n "$TARGET" ]; then
         local keep=-1 j
         for j in "${!ENTRY_NAMES[@]}"; do [ "${ENTRY_NAMES[$j]}" = "$TARGET" ] && keep=$j; done
@@ -470,7 +461,7 @@ cmd_start() {
     else
         echo ""
         log_ok "ka workshop start: launched (attach: tmux attach -t $SESSION)"
-        log_dim "owner routes via Telegram: 'to <name>: …'  (no prefix → main)"
+        log_dim "owner routes via Channel: 'to <name>: …'  (bare messages use sticky routing)"
     fi
 }
 
@@ -484,10 +475,8 @@ cmd_stop() {
     fi
 
     if [ -n "$TARGET" ]; then
-        # Stop a single mate's pane. The channel comes from the yaml's
-        # name→channel mapping (build_entries: the main entry's channel is forced
-        # to 'main'). A plain sanitize(name) would be wrong when mate name≠channel
-        # — the main entry's channel is forced to 'main' by main:true.
+        # Stop a single agent's pane. The channel comes from the yaml mapping;
+        # an optional main:true alias may differ from the agent name.
         build_entries
         local channel
         if [ "${#ENTRY_NAMES[@]}" -gt 0 ]; then channel="${ENTRY_CHANNELS[0]}"; else channel="$(sanitize_channel "$TARGET")"; fi
@@ -622,7 +611,7 @@ cmd_restart() {
         if [ "$LAYOUT" = "window" ]; then fwd+=(--window); else fwd+=(--pane); fi
         exec bash "$0" "${fwd[@]}"
     fi
-    build_entries          # resolve TARGET → actual channel (main pane→'main'; correct when name≠channel)
+    build_entries          # resolve TARGET → actual channel (including an optional main alias)
     if [ "${#ENTRY_NAMES[@]}" -eq 0 ]; then
         log_err "'$TARGET' is not declared in workshop.yaml (session '$SESSION')"
         exit 1
@@ -651,38 +640,31 @@ cmd_restart() {
 
 # ============================================================================
 # cmd_remove_mate — registrar removal (symmetric with spawn-mates).
-#   Stop the mate's pane if running, then delete its entry from workshop.yaml.
-#   Refuses to remove the lead 'main'. --dry-run previews; confirm unless --yes.
+#   Stop the agent's pane if running, then delete its entry from workshop.yaml.
+#   An optional main alias is removable. --dry-run previews; confirm unless --yes.
 # ============================================================================
 cmd_remove_mate() {
     if [ -z "$TARGET" ]; then
         log_err "usage: ka workshop remove-mate <name> [--dry-run] [--yes]"
         exit 2
     fi
-    # must exist in the yaml (panes + mates); must NOT be the lead 'main'.
+    # Must exist in the yaml. `main: true` is only an optional channel alias,
+    # not a privileged lifecycle role, so that entry is removable too.
     local found=0 is_main=0 j
-    for j in "${!PANE_NAMES[@]}"; do
-        if [ "${PANE_NAMES[$j]}" = "$TARGET" ]; then
-            found=1; [ "${PANE_MAINS[$j]}" = "1" ] && is_main=1
-        fi
-    done
     if [ "${#MATE_NAMES[@]}" -gt 0 ]; then
         for j in "${!MATE_NAMES[@]}"; do
-            [ "${MATE_NAMES[$j]}" = "$TARGET" ] && found=1
+            if [ "${MATE_NAMES[$j]}" = "$TARGET" ]; then
+                found=1; [ "${MATE_MAINS[$j]}" = "1" ] && is_main=1
+            fi
         done
     fi
     if [ "$found" -eq 0 ]; then
         log_err "'$TARGET' is not declared in workshop.yaml (session '$SESSION')"
         exit 1
     fi
-    if [ "$is_main" -eq 1 ]; then
-        log_err "refusing to remove '$TARGET': it is the workshop lead (main), not a removable mate"
-        exit 1
-    fi
-
     # is its pane currently running?
     local channel pane_id=""
-    channel="$(sanitize_channel "$TARGET")"
+    if [ "$is_main" -eq 1 ]; then channel="main"; else channel="$(sanitize_channel "$TARGET")"; fi
     if "$TMUX_BIN" has-session -t "$SESSION" 2>/dev/null; then
         pane_id="$(find_pane_by_channel "$channel")"
     fi
@@ -690,7 +672,7 @@ cmd_remove_mate() {
     local remover="$KA_WORKSHOP_DIR/yaml-remove-mate.py"
     if [ "$DRY_RUN" = "1" ]; then
         [ -n "$pane_id" ] && echo "[dry-run] would stop running pane for '$TARGET' (pane $pane_id, channel '$channel')"
-        echo "[dry-run] python3 $remover $CONFIG $TARGET   # delete the mate entry from workshop.yaml (refuses main)"
+        echo "[dry-run] python3 $remover $CONFIG $TARGET   # delete the agent entry from workshop.yaml"
         exit 0
     fi
 

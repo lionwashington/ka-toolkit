@@ -4,10 +4,9 @@
 # Uses python3 (macOS ships it; Linux CI has it too). No yq dependency.
 #
 # SCHEMA (single `mates:` section):
-#   Every agent — the lead AND the spawned mates — is one entry under `mates:`.
-#   `main: true` marks the lead; it is the entry bound to the daemon's `main`
-#   channel (KA_CHANNEL, set by start-pane.sh), and is emitted as a `pane`
-#   record. Every other entry is a spawned mate, emitted as a `mate` record.
+#   Every agent is one equivalent entry under `mates:`. `main: true` is an
+#   optional channel alias: at most one entry may use it, and that entry binds
+#   to `main`; with no such entry every agent binds under its own name.
 #   Per-entry keys: name / cwd / args / description / main / default / runtime.
 #     - main    defaults to false
 #     - default defaults to true   (false = optional, not spawned unless asked)
@@ -15,9 +14,8 @@
 # Output format — tab-separated records:
 #   session\t<session_name>                                (always, first)
 #   runtime_default\t<name>                                (always, default=cc)
-#   pane\t<name>\t<cwd>\t<main:1>\t<arg1|arg2|...>         (per main entry)
-#   pane_runtime\t<name>\t<runtime>                        (only when overridden)
-#   mate\t<name>\t<cwd>\t<desc>\t<default:0|1>             (per non-main entry)
+#   mate\t<name>\t<cwd>\t<desc>\t<default:0|1>             (per entry)
+#   mate_main\t<name>\t1                                  (only for main:true)
 #   mate_args\t<name>\t<arg1|arg2|...>                     (only when args given)
 #   mate_runtime\t<name>\t<runtime>                        (only when overridden)
 #
@@ -33,8 +31,8 @@
 # `case $kind in … esac` sites.
 #
 # REMOVED (hard error, points at the new schema): the legacy `panes:` section
-# and the `telegram:` key. Put every agent under `mates:` and mark the lead
-# with `main: true`.
+# and the `telegram:` key. Put every agent under `mates:` and use optional
+# `main: true` only if a `main` channel alias is wanted.
 
 set -euo pipefail
 
@@ -94,8 +92,8 @@ for raw in lines:
         if m:
             runtime_default = unquote(m.group(1)); continue
     if re.match(r'^panes:\s*$', line):
-        print("ERROR: `panes:` is removed — put every agent under `mates:` and "
-              "mark the lead with `main: true`", file=sys.stderr); sys.exit(2)
+        print("ERROR: `panes:` is removed — put every agent under `mates:`",
+              file=sys.stderr); sys.exit(2)
     if re.match(r'^mates:\s*$', line):
         flush(); section = 'mates'; in_args = False; continue
     m = re.match(r'^\s{2}-\s+name:\s*(.+)$', line)
@@ -123,8 +121,8 @@ for raw in lines:
     if m:
         cur['default'] = truthy(m.group(1)); in_args = False; continue
     if re.match(r'^\s{4}telegram:\s*', line):
-        print("ERROR: `telegram:` is removed — mark the lead with `main: true` "
-              "instead (the channel goes through the daemon, not a plugin)",
+        print("ERROR: `telegram:` is removed — use optional `main: true` for a "
+              "main channel alias (the channel goes through the daemon, not a plugin)",
               file=sys.stderr); sys.exit(2)
     if re.match(r'^\s{4}args:\s*$', line):
         in_args = True; continue
@@ -141,21 +139,19 @@ if not session:
 print(f"session\t{session}")
 print(f"runtime_default\t{runtime_default}")
 
-panes = [e for e in entries if e['main']]
-mates = [e for e in entries if not e['main']]
+main_entries = [e for e in entries if e['main']]
+if len(main_entries) > 1:
+    names = ', '.join(e['name'] for e in main_entries)
+    print(f"ERROR: at most one entry may set main: true (found: {names})", file=sys.stderr)
+    sys.exit(2)
 
-for p in panes:
-    if not p['cwd']:
-        print(f"ERROR: entry {p['name']} missing cwd", file=sys.stderr); sys.exit(2)
-    args = '|'.join(p['args'])
-    print(f"pane\t{p['name']}\t{p['cwd']}\t1\t{args}")
-    if p['runtime']:
-        print(f"pane_runtime\t{p['name']}\t{p['runtime']}")
-for m in mates:
+for m in entries:
     if not m['cwd']:
         print(f"ERROR: entry {m['name']} missing cwd", file=sys.stderr); sys.exit(2)
     d = '1' if m['default'] else '0'
     print(f"mate\t{m['name']}\t{m['cwd']}\t{m['description']}\t{d}")
+    if m['main']:
+        print(f"mate_main\t{m['name']}\t1")
     if m['args']:
         print(f"mate_args\t{m['name']}\t{'|'.join(m['args'])}")
     if m['runtime']:

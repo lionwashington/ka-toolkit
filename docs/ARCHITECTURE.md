@@ -218,7 +218,7 @@ For implementation-level details see `docs/channels/telegram/ARCHITECTURE.md`. K
 - **The token lives only in the daemon**: the daemon holds the bot token exclusively to do `getUpdates` long-polling; **CC processes never touch the
   token**, they only send/receive/query via MCP tools (`reply`, `send_to_channel`, `list_channels`) — a single credential exit.
 - **Multi-channel routing**: in Telegram the user routes to a target channel with a `to <name|number>:` prefix
-  (no prefix → `main`); each CC process is attached to a channel name (registration URL `?name=<X>`).
+  (bare messages use the most recently selected single target); each agent process is attached to a channel name (registration URL `?name=<X>`).
 - **CC↔CC communication**: via `send_to_channel` (cc2cc, see `docs/channels/telegram/ARCHITECTURE.md` §5),
   distinct from `reply` which goes to the user.
 - **M6 half-open self-healing (2026-05-31)**: a standard MCP `ping` probe detects a half-open SSE (network jitter / sleep-wake
@@ -228,7 +228,7 @@ For implementation-level details see `docs/channels/telegram/ARCHITECTURE.md`. K
 - **Supervision**: the `* * * * * start.sh` installed by `ka cron` self-heals (brings it back up within ≤60s if it dies). To upgrade the daemon code,
   `./install.sh --only daemon` then `ka channel restart` (every CC re-adopts automatically).
 
-### §3.2 ka workshop (orchestrating independent CC processes)
+### §3.2 ka workshop (orchestrating independent agent processes)
 
 `ka workshop` is the **only** startup/orchestration entry point (`ka start` / `ka stop` / `ka spawn-mates` all
 forward to it). Ground truth: `workshop/ops/workshop.sh`.
@@ -239,19 +239,17 @@ workshop.yaml ──read──▶ ka workshop ──ensure──▶ telegram-cha
                             └─ for each mate: tmux brings up a pane/window
                                · independent cwd (-c)
                                · independent channel (KA_CHANNEL → registration URL ?name=<name>)
-                               · independent claude process (--dangerously-load-development-channels
-                                                  server:telegram-channel)
+                               · independent runtime process (CC or Codex)
 ```
 
 Core abstractions:
 
-- **mate = an independent CC process**: independent tmux pane + independent cwd + independent channel. Process isolation —
-  one dying doesn't affect the others; the user can eyeball a pane and manually attach to intervene. **This is not CC's in-process subagent.**
-- **main pane = the CC of the `main` channel**: the primary interaction point; the user's unprefixed messages route here by default.
+- **mate = an independent agent process**: independent tmux pane + independent cwd + independent channel. Process isolation —
+  one dying doesn't affect the others; the user can eyeball a pane and manually attach to intervene.
+- **all mates are lifecycle peers**: no lead is required. `main: true` is optional and only gives one mate the Channel alias `main`; it grants no startup, selection, deletion, or ownership privilege.
 - **layout is a purely visual choice**: `--pane` (default, all CCs split into one window) or `--window`
   (one CC per window). cwd / context are **never shared**.
-- **The dev-channels safety gate passes automatically, condition-based**: after a pane starts, poll `capture-pane`, and only send Enter once
-  the gate's text `Enter to confirm` is detected (not a timed blind send; skipped after a ~18s timeout).
+- **Runtime-specific startup gates are handled by runtime adapters** rather than by mate role.
 
 workshop verbs (`workshop/ops/workshop.sh`):
 
@@ -273,7 +271,7 @@ whether it is `default`.
 
 | Command | Description |
 |---|---|
-| `ka workshop [start\|stop\|restart\|spawn-mates\|remove-mate] [name]` | workshop lifecycle / tmux panes (see §3.2); restart with no name = whole workshop; `remove-mate` deletes a mate from `workshop.yaml` (stops its pane first; refuses `main`) |
+| `ka workshop [start\|stop\|restart\|spawn-mates\|remove-mate] [name]` | workshop lifecycle / tmux panes (see §3.2); restart with no name = whole workshop; `remove-mate` deletes any agent from `workshop.yaml` after stopping its pane; `main: true` is only an optional Channel alias |
 | `ka channel [start\|stop\|restart\|status\|config]` | the channel daemon (kind from `config.yaml channel_kind`) — 1st resident daemon |
 | `ka kb [start\|stop\|restart\|status]` | the kb retrieval daemon (LanceDB `kb_search` backend, port 7705) — 2nd resident daemon |
 | `ka kb reindex [--full]` | (re)build the `kb_search` index (incremental \| full) |

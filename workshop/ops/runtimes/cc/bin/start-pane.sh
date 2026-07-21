@@ -105,11 +105,11 @@ fi
 # Dynamically resolve `--resume <sid>`: if the configured session id no longer
 # exists for this cwd's Claude project dir, substitute the most recent session;
 # if none exists, drop `--resume` entirely and start fresh. This prevents
-# start-up failures when the lead's cwd changes or old sessions are purged.
+# start-up failures when this mate's cwd changes or old sessions are purged.
 #
 # Special sentinels:
-#   --resume latest  : newest jsonl by mtime in proj_dir (pollution-prone for
-#                      lead pane on CC 2.1.126 — prefer `pinned` for lead;
+#   --resume latest  : newest jsonl by mtime in proj_dir (pollution-prone on
+#                      CC 2.1.126 when several processes share a project dir;
 #                      see memory/topics/tools.md "CC 2.1.126 cwd inheritance bug").
 #   --resume pinned  : sid from $KA_STATE_DIR/lead-session.id (default
 #                      $HOME/.knowledge-assistant/state/lead-session.id);

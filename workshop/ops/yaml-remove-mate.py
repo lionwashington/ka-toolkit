@@ -8,9 +8,10 @@ deletes ONLY the target entry's lines; it never re-serializes the document.
 usage: yaml-remove-mate.py <yaml> <name>
   - deletes the `- name: <name>` block under `mates:` (from its `- name:` line up
     to the next `- name:` at the same level, or the end of the mates block).
-  - refuses to remove an entry marked `main: true` (the lead).
+  - `main: true` is an optional channel alias, not a protected role; an entry
+    carrying it can be removed, leaving a valid zero-main configuration.
 
-Exit 0 on success; 3 = name not found; 4 = refused (is main); 2 = usage.
+Exit 0 on success; 3 = name not found; 2 = usage.
 Prints a one-line summary of what it did to stderr.
 """
 import re
@@ -60,12 +61,6 @@ def main() -> int:
         if re.match(r"^\s*-\s*name:", lines[i]):
             entry_end = i
             break
-
-    # refuse to remove the lead (main: true) inside this entry.
-    for i in range(target_at, entry_end):
-        if re.match(r"^\s*main:\s*true\s*$", lines[i]):
-            print(f"refusing to remove '{name}': it is the lead (main: true)", file=sys.stderr)
-            return 4
 
     del lines[target_at:entry_end]
 

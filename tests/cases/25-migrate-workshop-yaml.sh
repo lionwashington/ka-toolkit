@@ -44,7 +44,9 @@ echo "    ok"
 echo "[3/5] migrated file parses under the new parser with the expected records"
 out="$("$YAML_PARSE" "$TMP/new.yaml")"
 echo "$out" | grep -qE "^session${TAB}workshop$"                                  || { echo "FAIL: session record"; echo "$out"; exit 1; }
-echo "$out" | grep -qE "^pane${TAB}main${TAB}.*proj${TAB}1${TAB}--model\|claude-opus-4-8$" || { echo "FAIL: main → pane(main=1) with args"; echo "$out"; exit 1; }
+echo "$out" | grep -qE "^mate${TAB}main${TAB}.*proj${TAB}${TAB}1$"             || { echo "FAIL: main entry should remain a regular mate"; echo "$out"; exit 1; }
+echo "$out" | grep -qE "^mate_main${TAB}main${TAB}1$"                         || { echo "FAIL: optional main alias record"; echo "$out"; exit 1; }
+echo "$out" | grep -qE "^mate_args${TAB}main${TAB}--model\|claude-opus-4-8$"   || { echo "FAIL: main entry args record"; echo "$out"; exit 1; }
 echo "$out" | grep -qE "^mate${TAB}dev${TAB}.*dev${TAB}maintainer${TAB}1$"        || { echo "FAIL: dev mate (default=1)"; echo "$out"; exit 1; }
 echo "$out" | grep -qE "^mate${TAB}opt${TAB}.*opt${TAB}${TAB}0$"                  || { echo "FAIL: opt mate (default=0)"; echo "$out"; exit 1; }
 echo "    ok"

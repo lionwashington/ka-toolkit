@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # migrate-workshop-yaml.py — migrate a workshop.yaml from the legacy two-section
 # schema (`panes:` + `mates:`, with `telegram: true`) to the merged single
-# `mates:` schema (every agent under `mates:`, the lead marked `main: true`).
+# `mates:` schema (every agent under `mates:`, with an optional main alias).
 #
 #   legacy                              merged
 #   ------                              ------
@@ -16,7 +16,7 @@
 #   - existing `mates:` entries           → kept verbatim
 #   - name / cwd / args / description / default / runtime carried over unchanged
 #   - cwd text is preserved as written (NO ~ expansion — the runtime expands it)
-#   - order preserved: panes-section entries first (lead at top), then mates
+#   - order preserved: panes-section entries first, then mates
 #
 # Usage:
 #   migrate-workshop-yaml.py <in.yaml>            # print migrated YAML to stdout
@@ -113,8 +113,8 @@ def parse(path):
     return session, runtime_default, entries
 
 HEADER = """\
-# Workshop agents (merged schema). Every agent — lead and mates — is one entry
-# under `mates:`; the lead is marked `main: true`. Migrated by
+# Workshop agents (merged schema). Every agent is an equivalent entry under
+# `mates:`; zero or one may use `main: true` as a Channel alias. Migrated by
 # migrate-workshop-yaml.py. Per-entry keys: name / cwd / args / description /
 # main (default false) / default (default true).
 """

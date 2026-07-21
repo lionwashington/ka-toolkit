@@ -56,25 +56,24 @@ ka status
 `ka workshop` reads `workshop.yaml`, warns if the channel daemon is down (it does
 NOT start it — that's `ka channel start`), then launches each CC into its own tmux
 pane (or window with `--window`). The owner routes from Telegram with `to <name>:`
-(no prefix → `main`).
+(bare messages use the most recently selected single target).
 
 Config search order: `$OPS_CONFIG` → `~/.knowledge-assistant/workshop.yaml` →
 `ops/workshop.example.yaml` (prints a warning; template only).
 
 ### Agent schema
 
-Every agent — the lead and the mates — is one entry under a single `mates:`
-list. The lead is the entry marked `main: true`.
+Every agent is an equivalent entry under a single `mates:` list. Zero or one
+entry may use `main: true` as a Channel alias.
 
 ```yaml
 session: workshop
 runtime: cc                # top-level default agent runtime; omit to accept cc.
                            # codex is supported; gemini remains reserved.
 mates:
-  - name: main
-    cwd: ~/workspace/<lead-project>
-    main: true             # the lead — bound to the daemon's "main" channel
-                           # (the no-prefix Telegram routing target)
+  - name: project-one
+    cwd: ~/workspace/<project-one>
+    # main: true           # optional alias: bind to daemon channel "main"
   - name: ka-dev2
     cwd: ~/workspace/<mate-project>
     description: project dev/maintenance
@@ -84,10 +83,10 @@ mates:
 ```
 
 Per-entry keys: `name` / `cwd` / `args` / `description` / `main` (default
-**false**) / `default` (default **true**). Exactly one entry sets `main: true`
-— it binds to the daemon's `main` channel (no Telegram plugin; all Telegram I/O
-goes through the daemon, see below). Every other entry is a mate; each mate's
-`name` is sanitized into its own daemon channel.
+**false**) / `default` (default **true**). Zero or one entry may set
+`main: true`; it changes only that entry's Channel name to `main`. With no alias,
+every entry registers under its sanitized `name`. Lifecycle, selection, runtime,
+and removal behavior are otherwise identical.
 
 > Migrating from the legacy two-section schema (`panes:` + `telegram: true`)?
 > Run `workshop/ops/migrate-workshop-yaml.py <workshop.yaml>` — it folds `panes:` into
@@ -101,7 +100,7 @@ All CC↔owner and CC↔CC communication goes through a single long-lived
 Telegram plugin.
 
 - **owner → CC**: route in Telegram with `to <name>:` / `to <number>:`
-  (no prefix → `main`).
+  (bare messages use the most recently selected single target).
 - **CC → owner**: the `reply` tool (back to Telegram).
 - **CC → CC**: the `send_to_channel` tool (cc2cc), target = the other channel.
 

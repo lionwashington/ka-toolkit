@@ -302,10 +302,10 @@ session: workshop
 runtime: codex
 
 mates:
-  - name: main
+  - name: project-one
     runtime: codex
-    cwd: ~/workspace/main
-    main: true
+    cwd: ~/workspace/project-one
+    # main: true  # optional Channel alias; not a lifecycle role
     codex:
       profile: workshop
       sandbox: workspace-write

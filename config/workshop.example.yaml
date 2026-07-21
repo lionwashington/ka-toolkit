@@ -4,8 +4,8 @@
 # workshop/ops/workshop.sh) reads this file and launches each selected entry as
 # an independent runtime process in its own tmux pane or window.
 #
-# Every agent — the lead and the mates — is ONE entry under `mates:`. The lead
-# is just the entry marked `main: true`.
+# Every agent is an equivalent entry under `mates:`. `main: true` is optional
+# and changes only that entry's Channel name to `main`.
 
 session: workshop
 
@@ -18,19 +18,18 @@ session: workshop
 # Each entry supports these keys:
 #   name         (required) agent / channel name
 #   cwd          (required) working directory; must exist before `ka start`.
-#                ~ is expanded. The lead refuses to start on a missing cwd.
+#                ~ is expanded. Any entry refuses to start on a missing cwd.
 #   args         (optional) extra CLI args passed verbatim to the agent.
 #   description  (optional) human note; shown by `ka status` for mates.
-#   main         (optional) default FALSE. Exactly one entry sets `main: true`
-#                — the lead, bound to the daemon's `main` channel. The channel
-#                goes through the channel daemon (telegram/lark), not a plugin.
+#   main         (optional) default FALSE. Zero or one entry may set true. It is
+#                only a channel alias (`main`), not a privileged lifecycle role.
 #   default      (optional) default TRUE. `false` = optional: not spawned by a
 #                bare `ka workshop`; start it explicitly (`ka workshop --all`
 #                or `ka workshop start <name>`).
 mates:
-  - name: main
-    cwd: ~/workspace/your-workspace
-    main: true
+  - name: project-one
+    cwd: ~/workspace/project-one
+    # main: true            # optional alias for the daemon's `main` channel
     # args:
     #   - --model
     #   - claude-opus-4-8

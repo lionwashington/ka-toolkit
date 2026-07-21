@@ -39,8 +39,8 @@ fi
 SOCKET_DIR="$KA_STATE_DIR/codex-app-servers"
 mkdir -p "$SOCKET_DIR"
 chmod 700 "$SOCKET_DIR" 2>/dev/null || true
-# Registration follows Workshop's channel mapping. In particular, the entry
-# marked main:true may have any pane name but must always register as "main".
+# Registration follows Workshop's channel mapping. An optional main:true entry
+# may have any pane name but uses "main" only as its Channel alias.
 RUNTIME_NAME="${KA_CHANNEL:-$PANE_NAME}"
 SAFE_NAME="$(printf '%s' "$RUNTIME_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]//g')"
 [ -n "$SAFE_NAME" ] || SAFE_NAME="main"
