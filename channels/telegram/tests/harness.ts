@@ -198,9 +198,10 @@ export interface ChannelClient {
   close(): Promise<void>
 }
 
-export async function connectClient(baseUrl: string, name: string): Promise<ChannelClient> {
+export async function connectClient(baseUrl: string, name: string, toolsOnly = false): Promise<ChannelClient> {
   const received: Array<{ content: string; meta: Record<string, string> }> = []
-  const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp?name=${name}`))
+  const mode = toolsOnly ? '&mode=tools' : ''
+  const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp?name=${name}${mode}`))
   const client = new Client({ name: `test-${name}`, version: '0.0.0' }, { capabilities: {} })
   client.fallbackNotificationHandler = async (n: any) => {
     if (n?.method === 'notifications/claude/channel') {

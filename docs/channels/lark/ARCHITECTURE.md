@@ -46,6 +46,15 @@ to `localImage`, streams agent-message deltas into CardKit, and maps `/stop` to
 `turn/interrupt`. App Server lifecycle remains owned by Workshop; the Lark daemon
 only owns the client connection and channel routing.
 
+The same Codex mate also receives a tools-only Lark MCP connection
+(`?name=<channel>&mode=tools`). Tools-only sessions are
+excluded from inbound fanout, because App Server delivery is already the single
+inbound path. During a Channel-owned turn, CardKit/webhook runtime delivery is the
+single outbound reply path; an additional MCP `reply` for the same `chat_id` is
+suppressed, while explicit out-of-band use outside that turn remains supported.
+The optional KB MCP is configured independently when deployed; Workshop does not
+inject it.
+
 For outbound Codex text, Channel separates the `[#N-name]` label from the body
 with a blank line. Before CardKit rendering, the Lark adapter converts only
 ordinary-prose soft breaks to explicit line breaks; it preserves paragraph and

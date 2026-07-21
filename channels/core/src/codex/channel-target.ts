@@ -110,6 +110,11 @@ export class CodexChannelTarget implements RuntimeTarget {
 
   isAlive(): boolean { return this.connected && this.options.client.running }
 
+  /** True only while this target is processing a Channel-owned delivery for replyTarget. */
+  hasActiveDelivery(replyTarget: string): boolean {
+    return this.activeSource?.meta.chat_id === replyTarget
+  }
+
   shutdown(): void {
     this.shuttingDown = true
     this.connected = false

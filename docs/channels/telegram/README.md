@@ -62,6 +62,16 @@ original text exactly. During a long Codex turn, the editable stream previews
 the first chunk; completion edits that chunk and sends the remainder as normal
 follow-up messages.
 
+Workshop starts Codex with an explicit loopback Channel MCP subscription using
+`/mcp?name=<channel>&mode=tools`. The tools-only connection exposes `reply`,
+`send_to_channel`, and `list_channels`, but is not added to the inbound routing
+table; the App Server runtime target remains the single inbound consumer. During
+a Channel-owned Codex turn the runtime bridge is also the single owner-reply
+exit. If legacy instructions make Codex call `reply`, the daemon acknowledges
+but suppresses that extra send; an explicit out-of-band `reply` outside such a
+turn still works. Workshop does not inject the optional KB MCP; operators who
+run it may configure `knowledge-assistant` independently in Codex.
+
 > **Config split**: the bot **token** and **owner_chat_id** come *only* from
 > `secrets.yaml channels.telegram` — never from `config.yaml` or the environment.
 > The non-secret **port** / poll tuning live in `config.yaml channels.telegram`.
@@ -86,7 +96,7 @@ curl -s 127.0.0.1:9877/api/status | python3 -m json.tool   # detailed status
 ```
 
 - **② Connection level / half-open self-heal (M6, 2026-05-31)** — when network jitter causes the CC↔daemon SSE to go one-way half-open (process hasn't crashed, TCP hasn't dropped, but CC isn't receiving dispatches), the daemon's ping probe detects it and automatically `closeStandaloneSSEStream()` (closes the notification stream, keeps the session), triggering CC to reconnect with the same session-id and seamlessly resume, **no manual intervention, no restart** (see `ARCHITECTURE.md` A4/A5).
-  - A daemon **process restart** (code upgrade) drops the in-memory sessions, but the daemon **re-adopts** each CC's reconnecting consumer SSE — it never 404s a reconnect that carries `?name` — so inbound/outbound **resume automatically: no manual trigger, no CC restart** (verified 2026-07-08: restarting the daemon under 6 live CCs, all re-adopted within ~2s). The ONE case that still needs a full CC restart is a change to the daemon's **MCP tool set**: a CC caches its tool list at init and a bare reconnect does not re-fetch it, so a newly-added tool (e.g. `list_channels`) reaches existing CCs only after they re-init.
+  - A daemon **process restart** (code upgrade) drops the in-memory sessions, but the daemon **re-adopts** each idle CC's reconnecting consumer SSE — it never 404s a reconnect that carries `?name` — so idle channels resume automatically. This does **not** preserve an in-flight Codex runtime turn: the old daemon owns its stream/final state, so restarting from the pane currently answering a Channel message can truncate that answer. Wait until the turn completes and restart from a plain terminal. A full CC restart is needed only when a changed MCP tool set must be re-fetched.
 
 **Singleton**: a second daemon hitting port 9877 → `EADDRINUSE` → clean exit (exit 0).
 (`daemon.sh` also uses `flock` when present; macOS has no flock, falling back to port-binding for the singleton.)
@@ -146,6 +156,7 @@ TG_CHANNEL_PORT=9999 channels/telegram/tg-ch main   # change daemon port (defaul
 | **self filter swallowed the message** | Only the owner (`secrets.yaml` `owner_chat_id`) can reach. Messages from others are dropped + logged `drop non-owner`. Confirm `owner_chat_id` matches your own numeric id. |
 | **token / owner empty** | Fail-closed: the daemon refuses to start when `secrets.yaml channels.telegram.token` or `owner_chat_id` is empty/missing. Fill them in `~/.knowledge-assistant/config/secrets.yaml` (run `ka doctor` to surface it). |
 | **A CC stops receiving pushes after a daemon restart** | A daemon restart breaks the SSE notification stream, and the old CC's consumer may still be bound to a dead session. **Restart the corresponding CC** to rebind (not restarting the daemon in daily use avoids this). |
+| **A Codex answer stops midway during deploy** | The Channel daemon was restarted while it owned that active runtime turn. The new daemon can re-register the target but cannot recover the old stream/final callback. Let active turns finish; deploy/restart from a plain terminal, never from the responding workshop pane. |
 
 ## Logs
 

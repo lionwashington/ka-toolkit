@@ -217,6 +217,11 @@ ka channel restart         # reload (CCs re-adopt)
 > Use `ka channel restart` after deploying new daemon code (`./install.sh --only daemon`).
 > The CCs are **not** relaunched — channel-core re-adopts each CC's reconnect (no 404),
 > so inbound+outbound recover within the SSE retry window.
+>
+> **Do not run that restart from a workshop pane while it is answering a Channel
+> message.** Re-adopt restores idle connections, but an in-flight Codex stream/final
+> belongs to the old daemon process and will be cut off. Let the turn finish, then
+> restart from a plain terminal.
 
 > **`ka daemon` is gone** (renamed to `ka channel`, no alias) — "daemon" was too generic once a
 > second daemon (`ka kb`) existed. **Top-level `ka start` / `ka stop` / `ka restart` / `ka spawn-mates`

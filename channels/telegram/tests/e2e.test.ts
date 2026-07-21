@@ -91,6 +91,42 @@ describe('MCP tools contract', () => {
     assert.match(text, /#2 ka/, 'ka listed as #2')
     assert.match(text, /channel\(s\)/, 'has a header count')
   })
+
+  test('tools-only connection can call tools without becoming a second inbound consumer', async () => {
+    const tools = await connectClient(daemon.baseUrl, 'main', true)
+    try {
+      const listed = await tools.client.listTools()
+      assert.deepEqual(listed.tools.map(t => t.name).sort(), ['list_channels', 'reply', 'send_to_channel'])
+
+      const status: any = await (await fetch(`${daemon.baseUrl}/api/status`)).json()
+      assert.equal(status.channels_online.main, 1, 'tools-only transport must not increase routing targets')
+      assert.ok(status.sessions.some((s: any) => s.name === 'main' && s.tools_only === true))
+
+      const before = main.received.length
+      await ka.client.callTool({
+        name: 'send_to_channel',
+        arguments: { target: 'main', text: 'tools-only duplicate guard' },
+      })
+      assert.ok(await waitFor(() => main.received.length > before, 4000), 'normal main consumer should receive channel delivery')
+      await new Promise(resolve => setTimeout(resolve, 150))
+      assert.equal(tools.received.length, 0, 'tools-only transport must not receive inbound notifications')
+    } finally {
+      await tools.close()
+    }
+  })
+
+  test('tools-only connections are capped per mate', async () => {
+    const clients = []
+    try {
+      for (let i = 0; i < 5; i++) clients.push(await connectClient(daemon.baseUrl, 'main', true))
+      const status: any = await (await fetch(`${daemon.baseUrl}/api/status`)).json()
+      const toolsOnly = status.sessions.filter((s: any) => s.name === 'main' && s.tools_only === true)
+      assert.equal(toolsOnly.length, 4, 'stale TUI/App Server reconnects must not grow without bound')
+      assert.equal(status.channels_online.main, 1, 'tools-only cap must not affect the inbound consumer')
+    } finally {
+      await Promise.allSettled(clients.map(client => client.close()))
+    }
+  })
 })
 
 describe('inbound: Telegram → MCP notification (sticky routing)', () => {

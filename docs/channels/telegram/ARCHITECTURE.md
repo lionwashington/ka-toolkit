@@ -104,6 +104,14 @@ A single `pollLoop()`: a `bot.api.getUpdates({ offset, timeout: poll_timeout, al
 Two outbound paths (`reply`, `send_to_channel`) plus one read-only query tool (`list_channels`) —
 every per-session MCP server registers all three.
 
+Workshop-owned Codex targets attach a special `mode=tools` MCP transport. It is
+kept in the session-id index so tool calls work, but excluded from `byName`, probes,
+and inbound fanout: App Server delivery is the one inbound path. While that runtime
+target is processing a Channel-owned turn, its streamed/final runtime events are the
+one owner-reply path as well. A concurrent MCP `reply` call for the same `chat_id` is
+suppressed to prevent the same answer being sent twice. Calls for a different target,
+or outside a Channel-owned turn, retain normal out-of-band behavior.
+
 ### 5a. `reply` → the user's Telegram
 
 ```
@@ -225,6 +233,7 @@ Historical lesson: the old version (which from c017006 copied lark's "404 any un
 ### 6d. Daemon-restart recovery (re-adopt, automatic) + the long-downtime boundary
 
 - **Fast restart / deploy (downtime < ~2.5s, the everyday case)**: process swaps → all in-memory sessions are lost → the tool client POST hits 404 and re-inits itself (outbound), the consumer GET bearing `?name` is re-adopted (inbound). **Fully automatic, no CC restart, no touch.** Verify via the `RE-ADOPT … consumer SSE reconnect, no 404` log + the CC actually receiving messages. `ka workshop --restart-daemon` is "restart only the daemon" — the restart is fast (downtime ~1.5–2s), each CC reconnects automatically via re-adopt, no more kill/relaunch of CCs.
+  - This recovery covers connections, not an **in-flight Codex runtime turn**. Its stream handle and final-delivery callback live in the old daemon process. Restart only after the active response completes, from outside the workshop pane receiving that response.
 - **Long-downtime boundary (downtime ≫ 2.5s, e.g. a crash left unattended for an hour)**: the consumer SSE client retries only twice by default (SDK `maxRetries=2`, delays 1s→1.5s, ~2.5s window) before giving up. If the daemon comes back outside that window → the consumer has lain flat and won't reconnect → re-adopt has nothing to trigger on. At that point:
   - **touch (having the CC call a tool once) only saves outbound** (tool client POST→404→re-init), **it cannot save inbound** — the consumer is an independent connection that touch does not trigger (verified: the CC can keep calling tools to send and reply, but still never receives, until the CC is restarted).
   - **The only reliable means for inbound: restart that CC** (`ka workshop restart <name>`, so the dev-channels consumer connection is rebuilt fresh). A long downtime requires manual intervention anyway, so restarting the CC at the same time is fine.

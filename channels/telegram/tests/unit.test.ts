@@ -9,8 +9,52 @@
 // Run: node --experimental-strip-types --test tests/unit.test.ts
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { parseRoutingPrefix, sanitizeChannelName, resolveTargetList, applyStickyRouting } from '../../core/src/routing.ts'
+import { createMcpServer } from '../../core/src/mcp.ts'
 import { chunk, extractAttachment, attachmentPlaceholder, isNoopTelegramEdit } from '../telegram-platform.ts'
+
+test('runtime bridge suppresses duplicate reply during its active delivery but preserves out-of-band reply', async () => {
+  const sent: Array<{ target: string; text: string }> = []
+  let activeTarget: string | undefined = 'owner'
+  const platform: any = {
+    name: 'test',
+    resolveReplyTarget: (value: string) => value,
+    isSelf: () => true,
+    startInbound: () => {},
+    send: async (target: string, text: string) => { sent.push({ target, text }); return null },
+    fetchAttachment: async () => '',
+    instructions: () => 'legacy instructions say to call reply',
+    replyToolDescription: 'send reply',
+  }
+  const server = createMcpServer('main', platform, {
+    runtimeBridge: true,
+    suppressReply: chatId => chatId === activeTarget,
+  })
+  const client = new Client({ name: 'reply-suppression-test', version: '0.0.0' }, { capabilities: {} })
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  await server.connect(serverTransport)
+  await client.connect(clientTransport)
+  try {
+    const suppressed: any = await client.callTool({
+      name: 'reply', arguments: { chat_id: 'owner', text: 'one answer' },
+    })
+    assert.equal(sent.length, 0)
+    assert.match(suppressed.content[0].text, /runtime bridge.*automatically/i)
+
+    await client.callTool({ name: 'reply', arguments: { chat_id: 'other', text: 'different target' } })
+    assert.equal(sent.length, 1, 'a different target must not be suppressed by mate-wide activity')
+
+    activeTarget = undefined
+    await client.callTool({ name: 'reply', arguments: { chat_id: 'owner', text: 'out of band' } })
+    assert.equal(sent.length, 2)
+    assert.match(sent[1].text, /out of band/)
+  } finally {
+    await client.close()
+    await server.close()
+  }
+})
 
 // NEW CONTRACT (multi-target): parseRoutingPrefix returns `rawTargets: string[]`
 // (comma-separated list, names+numbers mixable, deduped) and NO `hadColon` — the

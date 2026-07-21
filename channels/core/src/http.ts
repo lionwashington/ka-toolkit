@@ -16,7 +16,7 @@ import { log } from './log.ts'
 import { counters } from './counters.ts'
 import { sanitizeChannelName } from './routing.ts'
 import {
-  PER_NAME_FIFO_CAP, byName, sessionsById, addSession, removeSession, allSessions, channelNumberOf,
+  PER_NAME_FIFO_CAP, byName, sessionsById, addSession, removeSession, channelNumberOf,
 } from './sessions.ts'
 import {
   CHANNEL_FRESH_MS, PROBE_GRACE_MS,
@@ -54,6 +54,7 @@ export function createHttpApp(platform: Platform, runtimeManager?: CodexRuntimeM
     // Design principle (agreed): the daemon must NOT 404 a reconnect that tells us
     // its channel — re-adopt it, don't force the client to re-handshake.
     const reqName = (req.query as any)?.name
+    const toolsOnly = (req.query as any)?.mode === 'tools'
     const channelName = sanitizeChannelName(reqName)
     const isSseReconnect = req.method === 'GET'
       && String(req.headers['accept'] ?? '').includes('text/event-stream')
@@ -71,7 +72,7 @@ export function createHttpApp(platform: Platform, runtimeManager?: CodexRuntimeM
       return
     }
 
-    if (runtimeTargetOf(channelName)) {
+    if (runtimeTargetOf(channelName) && !toolsOnly) {
       log(`rejecting MCP session for ${channelName}: name is owned by a runtime target`)
       res.status(409).json({
         jsonrpc: '2.0',
@@ -86,11 +87,11 @@ export function createHttpApp(platform: Platform, runtimeManager?: CodexRuntimeM
       sessionIdGenerator: () => reuseId ?? randomUUID(),
       onsessioninitialized: id => {
         // Fresh session (POST initialize). Re-adopt registers itself below instead.
-        log(`mcp session init ${id} (channel=${channelName} #${channelNumberOf(channelName)})`)
+        log(`mcp session init ${id} (channel=${channelName} #${channelNumberOf(channelName)}${toolsOnly ? ', tools-only' : ''})`)
         addSession({
           id, server, transport, name: channelName,
           createdAt: Date.now(), monoTs: process.hrtime.bigint(),
-          consecutiveFails: 0, lastProbeOk: 0,
+          consecutiveFails: 0, lastProbeOk: 0, toolsOnly,
         })
       },
     })
@@ -98,7 +99,10 @@ export function createHttpApp(platform: Platform, runtimeManager?: CodexRuntimeM
       const id = transport.sessionId ?? reuseId
       if (id) { log(`mcp session close ${id}`); removeSession(id) }
     }
-    const server = createMcpServer(channelName, platform)
+    const server = createMcpServer(channelName, platform, {
+      runtimeBridge: toolsOnly,
+      suppressReply: replyTarget => toolsOnly && (runtimeManager?.hasActiveDelivery(channelName, replyTarget) ?? false),
+    })
     await server.connect(transport)
 
     if (reuseId) {
@@ -112,18 +116,18 @@ export function createHttpApp(platform: Platform, runtimeManager?: CodexRuntimeM
       addSession({
         id: reuseId, server, transport, name: channelName,
         createdAt: Date.now(), monoTs: process.hrtime.bigint(),
-        consecutiveFails: 0, lastProbeOk: 0,
+        consecutiveFails: 0, lastProbeOk: 0, toolsOnly,
       })
-      log(`mcp session RE-ADOPT ${reuseId} (channel=${channelName} #${channelNumberOf(channelName)}) — consumer SSE reconnect, no 404`)
+      log(`mcp session RE-ADOPT ${reuseId} (channel=${channelName} #${channelNumberOf(channelName)}${toolsOnly ? ', tools-only' : ''}) — consumer SSE reconnect, no 404`)
     }
 
     await transport.handleRequest(req as any, res as any, req.body)
   })
 
   app.get('/api/status', (_req, res) => {
-    const all = allSessions()
-    const sessionList = all.map(s => ({
-      id: s.id, name: s.name, age_seconds: Math.floor((Date.now() - s.createdAt) / 1000),
+    const sessionList = Array.from(sessionsById.values()).map(s => ({
+      id: s.id, name: s.name, tools_only: s.toolsOnly === true,
+      age_seconds: Math.floor((Date.now() - s.createdAt) / 1000),
     }))
     const channelCounts: Record<string, number> = {}
     for (const [name, list] of byName) channelCounts[name] = list.length

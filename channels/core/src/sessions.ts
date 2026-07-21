@@ -17,6 +17,7 @@ export type Session = {
   monoTs: bigint        // process.hrtime.bigint() — nanosecond monotonic, unique sort key
   consecutiveFails: number  // consecutive probe failures; evict ≥ CONSECUTIVE_FAIL_LIMIT
   lastProbeOk: number   // ms timestamp of last successful probe (0 = never)
+  toolsOnly?: boolean   // callable MCP tools, but never an inbound channel consumer
   staleSince?: number   // M6: ms when half-open detected → closeStandaloneSSEStream fired,
                         // session kept for reconnect; evicted only if still dead after STALE_EVICT_MS
 }
@@ -27,6 +28,7 @@ export type Session = {
 //     may be on any of the recent sessions — receives the notification.
 //   - "Owner" (for display/numbering) = the newest session (list[length-1]).
 export const PER_NAME_FIFO_CAP = 4
+export const TOOLS_ONLY_PER_NAME_CAP = 4
 export const byName = new Map<string, Session[]>()
 
 // Auxiliary index: incoming HTTP requests carry the mcp-session-id (UUID), not
@@ -35,6 +37,25 @@ export const byName = new Map<string, Session[]>()
 export const sessionsById = new Map<string, Session>()
 
 export function addSession(s: Session): void {
+  // Codex runtimes receive inbound messages through the App Server bridge. They
+  // still need reply/send_to_channel as MCP tools, but registering that MCP
+  // connection in byName would create a second inbound consumer for the same
+  // channel. Keep tool-only transports addressable by session id without making
+  // them routing targets or probe candidates.
+  if (s.toolsOnly) {
+    const existing = Array.from(sessionsById.values())
+      .filter(candidate => candidate.toolsOnly && candidate.name === s.name && candidate.id !== s.id)
+      .sort((a, b) => a.monoTs < b.monoTs ? -1 : a.monoTs > b.monoTs ? 1 : 0)
+    while (existing.length >= TOOLS_ONLY_PER_NAME_CAP) {
+      const evicted = existing.shift()!
+      sessionsById.delete(evicted.id)
+      log(`tools-only: ${s.name} evict oldest ${evicted.id.slice(0, 8)} (cap=${TOOLS_ONLY_PER_NAME_CAP})`)
+      try { void evicted.transport.close?.() } catch {}
+    }
+    sessionsById.set(s.id, s)
+    log(`tools-only: ${s.name} add ${s.id.slice(0, 8)}`)
+    return
+  }
   let list = byName.get(s.name)
   if (!list) { list = []; byName.set(s.name, list) }
   list.push(s)
@@ -52,6 +73,10 @@ export function removeSession(id: string): void {
   const s = sessionsById.get(id)
   if (!s) return
   sessionsById.delete(id)
+  if (s.toolsOnly) {
+    log(`tools-only: ${s.name} remove ${id.slice(0, 8)}`)
+    return
+  }
   const list = byName.get(s.name)
   if (list) {
     const i = list.indexOf(s)

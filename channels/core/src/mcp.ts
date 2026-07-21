@@ -16,12 +16,24 @@ import { CHANNEL_FRESH_MS, PROBE_GRACE_MS } from './probe.ts'
 import { ccLoopGuard, deliverToTarget } from './dispatch.ts'
 import type { Platform } from './platform.ts'
 
-export function createMcpServer(channelName: string, platform: Platform): Server {
+export interface ChannelMcpOptions {
+  /** Codex gets inbound/final delivery from the runtime bridge, not MCP notifications. */
+  runtimeBridge?: boolean
+  /** Suppress a manual reply only while that bridge owns this reply target's inbound turn. */
+  suppressReply?: (chatId: string) => boolean
+}
+
+export function createMcpServer(channelName: string, platform: Platform, options: ChannelMcpOptions = {}): Server {
+  const runtimeBridgeInstructions = options.runtimeBridge
+    ? '\nThis connection belongs to a Codex runtime bridge. For an owner message delivered by that bridge, ' +
+      'return the answer normally and DO NOT call `reply`; the bridge streams and sends the final answer automatically. ' +
+      '`reply` remains available only for an explicit out-of-band message initiated outside a Channel-owned turn.'
+    : ''
   const s = new Server(
     { name: `${platform.name}-channel`, version: '0.1.0' },
     {
       capabilities: { tools: {}, experimental: { 'claude/channel': {} } },
-      instructions: platform.instructions(channelName, channelNumberOf(channelName)),
+      instructions: platform.instructions(channelName, channelNumberOf(channelName)) + runtimeBridgeInstructions,
     },
   )
 
@@ -29,7 +41,9 @@ export function createMcpServer(channelName: string, platform: Platform): Server
     tools: [
       {
         name: 'reply',
-        description: platform.replyToolDescription,
+        description: platform.replyToolDescription + (options.runtimeBridge
+          ? ' During a Channel-owned Codex turn, return the answer normally instead; the runtime bridge delivers it automatically.'
+          : ''),
         inputSchema: {
           type: 'object',
           properties: {
@@ -75,6 +89,17 @@ export function createMcpServer(channelName: string, platform: Platform): Server
       const text = args.text ?? ''
       if (!chatId || !text) {
         return { content: [{ type: 'text', text: 'chat_id and text are required' }], isError: true }
+      }
+      // A Codex Channel turn already has exactly one outbound owner: the runtime
+      // bridge, which streams deltas and finalizes the same Telegram/Lark message.
+      // If the model also calls reply (legacy MCP instructions encouraged this),
+      // sending here creates a second answer. A TUI/out-of-band call is preserved
+      // because suppressReply is true only for that Channel-owned delivery's target.
+      if (options.suppressReply?.(chatId)) {
+        log(`reply suppressed during runtime-owned delivery (ch=${channelName}, target=${chatId})`)
+        return {
+          content: [{ type: 'text', text: 'not sent separately: the active runtime bridge will deliver this turn final automatically' }],
+        }
       }
       // Prefix with the channel's STABLE number + name, e.g. **[#7-ka-dev2]** — lets
       // the owner identify the sender and route back by number (`to 7:`).

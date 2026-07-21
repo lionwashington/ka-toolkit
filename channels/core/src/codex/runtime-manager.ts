@@ -117,6 +117,10 @@ export class CodexRuntimeManager {
     return Array.from(this.targets, ([name, managed]) => ({ name, alive: managed.target.isAlive() }))
   }
 
+  hasActiveDelivery(name: string, replyTarget: string): boolean {
+    return this.targets.get(name)?.target.hasActiveDelivery(replyTarget) ?? false
+  }
+
   private async onEvent(name: string, event: CodexChannelEvent, replyTarget: string): Promise<void> {
     if (event.type === 'turn-started' && this.platform.startStream) {
       const target = this.platform.resolveReplyTarget(replyTarget)

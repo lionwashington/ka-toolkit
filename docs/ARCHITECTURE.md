@@ -221,12 +221,20 @@ For implementation-level details see `docs/channels/telegram/ARCHITECTURE.md`. K
   (bare messages use the most recently selected single target); each agent process is attached to a channel name (registration URL `?name=<X>`).
 - **CC↔CC communication**: via `send_to_channel` (cc2cc, see `docs/channels/telegram/ARCHITECTURE.md` §5),
   distinct from `reply` which goes to the user.
+- **Codex MCP split**: Workshop explicitly attaches the KB endpoint and a
+  `mode=tools` Channel endpoint. The latter exposes Channel tools without becoming a
+  second inbound consumer. During a Channel-owned Codex turn, runtime streaming/final
+  is the single owner-reply exit; an extra MCP `reply` is suppressed to prevent double
+  sends while out-of-band `reply` remains available.
 - **M6 half-open self-healing (2026-05-31)**: a standard MCP `ping` probe detects a half-open SSE (network jitter / sleep-wake
   causes the daemon's `send()` to silently no-op) → `closeStandaloneSSEStream()` closes the stream to preserve the session, lets the CC
   seamlessly reconnect with the **same session-id** via SSE retry; only a truly dead one (>60s unreachable) gets evicted. This both cures the half-open deadlock
   and avoids leaking zombie sessions.
 - **Supervision**: the `* * * * * start.sh` installed by `ka cron` self-heals (brings it back up within ≤60s if it dies). To upgrade the daemon code,
   `./install.sh --only daemon` then `ka channel restart` (every CC re-adopts automatically).
+  Re-adopt restores idle connections only; wait for active Codex Channel turns to
+  finish and restart from outside the workshop, otherwise the current streamed reply
+  is truncated.
 
 ### §3.2 ka workshop (orchestrating independent agent processes)
 

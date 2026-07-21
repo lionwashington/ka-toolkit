@@ -98,17 +98,26 @@ APP_SERVER_ENDPOINT="ws://127.0.0.1:$APP_SERVER_PORT"
 # The legacy Telegram MCP may use the same bot identity as Channel and race its
 # getUpdates consumer. Replace that one transport with a disabled valid stdio
 # entry for both App Server and remote TUI invocations; the user's Codex
-# configuration is untouched. The TUI also loads MCP configuration during its
-# own bootstrap even though it connects to an external App Server.
-TELEGRAM_MCP_OVERRIDES=(
+# configuration is untouched. Explicitly attach a tool-only Channel connection.
+# It carries the
+# runtime's real identity for reply/send_to_channel, but is excluded from inbound
+# fanout because Codex receives inbound messages through the App Server bridge.
+# The TUI also loads MCP configuration during its own bootstrap even though it
+# connects to an external App Server.
+CHANNEL_KIND="${KA_CHANNEL_KIND:-telegram}"
+CHANNEL_PORT="${KA_CHANNEL_PORT:-$(ka_channel_port)}"
+CHANNEL_MCP_SERVER="${CHANNEL_KIND}-channel"
+CHANNEL_MCP_URL="http://127.0.0.1:${CHANNEL_PORT}/mcp?name=${SAFE_NAME}&mode=tools"
+CODEX_MCP_OVERRIDES=(
     -c 'mcp_servers.telegram.command="/usr/bin/true"'
     -c 'mcp_servers.telegram.args=[]'
     -c 'mcp_servers.telegram.enabled=false'
+    -c "mcp_servers.${CHANNEL_MCP_SERVER}.url=\"${CHANNEL_MCP_URL}\""
 )
 # The sidecar must never inherit the pane's stdin. This shell runs without job
 # control, so a background App Server otherwise shares the foreground process
 # group with the TUI and can consume terminal replies or keystrokes.
-codex "${TELEGRAM_MCP_OVERRIDES[@]}" \
+codex "${CODEX_MCP_OVERRIDES[@]}" \
     --dangerously-bypass-hook-trust \
     --dangerously-bypass-approvals-and-sandbox \
     app-server --listen "$APP_SERVER_ENDPOINT" </dev/null >>"$SERVER_LOG" 2>&1 &
@@ -152,7 +161,7 @@ elif [ "${1:-}" = "resume" ] && [ -n "${2:-}" ]; then
 fi
 
 run_codex() {
-    codex "${TELEGRAM_MCP_OVERRIDES[@]}" --remote "$APP_SERVER_ENDPOINT" "$@"
+    codex "${CODEX_MCP_OVERRIDES[@]}" --remote "$APP_SERVER_ENDPOINT" "$@"
 }
 
 # Workshop panes are unattended runtime processes. Make approval bypass the

@@ -172,6 +172,21 @@ Telegram/Lark 用户消息
 | 重启恢复 | SSE reconnect/re-adopt | binding + `thread/resume` |
 | 对话落盘 | `~/.claude/projects` | `$CODEX_HOME/sessions` |
 
+Workshop gives each Codex App Server explicit loopback MCP configuration for
+`<kind>-channel`. The Channel URL uses
+`?name=<runtime-name>&mode=tools`: it exposes the Channel tools without registering a
+second inbound consumer under the same name. This is required because inbound owner
+messages already arrive through `turn/start`; registering an ordinary MCP channel
+session would either collide with the runtime target or duplicate delivery. The
+optional `knowledge-assistant` MCP is not Workshop-owned or injected; operators
+running KB retrieval configure it independently in Codex.
+
+Codex owner replies follow a single-egress rule. For a Channel-owned turn, normalized
+App Server deltas/final events own the Telegram/Lark response. The `reply` MCP tool is
+still visible for explicit out-of-band use, but a call made while that runtime delivery
+is active for the same `chat_id` is acknowledged without sending a second message. This guards against legacy
+MCP instructions that tell every agent runtime to call `reply`.
+
 ### 3.5 RuntimeChannel 接口
 
 Channel 内部只抽象通信所需能力：
@@ -221,6 +236,11 @@ prevents polling from overtaking pending deltas and collapsing a streamed reply 
 final message. The registration loop also heals a later Channel start or restart. On
 pane shutdown, Workshop unregisters the target and terminates the App Server. Channel
 owns only routing clients and never owns the App Server process.
+
+A Channel daemon restart re-establishes idle target registrations, but it cannot move
+an active turn's stream handle/final callback into the new process. Deploy daemon code
+only after active Channel turns finish, and invoke the restart from a plain terminal
+rather than from the workshop pane whose reply depends on that daemon.
 
 Outbound formatting is part of the platform boundary, not the App Server event
 model. Channel places the source label in a separate paragraph. Telegram preserves
