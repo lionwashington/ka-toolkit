@@ -63,12 +63,13 @@ pnpm build            # produces dist for hooks/core/opennutrition etc. (needed 
 
 ```bash
 # --channel-kind=lark: make lark the ACTIVE daemon (persisted to config/config.yaml).
-# Both daemons (telegram + lark) are always deployed; only the active one starts.
+# This full install deploys both daemons; only the active one starts. Use
+# --only lark-daemon for a Lark-only update.
 # --switch: point ka's symlink/cron/hooks/skills at runtime and start the daemon.
 ./install.sh --channel-kind=lark --switch
 ```
 
-install will: deploy ka+ops / the various MCPs / hooks / skills / **both channel daemons**;
+This full install deploys ka+ops / the various MCPs / hooks / skills / **both channel daemons**;
 write `channel_kind: lark` into `~/.knowledge-assistant/config/config.yaml`; start **only** the lark daemon.
 (On Linux the cron switch goes through the crontab backend and doesn't touch launchd.)
 

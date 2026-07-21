@@ -77,7 +77,12 @@ createInterface({ input: process.stdin }).on('line', line => {
       const finalText = `echo:${text}${imageSuffix}`
       const hasDelta = text !== 'complete-without-text' && text !== 'fail-without-text' && text !== 'final-item-only'
       const items = text === 'final-item-only' ? [{ type: 'agentMessage', id: 'answer', text: finalText }] : []
-      const completedItems = items.length ? items :
+      const completedItems = text === 'multi-agent-messages'
+        ? [
+            { type: 'agentMessage', id: 'commentary', text: 'first message\n' },
+            { type: 'agentMessage', id: 'progress', text: '\nsecond message' },
+            { type: 'agentMessage', id: 'answer', text: 'third message' },
+          ] : items.length ? items :
         (text === 'complete-without-text' || text === 'fail-without-text' ? [] : [{ type: 'agentMessage', id: 'answer', text: finalText }])
       const completedTurn = { ...turn, status, items: completedItems }
       if (thread) {
@@ -87,7 +92,13 @@ createInterface({ input: process.stdin }).on('line', line => {
       }
       const sendCompletionNotifications = () => {
         if (hasDelta) {
-          send({ method: 'item/agentMessage/delta', params: { threadId: message.params.threadId, turnId: turn.id, itemId: 'answer', delta: finalText } })
+          if (text === 'multi-agent-messages') {
+            send({ method: 'item/agentMessage/delta', params: { threadId: message.params.threadId, turnId: turn.id, itemId: 'commentary', delta: 'first message\n' } })
+            send({ method: 'item/agentMessage/delta', params: { threadId: message.params.threadId, turnId: turn.id, itemId: 'progress', delta: '\nsecond message' } })
+            send({ method: 'item/agentMessage/delta', params: { threadId: message.params.threadId, turnId: turn.id, itemId: 'answer', delta: 'third message' } })
+          } else {
+            send({ method: 'item/agentMessage/delta', params: { threadId: message.params.threadId, turnId: turn.id, itemId: 'answer', delta: finalText } })
+          }
         }
         if (process.env.FAKE_SUPPRESS_TURN_COMPLETED !== '1') {
           send({ method: 'turn/completed', params: { threadId: message.params.threadId, turn: completedTurn } })

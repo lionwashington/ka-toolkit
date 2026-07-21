@@ -213,6 +213,12 @@ describe('chunk', () => {
     assert.equal(parts[0], 'para one here')
     assert.ok(parts.length >= 2)
   })
+  test('newline mode preserves paragraph separators across chunk boundaries', () => {
+    const text = 'first paragraph\n\nsecond paragraph that is deliberately longer'
+    const parts = chunk(text, 24, 'newline')
+    assert.equal(parts.join(''), text)
+    assert.ok(parts.some(part => part.startsWith('\n\n')))
+  })
   test('reassembles to original (length mode, no boundaries lost)', () => {
     const text = 'x'.repeat(100)
     assert.equal(chunk(text, 30, 'length').join(''), text)

@@ -57,6 +57,20 @@ test('uses the completed turn item when no agent-message delta was emitted', asy
   await appServer.stop()
 })
 
+test('preserves paragraph boundaries between assistant message items', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-message-boundaries-'))
+  const events: CodexChannelEvent[] = []
+  const appServer = client(join(dir, 'fake-state.json'))
+  await target(dir, appServer, events).deliver({ content: 'multi-agent-messages', meta: {} })
+  const streamed = events
+    .filter((event): event is Extract<CodexChannelEvent, { type: 'text-delta' }> => event.type === 'text-delta')
+    .map(event => event.delta)
+    .join('')
+  assert.equal(streamed, 'first message\n\nsecond message\n\nthird message')
+  assert.equal(events.find(event => event.type === 'final')?.text, streamed)
+  await appServer.stop()
+})
+
 test('polls thread state when a multi-client App Server omits turn/completed', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ka-codex-poll-completion-'))
   const statePath = join(dir, 'fake-state.json')

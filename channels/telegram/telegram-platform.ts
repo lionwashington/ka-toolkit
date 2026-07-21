@@ -144,7 +144,10 @@ function chunk(text: string, limit: number, mode: 'length' | 'newline'): string[
       cut = para > limit / 2 ? para : line > limit / 2 ? line : space > 0 ? space : limit
     }
     out.push(rest.slice(0, cut))
-    rest = rest.slice(cut).replace(/^\n+/, '')
+    // A chunk boundary is a transport detail, not a formatting boundary.
+    // Keep leading newlines in the next chunk so joining the chunks always
+    // reproduces the exact source text, including paragraph spacing.
+    rest = rest.slice(cut)
   }
   if (rest) out.push(rest)
   return out
@@ -426,14 +429,21 @@ export const telegramPlatform: Platform = {
     return { chatId: target, messageId: message.message_id }
   },
   async updateStream(handle: any, text: string): Promise<string | null> {
-    try { await bot.api.editMessageText(handle.chatId, handle.messageId, text); return null }
+    // Telegram cannot edit a message beyond 4096 characters. Keep the live
+    // preview on the first lossless chunk; finishStream sends the remainder as
+    // follow-up messages once the turn is complete.
+    const preview = chunk(text, MAX_CHUNK_LIMIT, 'newline')[0] ?? ' '
+    try { await bot.api.editMessageText(handle.chatId, handle.messageId, preview); return null }
     catch (error: any) {
       const message = error?.message ?? String(error)
       return isNoopTelegramEdit(message) ? null : message
     }
   },
   async finishStream(handle: any, text: string): Promise<string | null> {
-    return telegramPlatform.updateStream!(handle, text)
+    const parts = chunk(text, MAX_CHUNK_LIMIT, 'newline')
+    const firstError = await telegramPlatform.updateStream!(handle, parts[0] ?? ' ')
+    if (firstError || parts.length <= 1) return firstError
+    return sendToTelegram(handle.chatId, parts.slice(1).join(''))
   },
   // SECURITY: always the configured owner, regardless of the chat_id the session
   // passed — a compromised/injected CC must not reach an arbitrary chat.

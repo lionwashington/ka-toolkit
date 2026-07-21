@@ -29,7 +29,7 @@ Claude Code / Codex runtime targets             Lark group (reply, auto-prefixed
 ## Directory
 
 - **Source (source-of-truth, committed to git)**: `channels/lark/` (the Lark platform adapter) on top of `channels/core/` (the shared channel-core kernel).
-- **Runtime directory (not in git)**: `~/.knowledge-assistant/channels/lark-daemon/` — produced by `install.sh --only daemon` as a single self-contained `daemon.mjs` esbuild bundle (channel-core kernel + lark-platform + deps; no `.ts`, no `node_modules`). Never hand-edited (design/runtime separation rule). Its `state.json` / logs / pid live in that same dir; its **config + secrets live in the shared `~/.knowledge-assistant/config/` bucket** (`config.yaml` + `secrets.yaml`), not here.
+- **Runtime directory (not in git)**: `~/.knowledge-assistant/channels/lark-daemon/` — produced by `install.sh --only lark-daemon` (or the combined `--only daemon`) as a single self-contained `daemon.mjs` esbuild bundle (channel-core kernel + lark-platform + deps; no `.ts`, no `node_modules`). Never hand-edited (design/runtime separation rule). Its `state.json` / logs / pid live in that same dir; its **config + secrets live in the shared `~/.knowledge-assistant/config/` bucket** (`config.yaml` + `secrets.yaml`), not here.
   > The pre-channel-core standalone `server.ts` and the `~/.lark-channel/config.json` layout are retired; on a machine still running an old daemon, `install.sh --switch` migrates its `state.json` and restarts the new one (populate `secrets.yaml channels.lark` first).
 
 | File | Purpose |
@@ -48,10 +48,9 @@ Claude Code / Codex runtime targets             Lark group (reply, auto-prefixed
 ## One-time Deployment
 
 ```bash
-# 1. Build the daemon bundle into the runtime directory. --only daemon builds+deploys
-#    BOTH telegram and lark daemons; only the ACTIVE kind (config.yaml channel_kind)
-#    is started. To make lark the active kind: ./install.sh --channel-kind=lark
-./install.sh --only daemon
+# 1. Build only the Lark daemon bundle. Select Lark as the active kind when
+#    switching it into service.
+./install.sh --channel-kind=lark --only lark-daemon
 
 # 2. Put the secrets in the shared secrets file (chmod 600). The daemon reads
 #    them directly; the webhook tokens never leave the daemon process tree.
@@ -83,6 +82,13 @@ creation, send, or a later content update is unavailable, the daemon automatical
 sends the completed response through the configured group webhook instead. Interrupted,
 failed, and text-less turns also close their placeholder card rather than leaving it
 permanently in streaming mode.
+
+The source label is emitted as its own paragraph (`**[#N-name]**\n\n`). CardKit
+Markdown treats a single newline in ordinary prose as a soft break that clients
+may collapse, so the adapter makes prose soft breaks explicit before card create
+and update calls. Existing paragraph breaks and block Markdown—including fenced
+code, headings, lists, quotes, and tables—remain unchanged. Webhook fallback keeps
+the original plain text.
 
 Codex mate names and working directories are owned exclusively by Workshop.
 Workshop registers each live loopback App Server WebSocket endpoint and canonical

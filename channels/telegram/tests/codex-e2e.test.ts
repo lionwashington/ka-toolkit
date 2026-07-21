@@ -57,6 +57,23 @@ test('Telegram routes an owner message through a persistent Codex target', async
     const log = (() => { try { return readFileSync(join(daemon.dataDir, 'channel.log'), 'utf8') } catch { return '' } })()
     assert.equal(replied, true, `sent=${JSON.stringify(telegram.sent())}\nlog=${log}`)
     assert.equal(telegram.sent().filter(message => message.text.includes('echo:hello')).length, 1)
+    assert.ok(telegram.sent().some(message =>
+      message.text === '**[#1-codex-main]**\n\necho:hello',
+    ), `channel prefix must be a separate paragraph: ${JSON.stringify(telegram.sent())}`)
+
+    const longBody = 'x'.repeat(5_000)
+    const beforeLongReply = telegram.sent().length
+    const longScheduled = await fetch(`${daemon.baseUrl}/api/runtimes/codex/codex-main/deliver`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: longBody }),
+    })
+    assert.equal(longScheduled.ok, true, await longScheduled.text())
+    assert.equal(await waitFor(() => telegram.sent().length >= beforeLongReply + 2, 5_000), true)
+    assert.equal(
+      telegram.sent().slice(beforeLongReply).map(message => message.text).join(''),
+      `**[#1-codex-main]**\n\necho:${longBody}`,
+      'a long streamed reply must be split without losing whitespace or content',
+    )
 
     telegram.push({
       update_id: 2,

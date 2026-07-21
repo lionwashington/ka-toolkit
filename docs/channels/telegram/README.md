@@ -1,8 +1,10 @@
 # telegram-channel
 
-Standalone background daemon that bridges **the owner's Telegram DM** with **multiple Claude Code processes** in both directions:
-the owner routes messages to different CCs with `to <channel name>: content`, and a CC replies to the owner's DM via the `reply` tool.
-The credential (bot token) lives only at this single daemon exit; **CC processes never touch the token**.
+Standalone background daemon that bridges **the owner's Telegram DM** with
+**multiple agent-runtime sessions** in both directions. The owner routes messages
+with `to <channel name>: content`; Claude Code replies through MCP, while
+Workshop-owned Codex targets reply through the shared runtime bridge. The bot
+token lives only at this single daemon exit; agent processes never touch it.
 
 > Implementation-level design / invariants / historical decisions are in [`ARCHITECTURE.md`](ARCHITECTURE.md) (as-built).
 
@@ -11,18 +13,19 @@ Owner's Telegram DM
   │ ① getUpdates long-poll (daemon owns the token exclusively, offset cursor)
   ▼
 telegram-channel daemon  (node+express @127.0.0.1:9877)
-  │ ② notifications/claude/channel over /mcp SSE
+  ├─ ② MCP SSE ──▶ Claude Code channel sessions
+  └─ ③ runtime bridge ──▶ Workshop-owned Codex App Server clients
+                              │
+daemon ◀────── outbound reply ┘
+  │ ④ bot.api.sendMessage(owner, "**[#N-name]**\\n\\n"+text)
   ▼
-CC processes (started with tg-ch <name>, each bound to a channel)
-  │ ③ CC calls reply{chat_id,text}
-  ▼
-daemon ── ④ bot.api.sendMessage(owner, "**[<name>]** "+text) ──▶ Owner's Telegram
+Owner's Telegram DM
 ```
 
 ## Directory
 
 - **Source (source-of-truth, committed to git)**: `channels/telegram/` (the platform adapter) on top of `channels/core/` (the shared channel-core kernel).
-- **Runtime directory (not in git)**: `~/.knowledge-assistant/channels/telegram-daemon/` — produced by `install.sh --only daemon` as a single self-contained `daemon.mjs` esbuild bundle (channel-core kernel + telegram-platform + deps; no `.ts`, no `node_modules`). Never hand-edited (design/runtime separation rule). Its `state.json` / logs / pid live in that same dir; its **config + secrets live in the shared `~/.knowledge-assistant/config/` bucket** (`config.yaml` + `secrets.yaml`), not here.
+- **Runtime directory (not in git)**: `~/.knowledge-assistant/channels/telegram-daemon/` — produced by `install.sh --only telegram-daemon` (or the combined `--only daemon`) as a single self-contained `daemon.mjs` esbuild bundle (channel-core kernel + telegram-platform + deps; no `.ts`, no `node_modules`). Never hand-edit runtime output (design/runtime separation rule). Its `state.json` / logs / pid live in that same dir; its **config + secrets live in the shared `~/.knowledge-assistant/config/` bucket** (`config.yaml` + `secrets.yaml`), not here.
   > The pre-channel-core standalone `server.ts` and the `~/.telegram-channel/` / `runtime/daemon/` layouts are retired; on a machine still running an old daemon, `install.sh --switch` migrates its `state.json` and restarts the new one (populate `secrets.yaml channels.telegram` first).
 
 | File | Purpose |
@@ -38,7 +41,7 @@ daemon ── ④ bot.api.sendMessage(owner, "**[<name>]** "+text) ──▶ Own
 
 ```bash
 # 1. Build the daemon bundle into the runtime directory (idempotent; runtime can only be produced by install, never hand-edited)
-./install.sh --only daemon
+./install.sh --only telegram-daemon
 
 # 2. Put the token + owner in the shared secrets file (chmod 600). The daemon reads
 #    them directly; the token never leaves the daemon process tree.
@@ -51,6 +54,13 @@ daemon ── ④ bot.api.sendMessage(owner, "**[<name>]** "+text) ──▶ Own
 # 3. The port (default 9877) + poll tuning are non-secret, in config.yaml:
 #    ~/.knowledge-assistant/config/config.yaml channels.telegram.port
 ```
+
+Outbound Codex replies put the `[#N-name]` source label in its own paragraph.
+Telegram messages longer than 4096 characters are split without deleting or
+normalizing any source whitespace; concatenating the chunks reproduces the
+original text exactly. During a long Codex turn, the editable stream previews
+the first chunk; completion edits that chunk and sends the remainder as normal
+follow-up messages.
 
 > **Config split**: the bot **token** and **owner_chat_id** come *only* from
 > `secrets.yaml channels.telegram` — never from `config.yaml` or the environment.

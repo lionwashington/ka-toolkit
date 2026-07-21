@@ -8,7 +8,27 @@
 // Run: node --experimental-strip-types --test tests/unit.test.ts
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { extractText, parseLarkTime, rememberMsgId, extractLarkAttachment, attachmentPlaceholder } from '../lark-platform.ts'
+import { extractText, parseLarkTime, rememberMsgId, extractLarkAttachment, attachmentPlaceholder, formatLarkCardMarkdown } from '../lark-platform.ts'
+
+describe('formatLarkCardMarkdown', () => {
+  test('turns prose soft breaks into stable CardKit line breaks', () => {
+    assert.equal(formatLarkCardMarkdown('first line\nsecond line'), 'first line<br>\nsecond line')
+  })
+  test('preserves paragraph, list, heading, and quote structure', () => {
+    const text = 'intro\n\n## Heading\n\n- one\n- two\n\n> quote'
+    assert.equal(formatLarkCardMarkdown(text), text)
+  })
+  test('does not alter fenced code', () => {
+    const text = 'before\n```ts\nconst a = 1\nconst b = 2\n```\nafter'
+    assert.equal(formatLarkCardMarkdown(text), text)
+  })
+  test('preserves tables without requiring a leading pipe and indented code', () => {
+    const table = 'Name | Value\n--- | ---\none | two'
+    assert.equal(formatLarkCardMarkdown(table), table)
+    const code = '    const first = 1\n    const second = 2'
+    assert.equal(formatLarkCardMarkdown(code), code)
+  })
+})
 
 describe('extractText', () => {
   test('plain text → trimmed', () => {

@@ -46,6 +46,12 @@ to `localImage`, streams agent-message deltas into CardKit, and maps `/stop` to
 `turn/interrupt`. App Server lifecycle remains owned by Workshop; the Lark daemon
 only owns the client connection and channel routing.
 
+For outbound Codex text, Channel separates the `[#N-name]` label from the body
+with a blank line. Before CardKit rendering, the Lark adapter converts only
+ordinary-prose soft breaks to explicit line breaks; it preserves paragraph and
+block-Markdown structure. This normalization is not applied to plain webhook
+fallback messages.
+
 ## 4. Multi-session / Named Routing Model (v0.4.0 core)
 
 ### 4.1 Concepts

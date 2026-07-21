@@ -235,6 +235,31 @@ type LarkStreamHandle = {
   queue: Promise<string | null>
 }
 
+/**
+ * CardKit follows CommonMark soft-break rules, so a single newline between
+ * ordinary prose lines may render as a space. Make those prose breaks explicit
+ * while leaving block Markdown (lists, headings, quotes, tables) and fenced
+ * code untouched.
+ */
+export function formatLarkCardMarkdown(text: string): string {
+  const lines = text.split('\n')
+  let fenced = false
+  const blockLine = (line: string): boolean =>
+    /^(?: {4}|\t)|^\s*(?:```|~~~|#{1,6}\s|>|[-+*]\s|\d+[.)]\s|(?:[-*_]\s*){3,})/.test(line) ||
+    line.includes('|')
+
+  return lines.map((line, index) => {
+    const fence = /^\s*(?:```|~~~)/.test(line)
+    const inFence = fenced
+    if (fence) fenced = !fenced
+    if (index === lines.length - 1 || inFence || fence || line === '') return line
+
+    const next = lines[index + 1]
+    if (next === '' || blockLine(line) || blockLine(next)) return line
+    return `${line}<br>`
+  }).join('\n')
+}
+
 function streamingCard(text: string): Record<string, unknown> {
   return {
     schema: '2.0',
@@ -248,7 +273,7 @@ function streamingCard(text: string): Record<string, unknown> {
         print_strategy: 'fast',
       },
     },
-    body: { elements: [{ tag: 'markdown', element_id: 'content', content: text || '…' }] },
+    body: { elements: [{ tag: 'markdown', element_id: 'content', content: formatLarkCardMarkdown(text) || '…' }] },
   }
 }
 
@@ -296,7 +321,7 @@ function enqueueCardUpdate(handle: LarkStreamHandle, text: string, finish: boole
     handle.sequence++
     const updated = await callLarkApi('PUT',
       `/open-apis/cardkit/v1/cards/${encodeURIComponent(handle.cardId)}/elements/content/content`,
-      { content: text || ' ', sequence: handle.sequence, uuid: `ka-${handle.cardId}-${handle.sequence}` })
+      { content: formatLarkCardMarkdown(text) || ' ', sequence: handle.sequence, uuid: `ka-${handle.cardId}-${handle.sequence}` })
     if (!updated.ok) {
       // A card can be created and sent successfully, then lose update access or
       // hit a transient CardKit failure. Stop trying to edit that card and make

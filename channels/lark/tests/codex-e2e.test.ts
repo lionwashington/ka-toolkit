@@ -53,6 +53,8 @@ test('Lark routes a configured group through the shared Codex runtime bridge', a
     assert.match(calls, /POST\t\/open-apis\/im\/v1\/messages/)
     assert.match(calls, /PUT\t\/open-apis\/cardkit\/v1\/cards\/card-1\/elements\/content\/content/)
     assert.match(calls, /PATCH\t\/open-apis\/cardkit\/v1\/cards\/card-1\/settings/)
+    assert.ok(calls.includes('**[#1-codex-reviewer]**\\n\\necho:hello-lark'),
+      `channel prefix must be a separate CardKit paragraph: ${calls}`)
   } finally {
     await daemon.stop()
     await appServer.close()

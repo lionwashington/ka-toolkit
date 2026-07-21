@@ -222,6 +222,17 @@ final message. The registration loop also heals a later Channel start or restart
 pane shutdown, Workshop unregisters the target and terminates the App Server. Channel
 owns only routing clients and never owns the App Server process.
 
+Outbound formatting is part of the platform boundary, not the App Server event
+model. Channel places the source label in a separate paragraph. Telegram preserves
+all whitespace when splitting messages at its transport limit: the editable stream
+previews the first chunk and completion sends any remainder as follow-up messages.
+Lark CardKit makes ordinary prose soft breaks explicit while preserving fenced code
+and block Markdown; its plain webhook fallback receives the unmodified text.
+Within one turn, App Server may emit several independent `agentMessage` items
+(for example commentary updates followed by the final answer). Channel tracks each
+delta's `itemId` and inserts a paragraph boundary when that ID changes; token deltas
+inside the same item remain byte-for-byte concatenated.
+
 ### 3.6 持久化 binding
 
 ```ts

@@ -1,7 +1,7 @@
 # lark-channel — source + docs bundle
 
 Source-of-truth for the Lark channel daemon. The daemon is the `channels/core` kernel +
-`lark-platform.ts` adapter, deployed (via `install.sh --only daemon`) as a single self-contained
+`lark-platform.ts` adapter, deployed (via `install.sh --only lark-daemon`, or the combined `--only daemon`) as a single self-contained
 `daemon.mjs` esbuild bundle into `~/.knowledge-assistant/channels/lark-daemon/`. Daemon version v0.6.2.
 
 ## Contents (channels/lark/)
@@ -34,7 +34,7 @@ Templates: `config/config.example.yaml` + `config/secrets.example.yaml` (comment
 
 ## Deploy & Run
 1. `pnpm install` (needed for the esbuild bundle step)
-2. `./install.sh --channel-kind=lark --only daemon` → builds `daemon.mjs` + copies scripts into `~/.knowledge-assistant/channels/lark-daemon/`
+2. `./install.sh --channel-kind=lark --only lark-daemon` → builds `daemon.mjs` + copies scripts into `~/.knowledge-assistant/channels/lark-daemon/`
 3. Fill `~/.knowledge-assistant/config/secrets.yaml` channels.lark (`self_open_id` + `groups`) and port/tuning in `config.yaml`
 4. `~/.knowledge-assistant/channels/lark-daemon/start.sh` (cron pulls it up every minute as a backstop); `status.sh | jq` to check health
 </content>

@@ -2,7 +2,7 @@
 
 Connect a Claude Code session to a Lark group: send a message in the group → cc receives it; cc calls `reply` → it goes back to the group.
 
-> Deploy is via `install.sh`: `./install.sh --only daemon` bundles BOTH the telegram and lark daemons into `~/.knowledge-assistant/channels/<kind>-daemon/`; only the ACTIVE kind (`config.yaml channel_kind`) is started. Make lark active with `./install.sh --channel-kind=lark`. Supervise with a cron self-heal job (see §5). Attachments ARE supported (image/file/audio/video → `lark-cli +messages-resources-download` → `attachments/` → surfaced as `meta.attachment_path`). See `docs/INSTALL_UBUNTU.md` for the full deploy.
+> Deploy is via `install.sh`: `./install.sh --only lark-daemon --channel-kind=lark` bundles and selects only Lark. The combined `--only daemon` target remains available when both platform runtimes are wanted. Supervise with a cron self-heal job (see §5). Attachments ARE supported (image/file/audio/video → `lark-cli +messages-resources-download` → `attachments/` → surfaced as `meta.attachment_path`). See `docs/INSTALL_UBUNTU.md` for the full deploy.
 
 ---
 
@@ -46,7 +46,7 @@ Lark group <──webhook POST── lark daemon       <──reply tool── C
 
 ```bash
 # Build & deploy the daemon bundle. Make lark the active kind:
-./install.sh --channel-kind=lark --only daemon
+./install.sh --channel-kind=lark --only lark-daemon
 ```
 
 This produces `~/.knowledge-assistant/channels/lark-daemon/` (a self-contained `daemon.mjs` + the
@@ -136,7 +136,7 @@ claude-ch main --dangerously-skip-permissions --dangerously-load-development-cha
    Within a few seconds (≤ poll interval), cc receives a message tagged with the Lark source (including `chat_id` = group id).
    - Messages from others, from bots, or card messages → won't come in (self filter + card filter).
 2. **Outbound**: have cc call `reply` (passing the `chat_id` from the incoming tag). The group receives a message
-   prefixed with `**[#<number>-main]** …`.
+   with `**[#<number>-main]**` in its own paragraph above the response body.
 3. **Routing**: send `to <another channel name>: content` in the group → delivered to that channel; no prefix → `main`.
 4. **Offline replay**: messages sent in the group while cc is disconnected are delivered after cc reconnects (the watermark doesn't advance).
 5. **Daemon-restart auto-recovery**: restart the daemon (`stop.sh` then `start.sh`); cc **needs no restart, no touch**,

@@ -121,7 +121,7 @@ export class CodexRuntimeManager {
     if (event.type === 'turn-started' && this.platform.startStream) {
       const target = this.platform.resolveReplyTarget(replyTarget)
       if (target) {
-        const prefix = `**[#${channelNumberOf(name)}-${name}]** `
+        const prefix = `**[#${channelNumberOf(name)}-${name}]**\n\n`
         this.streams.set(event.turnId, { prefix, text: '', handle: this.platform.startStream(target, `${prefix}…`), lastUpdate: 0 })
       }
     } else if (event.type === 'text-delta') {
@@ -138,13 +138,13 @@ export class CodexRuntimeManager {
       }
       const target = this.platform.resolveReplyTarget(replyTarget)
       if (!target) throw new Error(`reply target not allowed: ${replyTarget}`)
-      const error = await this.platform.send(target, `**[#${channelNumberOf(name)}-${name}]** ${event.text}`)
+      const error = await this.platform.send(target, `**[#${channelNumberOf(name)}-${name}]**\n\n${event.text}`)
       if (error) throw new Error(error)
       counters.replies++
       log(`codex target ${name} replied (turn=${event.turnId})`)
     } else if (event.type === 'activity') {
       const target = this.platform.resolveReplyTarget(replyTarget)
-      if (target) await this.platform.send(target, `**[#${channelNumberOf(name)}-${name}]** ${event.text}`)
+      if (target) await this.platform.send(target, `**[#${channelNumberOf(name)}-${name}]**\n\n${event.text}`)
     } else if (event.type === 'approval') {
       const target = this.platform.resolveReplyTarget(replyTarget)
       if (target) {

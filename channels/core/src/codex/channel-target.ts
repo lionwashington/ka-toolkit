@@ -37,6 +37,12 @@ type CodexUserInput =
 const IMAGE_EXTENSIONS = /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|webp)$/i
 const DANGER_FULL_ACCESS = { type: 'dangerFullAccess' } as const
 
+function messageItemBoundary(left: string, right: string): string {
+  const trailingNewlines = left.match(/\n*$/)?.[0].length ?? 0
+  const leadingNewlines = right.match(/^\n*/)?.[0].length ?? 0
+  return '\n'.repeat(Math.max(0, 2 - trailingNewlines - leadingNewlines))
+}
+
 /** Map a platform message to the current Codex App Server UserInput schema. */
 export function buildCodexTurnInput(source: RuntimeTargetMessage): CodexUserInput[] {
   const path = source.meta.attachment_path?.trim()
@@ -236,6 +242,7 @@ export class CodexChannelTarget implements RuntimeTarget {
       await this.waitUntilThreadIdle()
       this.activeSource = source
       let text = ''
+      let lastAgentMessageItemId = ''
       let lastNotificationAt = Date.now()
       let completionSettled = false
       let resolveCompleted!: (value: any) => void
@@ -305,8 +312,19 @@ export class CodexChannelTarget implements RuntimeTarget {
             this.persistActiveTurn(binding!, turnId)
             void this.options.onEvent({ type: 'turn-started', threadId: binding!.runtimeSessionId, turnId }, source)
           } else if (message.method === 'item/agentMessage/delta') {
-            text += String(params.delta ?? '')
-            void this.options.onEvent({ type: 'text-delta', threadId: binding!.runtimeSessionId, turnId: eventTurnId, delta: String(params.delta ?? '') }, source)
+            const itemId = String(params.itemId ?? '')
+            const rawDelta = String(params.delta ?? '')
+            // A turn can contain several assistant messages (for example,
+            // commentary updates followed by the final answer). Delta text has
+            // no separator of its own, so preserve the App Server item boundary
+            // instead of concatenating independent messages into one paragraph.
+            const separator = text && itemId && lastAgentMessageItemId && itemId !== lastAgentMessageItemId
+              ? messageItemBoundary(text, rawDelta)
+              : ''
+            const delta = `${separator}${rawDelta}`
+            text += delta
+            if (itemId) lastAgentMessageItemId = itemId
+            void this.options.onEvent({ type: 'text-delta', threadId: binding!.runtimeSessionId, turnId: eventTurnId, delta }, source)
           } else if (message.method === 'turn/completed') {
             finish({ turn: params.turn, text })
           }

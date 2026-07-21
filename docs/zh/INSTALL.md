@@ -61,6 +61,8 @@ pnpm build
 | skills（kb、daily-brief 等） | `kb/skills/<name>/SKILL.md` | 直接拷贝；`--switch` 同时链接到 Claude 与 Codex 的技能目录 |
 | 配置模板 + 数据目录 | `config/`（`*.example.*` 模板）+ `state/` + `raw/` + `pending-topics/` | 初始化播种，永不覆盖 |
 
+`--only daemon` 会同时构建 Telegram 和 Lark 两个 runtime；使用 `--only telegram-daemon` 或 `--only lark-daemon` 可只部署一个平台。`--switch` 只会启动或重启与 `channel_kind` 一致的目标。对任一 daemon 目标显式传入 `--channel-kind` 时，安装器会把该选择写入共享的 `config/config.yaml`，但不会改动平台配置值或密钥。
+
 ### 单组件部署及其他参数
 
 ```bash
@@ -71,7 +73,7 @@ pnpm build
 | 参数 | 作用 |
 |------|--------|
 | `--dry-run` | 打印每个动作；不做任何改动。 |
-| `--only <component>` | 只部署单个组件。有效值：`ka`、`node-mcp`、`python-mcp`、`daemon`、`hooks`、`core-cli`、`skills`、`config`。 |
+| `--only <component>` | 只部署单个组件。有效值：`ka`、`node-mcp`、`python-mcp`、`daemon`、`telegram-daemon`、`lark-daemon`、`hooks`、`core-cli`、`skills`、`config`。 |
 | `--switch` | 部署后，把线上注册项切换到 runtime（MCP、ka 链接、cron、hooks、daemon、skills）。见第六步。 |
 | `--cleanup-old` | 在确认切换无误后，删除旧的独立守护进程目录和 `.pre-switch` 备份（不可逆）。 |
 
@@ -99,9 +101,9 @@ ka help
 
 ## 第四步：Telegram-channel 守护进程
 
-该守护进程是一个独立的后台进程，把你的 Telegram 私信与一个或多个 Claude Code 会话桥接起来。它在单一出口持有 bot token —— **CC 进程永不接触 token**。（它取代了已停用的 Claude Code Telegram *插件*；不要使用 `/plugin install telegram` 或 `/telegram:configure`。）
+该守护进程是一个独立的后台进程，把你的 Telegram 私信与一个或多个 agent runtime 会话（Claude Code 或由 Workshop 管理的 Codex）桥接起来。它在单一出口持有 bot token —— **agent 进程永不接触 token**。（它取代了已停用的 Claude Code Telegram *插件*；不要使用 `/plugin install telegram` 或 `/telegram:configure`。）
 
-部署后的守护进程代码位于 `~/.knowledge-assistant/channels/telegram-daemon/`，但它**自身不持有任何配置或密钥** —— 它从共享的 `config/` 桶读取：端口（及轮询调优）来自 `config/config.yaml`（`channels.telegram.port`，默认 `9877`），token + owner id 来自 `config/secrets.yaml`（`channels.telegram.{token,owner_chat_id}`）。`install.sh` 永不触碰这两个文件。
+部署后的守护进程代码位于 `~/.knowledge-assistant/channels/telegram-daemon/`，但它**自身不持有任何配置或密钥** —— 它从共享的 `config/` 桶读取：端口（及轮询调优）来自 `config/config.yaml`（`channels.telegram.port`，默认 `9877`），token + owner id 来自 `config/secrets.yaml`（`channels.telegram.{token,owner_chat_id}`）。安装器可以初始化 `config.yaml` 并写入其顶层 `channel_kind`，但不会写入平台配置值，也绝不写入 `secrets.yaml`。
 
 1. 通过 [@BotFather](https://t.me/BotFather) 创建一个 bot，记下 token。
 

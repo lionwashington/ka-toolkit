@@ -19,43 +19,62 @@ runh() {  # $1=helper expr  $2=config.yaml path  $3=KA_HOME (fixture home)
     KA_HOME="$3" KA_CONFIG="$2" HOME="$3" bash -c "source '$COMMON' 2>/dev/null; $1"
 }
 
-echo "[1/6] no config → telegram / telegram-daemon / 9877 (fallback)"
+echo "[1/9] no config → telegram / telegram-daemon / 9877 (fallback)"
 h="$TMP/h1"; mkdir -p "$h"
 [ "$(runh ka_channel_kind /nonexistent "$h")" = "telegram" ] || { echo "FAIL: kind default"; exit 1; }
 case "$(runh ka_daemon_dir /nonexistent "$h")" in */telegram-daemon) ;; *) echo "FAIL: dir not telegram-daemon"; exit 1;; esac
 [ "$(runh ka_channel_port /nonexistent "$h")" = "9877" ] || { echo "FAIL: port fallback"; exit 1; }
 echo "    ok"
 
-echo "[2/6] channel_kind: lark → lark / lark-daemon"
+echo "[2/9] channel_kind: lark → lark / lark-daemon"
 h="$TMP/h2"; mkdir -p "$h"; cfg="$h/config.yaml"; printf 'channel_kind: lark\n' > "$cfg"
 [ "$(runh ka_channel_kind "$cfg" "$h")" = "lark" ] || { echo "FAIL: kind lark"; exit 1; }
 case "$(runh ka_daemon_dir "$cfg" "$h")" in */lark-daemon) ;; *) echo "FAIL: dir not lark-daemon"; exit 1;; esac
 echo "    ok"
 
-echo "[3/6] port read from config.yaml channels.<kind>.port (not hardcoded)"
+echo "[3/9] port read from config.yaml channels.<kind>.port (not hardcoded)"
 printf 'channel_kind: lark\nchannels:\n  lark:\n    port: 9999\n' > "$cfg"
 [ "$(runh ka_channel_port "$cfg" "$h")" = "9999" ] || { echo "FAIL: port not read from config.yaml"; exit 1; }
 echo "    ok"
 
-echo "[4/6] invalid channel_kind → fail-closed (non-zero)"
+echo "[4/9] invalid channel_kind → fail-closed (non-zero)"
 h="$TMP/h4"; mkdir -p "$h"; printf 'channel_kind: discord\n' > "$h/config.yaml"
 if runh ka_channel_kind "$h/config.yaml" "$h" >/dev/null 2>&1; then
     echo "FAIL: invalid kind was accepted"; exit 1
 fi
 echo "    ok"
 
-echo "[5/6] install --channel-kind=lark --only config persists channel_kind (isolated)"
+echo "[5/9] install --channel-kind=lark --only config persists channel_kind (isolated)"
 rt="$TMP/rt5"
 KA_HOME="$rt" bash "$REPO/install.sh" --channel-kind=lark --only config >/dev/null 2>&1 || true
 grep -qE '^channel_kind:[[:space:]]*lark$' "$rt/config/config.yaml" \
     || { echo "FAIL: install did not persist channel_kind=lark"; cat "$rt/config/config.yaml" 2>/dev/null; exit 1; }
 echo "    ok"
 
-echo "[6/6] install --channel-kind=bogus is rejected (non-zero)"
+echo "[6/9] install --channel-kind=bogus is rejected (non-zero)"
 rt="$TMP/rt6"
 if KA_HOME="$rt" bash "$REPO/install.sh" --channel-kind=bogus --only config >/dev/null 2>&1; then
     echo "FAIL: bogus channel-kind was accepted"; exit 1
 fi
+echo "    ok"
+
+echo "[7/9] --only telegram-daemon excludes the Lark bundle"
+out="$(KA_HOME="$TMP/rt7" bash "$REPO/install.sh" --dry-run --only telegram-daemon --channel-kind telegram)"
+echo "$out" | grep -q 'telegram-daemon' || { echo "FAIL: telegram daemon missing"; exit 1; }
+echo "$out" | grep -q 'lark daemon →' && { echo "FAIL: lark daemon unexpectedly selected"; exit 1; }
+echo "    ok"
+
+echo "[8/9] platform-specific install persists an explicit channel kind"
+rt="$TMP/rt8"
+out="$(KA_HOME="$rt" bash "$REPO/install.sh" --dry-run --only telegram-daemon --channel-kind telegram)"
+echo "$out" | grep -q "upsert $rt/config/config.yaml channel_kind=telegram" \
+    || { echo "FAIL: targeted install did not plan to persist channel kind"; exit 1; }
+echo "    ok"
+
+echo "[9/9] --only lark-daemon excludes the Telegram bundle"
+out="$(KA_HOME="$TMP/rt9" bash "$REPO/install.sh" --dry-run --only lark-daemon --channel-kind lark)"
+echo "$out" | grep -q 'lark-daemon' || { echo "FAIL: lark daemon missing"; exit 1; }
+echo "$out" | grep -q 'channel daemon →.*telegram-daemon' && { echo "FAIL: telegram daemon unexpectedly selected"; exit 1; }
 echo "    ok"
 
 echo "26-channel-kind OK"

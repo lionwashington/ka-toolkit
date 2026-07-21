@@ -37,15 +37,15 @@ CODEX_SKILLS_DIR="${KA_CODEX_SKILLS:-${CODEX_HOME:-$HOME/.codex}/skills}" # Code
 TELEGRAM_DIR="${KA_TELEGRAM_DIR:-$HOME/.telegram-channel}"            # old daemon location
 LARK_DIR="${KA_LARK_DIR:-$HOME/.lark-channel}"                        # old lark daemon location
 # The active channel daemon (telegram|lark) is chosen via `--channel-kind` and
-# persisted to config.yaml `channel_kind` (see resolve_active_kind below). Both
-# daemons are always deployed; only the active one is started.
+# persisted to config.yaml `channel_kind` (see resolve_active_kind below).
+# `--only daemon` deploys both; the platform-specific targets deploy one.
 
 DRY_RUN=0; ONLY=""; DO_SWITCH=0; DO_CLEANUP=0; CHANNEL_KIND_ARG=""
 usage() {
   cat <<'EOF'
 Usage: ./install.sh [options]
   --dry-run                  Print actions without changing runtime files
-  --only <component>         Deploy one component
+  --only <component>         Deploy one component (daemon, telegram-daemon, or lark-daemon for channels)
   --switch                   Switch live registrations after deployment
   --cleanup-old              Remove obsolete deployed artifacts
   --channel-kind <kind>      Select telegram or lark
@@ -71,10 +71,17 @@ done
 log()  { echo "[install] $*"; }
 run()  { if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] $*"; else eval "$@"; fi; }
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
+want_any() {
+  [ -z "$ONLY" ] && return 0
+  local component
+  for component in "$@"; do [ "$ONLY" = "$component" ] && return 0; done
+  return 1
+}
 
 # ── Active channel daemon kind (single source of truth = config.yaml) ────────
-# BOTH daemons (telegram + lark) are ALWAYS deployed; only the ACTIVE kind is
-# started, and that kind is persisted to config.yaml `channel_kind` so every
+# The combined `daemon` target deploys both platforms; platform-specific targets
+# deploy one. Only the ACTIVE kind is started, and that kind is persisted to
+# config.yaml `channel_kind` so every
 # runtime ka command reads it from there (no env knob). Resolution precedence:
 #   --channel-kind arg  >  existing config.yaml  >  interactive prompt  >  telegram
 # (The legacy KA_CHANNEL selector is retired — KA_CHANNEL now means only a
@@ -103,7 +110,10 @@ resolve_active_kind() {
     telegram|lark) ACTIVE_KIND="$k" ;;
     *) log "✖ channel-kind='$k' is invalid (expected telegram|lark)"; exit 2 ;;
   esac
-  log "active channel daemon = ${ACTIVE_KIND} (both daemons deploy; only ${ACTIVE_KIND} is started)"
+  local selection="both channel daemons"
+  [ "$ONLY" = "telegram-daemon" ] && selection="telegram daemon only"
+  [ "$ONLY" = "lark-daemon" ] && selection="lark daemon only"
+  log "active channel daemon = ${ACTIVE_KIND} (deployment selection: ${selection})"
 }
 resolve_active_kind
 
@@ -355,8 +365,7 @@ deploy_python_mcp() {    # P1.3
 }
 
 deploy_daemon() {        # telegram channel daemon → runtime/telegram-daemon (esbuild single-file bundle)
-  want daemon || return 0
-  # Always deployed (both daemons ship); only the ACTIVE kind is started at switch.
+  want_any daemon telegram-daemon || return 0
   # channel-core kernel + telegram-platform plugin + deps (grammy/express/sdk) esbuild'd
   # into a single self-contained daemon.mjs → runtime holds no .ts source and no node_modules.
   # 🔴 Bundle via a "generated temp static entry" (import platform/init + runChannelDaemon) —
@@ -427,8 +436,7 @@ EOF
 }
 
 deploy_lark_daemon() {   # lark channel daemon → runtime/lark-daemon (esbuild single-file bundle)
-  want daemon || return 0
-  # Always deployed (both daemons ship); only the ACTIVE kind is started at switch.
+  want_any daemon lark-daemon || return 0
   # Same as deploy_daemon: channel-core kernel + lark-platform plugin + deps esbuild'd into a
   # single self-contained daemon.mjs (generated temp static entry guarantees a single core
   # instance). runtime/lark-daemon has no .ts/node_modules.
@@ -632,6 +640,42 @@ PY
   log "  OK data directories ready; seeded ${seeded} new config(s) (all existing files kept, never overwritten)"
 }
 
+# A platform-specific daemon install does not otherwise run seed_config, but an
+# explicit selector still has to become the shared source of truth used by later
+# `ka` commands and daemon restarts. Do not create or rewrite configuration when
+# no selector was supplied.
+persist_targeted_channel_kind() {
+  [ -n "$ONLY" ] || return 0
+  want_any daemon telegram-daemon lark-daemon || return 0
+  [ -n "$CHANNEL_KIND_ARG" ] || return 0
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "  [dry-run] upsert ${CONFIG_YAML} channel_kind=${ACTIVE_KIND}"
+    return 0
+  fi
+  mkdir -p "$KA_HOME/config"
+  if [ ! -f "$CONFIG_YAML" ]; then
+    if [ -f "$REPO_ROOT/config/config.example.yaml" ]; then
+      cp "$REPO_ROOT/config/config.example.yaml" "$CONFIG_YAML"
+    else
+      : > "$CONFIG_YAML"
+    fi
+  fi
+  CONFIG_YAML="$CONFIG_YAML" ACTIVE_KIND="$ACTIVE_KIND" python3 - <<'PY'
+import os, re
+p = os.environ["CONFIG_YAML"]; kind = os.environ["ACTIVE_KIND"]
+with open(p) as f: lines = f.read().splitlines()
+out=[]; done=False
+for ln in lines:
+    if re.match(r'^[ \t]*channel_kind[ \t]*:', ln):
+        out.append(f"channel_kind: {kind}"); done=True
+    else:
+        out.append(ln)
+if not done: out.insert(0, f"channel_kind: {kind}")
+with open(p, "w") as f: f.write("\n".join(out) + "\n")
+PY
+  log "  OK config.yaml channel_kind = ${ACTIVE_KIND}"
+}
+
 # ── Switch steps (--switch; each step backs up to .pre-switch first) ──────────
 register_mcp() {         # switch ①: point CLAUDE_JSON's node MCP at runtime/mcp
   want node-mcp || return 0
@@ -784,7 +828,7 @@ PY
 }
 
 switch_daemon() {        # switch ⑤: migrate secrets + (re)start the telegram daemon IFF it is the active kind
-  want daemon || return 0
+  want_any daemon telegram-daemon || return 0
   [ "$ACTIVE_KIND" = "telegram" ] || { log "switch ⑤ telegram daemon → not the active kind (channel_kind=${ACTIVE_KIND}); deployed but NOT started"; return 0; }
   [ "$DO_SWITCH" = 1 ] || return 0
   local dest="$RUNTIME/channels/telegram-daemon"
@@ -834,10 +878,11 @@ switch_daemon() {        # switch ⑤: migrate secrets + (re)start the telegram 
   else
     log "  WARN ${dest}/start.sh missing (re-run ./install.sh to update first); not restarted"
   fi
+  return 0
 }
 
 switch_lark_daemon() {   # switch ⑤b: start runtime/lark-daemon IFF lark is the active kind
-  want daemon || return 0
+  want_any daemon lark-daemon || return 0
   [ "$ACTIVE_KIND" = "lark" ] || { log "switch ⑤b lark daemon → not the active kind (channel_kind=${ACTIVE_KIND}); deployed but NOT started"; return 0; }
   [ "$DO_SWITCH" = 1 ] || return 0
   local dest="$RUNTIME/channels/lark-daemon"
@@ -863,6 +908,7 @@ switch_lark_daemon() {   # switch ⑤b: start runtime/lark-daemon IFF lark is th
   else
     log "  WARN ${dest}/start.sh does not exist"
   fi
+  return 0
 }
 
 switch_skills() {        # switch ⑥: runtime skill symlinks for Claude Code and Codex
@@ -938,7 +984,7 @@ main() {
   log "RUNTIME     = $RUNTIME"
   [ "$DRY_RUN" = 1 ] && log "mode: DRY-RUN (print only, no changes)"
   [ -n "$ONLY" ] && log "deploy only: $ONLY"
-  log "channel kind  = ${ACTIVE_KIND} (both daemons deployed; only this one started; persisted to config.yaml)"
+  log "channel kind  = ${ACTIVE_KIND} (only the selected active daemon is started; persisted to config.yaml)"
   echo "----"
   precheck_deps
   echo "----"
@@ -954,6 +1000,7 @@ main() {
   deploy_core_cli
   deploy_skills
   seed_config
+  persist_targeted_channel_kind
   register_mcp
   switch_ka_link
   switch_cron

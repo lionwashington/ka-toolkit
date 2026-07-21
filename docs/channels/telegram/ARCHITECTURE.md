@@ -33,6 +33,10 @@ daemon ── ④ bot.api.sendMessage(owner, "**[#N-name]** " + text) ──▶ 
 ```
 
 The terminal transcript never reaches the user; the user only sees what the CC proactively sends via the `reply` tool.
+Codex streaming instead separates that prefix from the body with a blank line.
+Long Telegram replies are split at transport limits without removing newline
+characters, so chunking cannot collapse paragraphs. An active Codex stream edits
+the first chunk; finalization sends any remaining chunks as follow-up messages.
 
 ---
 
@@ -107,7 +111,7 @@ reply({ chat_id: string, text: string })
 ```
 
 - → `sendToTelegram(owner_chat_id, "**[#<num>-<name>]** " + text)`, using grammy `bot.api.sendMessage`, plain text (no parse_mode, to avoid the `**[name]**` prefix or arbitrary body triggering markdown parsing).
-- **chunk(4096)**: a single Telegram message is capped at 4096 characters; overlong text is split at paragraph boundaries.
+- **chunk(4096)**: a single Telegram message is capped at 4096 characters; overlong text is split near paragraph boundaries without deleting the boundary characters. Codex streaming previews the first chunk and sends remaining chunks at completion.
 - **prefix `**[#<num>-<name>]**`**: a stable number + channel name, so the user can tell which session replied and route back by number (`to 7:`). See §7 for numbering.
 - 🔴 **security**: no matter what `chat_id` a CC passes, the daemon **always sends only to the configured owner**. An injected/compromised CC cannot use `reply` to message an arbitrary chat — `chat_id` remains a required parameter (the CC follows the protocol), but it is **not trusted to route the outbound target**.
 

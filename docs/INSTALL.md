@@ -77,6 +77,12 @@ All paths below are relative to `KA_HOME` (`~/.knowledge-assistant`).
 | skills (kb, daily-brief, …) | `kb/skills/<name>/SKILL.md` | plain copy; `--switch` links both Claude and Codex discovery roots |
 | config templates + data dirs | `config/` (`*.example.*` templates) + `state/` + `raw/` + `pending-topics/` | seeded, never overwritten |
 
+`--only daemon` bundles both platform runtimes. Use `--only telegram-daemon` or
+`--only lark-daemon` to deploy just one platform. `--switch` starts or restarts
+only the selected target when it is also the active `channel_kind`. Passing an
+explicit `--channel-kind` with any daemon target persists that selector in the
+shared `config/config.yaml` without changing platform settings or secrets.
+
 ### Single-component deploys and other flags
 
 ```bash
@@ -87,7 +93,7 @@ All paths below are relative to `KA_HOME` (`~/.knowledge-assistant`).
 | Flag | Effect |
 |------|--------|
 | `--dry-run` | Print every action; change nothing. |
-| `--only <component>` | Deploy a single component. Valid: `ka`, `node-mcp`, `python-mcp`, `daemon`, `hooks`, `core-cli`, `skills`, `config`. |
+| `--only <component>` | Deploy a single component. Valid: `ka`, `node-mcp`, `python-mcp`, `daemon`, `telegram-daemon`, `lark-daemon`, `hooks`, `core-cli`, `skills`, `config`. |
 | `--switch` | After deploying, flip live registrations to the runtime (MCP, ka link, cron, hooks, daemon, skills). See Step 6. |
 | `--cleanup-old` | After a verified switch, remove the old standalone daemon dir and `.pre-switch` backups (irreversible). |
 
@@ -120,8 +126,9 @@ ka help
 ## Step 4: Telegram-channel daemon
 
 The daemon is an independent background process that bridges your Telegram DMs
-with one or more Claude Code sessions. It holds the bot token at a single exit
-point — **CC processes never touch the token**. (This replaces the retired
+with one or more agent-runtime sessions (Claude Code or Workshop-owned Codex).
+It holds the bot token at a single exit point — **agent processes never touch
+the token**. (This replaces the retired
 Claude Code Telegram *plugin*; do not use `/plugin install telegram` or
 `/telegram:configure`.)
 
@@ -129,8 +136,9 @@ The deployed daemon code lives at `~/.knowledge-assistant/channels/telegram-daem
 but it holds **no config or secrets of its own** — it reads them from the shared
 `config/` bucket: the port (and polling tuning) from `config/config.yaml`
 (`channels.telegram.port`, default `9877`) and the token + owner id from
-`config/secrets.yaml` (`channels.telegram.{token,owner_chat_id}`). `install.sh`
-never touches those files.
+`config/secrets.yaml` (`channels.telegram.{token,owner_chat_id}`). The installer
+may seed `config.yaml` and persist its top-level `channel_kind`; it never writes
+platform configuration values or `secrets.yaml`.
 
 1. Create a bot via [@BotFather](https://t.me/BotFather) and note the token.
 
