@@ -42,6 +42,29 @@ describe('incremental reindex', () => {
     expect(hits.some((h) => h.topic === 'gamma')).toBe(true)
   })
 
+  it('indexes a never-seen migrated path even when its mtime is below the watermark', async () => {
+    const oldMtime = Math.max(1, engine.status()!.source_mtime_max - 86_400_000)
+    writeTopic(kb, 'migrated-old', 'restored archive uniquemigratedword', oldMtime)
+    const r = await incrementalReindex(engine, kb, fake)
+    expect(r.changedPaths).toContain('topics/migrated-old.md')
+    expect(await engine.indexedPaths()).toContain('topics/migrated-old.md')
+  })
+
+  it('watermarks a valid zero-chunk hub instead of retrying it forever', async () => {
+    const path = join(kb, 'topics', 'hub.md')
+    writeFileSync(path, `---\ntitle: hub\n---\n\n<!-- sub-topic-index: managed by ka-split-topic — do NOT edit manually -->\n\n## Sub-Topic Index\n- [[alpha]]\n`)
+    const old = new Date(Math.max(1, engine.status()!.source_mtime_max - 86_400_000))
+    utimesSync(path, old, old)
+
+    const first = await incrementalReindex(engine, kb, fake)
+    expect(first.changedPaths).toContain('topics/hub.md')
+    expect(first.rowCount).toBe(0)
+    expect(await engine.indexedPaths()).toContain('topics/hub.md')
+
+    const second = await incrementalReindex(engine, kb, fake)
+    expect(second.changedPaths).toEqual([])
+  })
+
   it('is a no-op (no version bump) when nothing changed', async () => {
     const v = engine.status()!.version
     const r = await incrementalReindex(engine, kb, fake)

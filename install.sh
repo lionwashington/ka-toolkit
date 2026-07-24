@@ -194,9 +194,9 @@ deploy_node_mcp() {      # P1.2 — pure-JS node MCPs (no native deps): single s
 
 deploy_kb_mcp() {        # kb (knowledge-assistant) MCP + kb-retrieval daemon — native deps
   want node-mcp || return 0
-  # The kb MCP's single backend is the LanceDB hybrid engine, which pulls in NATIVE
-  # modules (fastembed→onnxruntime, @lancedb/lancedb's .node) that esbuild can't
-  # bundle. Strategy (hybrid of the channel-daemon bundle + the opennutrition copy):
+  # Embedding mode pulls in NATIVE modules (fastembed→onnxruntime,
+  # @lancedb/lancedb's .node) that esbuild can't bundle. FTS5 mode uses Node's
+  # built-in node:sqlite and adds no deployed package. Strategy:
   #   1. esbuild BOTH entries to self-contained .mjs — @ka/core + every pure-JS dep
   #      inlined; ONLY the 3 native packages left external.
   #   2. `npm install` just those 3 natives into $dest/node_modules so the platform's
@@ -262,7 +262,7 @@ EOF
     || { log "  FAIL native deps missing after npm install"; return 0; }
   # 5) Launch scripts for the kb-retrieval daemon.
   local f
-  for f in daemon.sh start.sh stop.sh status.sh; do
+  for f in daemon.sh daemon-process.sh start.sh stop.sh status.sh; do
     cp "$REPO_ROOT/kb/ops/kb-retrieval/$f" "$dest/$f"
   done
   chmod +x "$dest"/*.sh
@@ -561,7 +561,7 @@ deploy_core_cli() {      # core CLI (called by kb skill) → runtime/core-cli (t
     return 0
   fi
   mkdir -p "$dest"
-  # These tsup bundles are ESM. Node 22+ can infer module syntax, but the
+  # These tsup bundles are ESM. Node 22.5+ can infer module syntax, but the
   # Debian/Ubuntu Node versions supported by KA require an explicit package
   # boundary when the files are copied outside the repository.
   printf '%s\n' '{"type":"module"}' > "$dest/package.json"
@@ -965,10 +965,19 @@ do_cleanup_old() {       # --cleanup-old: after switch is verified OK, remove ol
 }
 
 precheck_deps() {        # dependency precheck (fail-closed style: clear warnings on missing, no silent fallback)
-  local miss=0
+  local miss=0 node_version=""
   _need() { command -v "$1" >/dev/null 2>&1 || { log "  ⚠️ missing $1 — $2"; miss=$((miss + 1)); }; }
   log "dependency precheck (missing items only warn; for how to install, see the Ubuntu section of docs/INSTALL):"
-  _need node "runtime (recommend nvm to install Node 22+)"
+  if command -v node >/dev/null 2>&1; then
+    node_version="$(node -p 'process.versions.node' 2>/dev/null || true)"
+    if ! node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>22||(a===22&&b>=5)?0:1)' 2>/dev/null; then
+      log "  ⚠️ incompatible node ${node_version:-unknown} — Node 22.5+ is required for the default FTS5 backend"
+      miss=$((miss + 1))
+    fi
+  else
+    log "  ⚠️ missing node — runtime (install Node 22.5+; nvm recommended)"
+    miss=$((miss + 1))
+  fi
   _need pnpm "monorepo install/build (corepack enable)"
   _need python3 "ops / cron / yaml parsing"
   _need git "source"

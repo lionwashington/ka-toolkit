@@ -281,8 +281,9 @@ whether it is `default`.
 |---|---|
 | `ka workshop [start\|stop\|restart\|spawn-mates\|remove-mate] [name]` | workshop lifecycle / tmux panes (see §3.2); restart with no name = whole workshop; `remove-mate` deletes any agent from `workshop.yaml` after stopping its pane; `main: true` is only an optional Channel alias |
 | `ka channel [start\|stop\|restart\|status\|config]` | the channel daemon (kind from `config.yaml channel_kind`) — 1st resident daemon |
-| `ka kb [start\|stop\|restart\|status]` | the kb retrieval daemon (LanceDB `kb_search` backend, port 7705) — 2nd resident daemon |
-| `ka kb reindex [--full]` | (re)build the `kb_search` index (incremental \| full) |
+| `ka kb [start\|stop\|restart\|status]` | dual-mode KB daemon (`embedding` LanceDB hybrid or SQLite `fts5`, port 7705) |
+| `ka kb reindex [--full] [--mode embedding\|fts5\|all]` | update one or both search indexes |
+| `ka kb benchmark <fixture> [embedding\|fts5\|both]` | compare retrieval quality and resource cost |
 | `ka kb distill [status]` | trigger background distillation / show its progress (foreground is inside `/kb distill`) |
 | `ka status` | <1s health summary (config / session / both daemons / channels / cron) |
 | `ka doctor` | deeper read-only consistency diagnostics + fix hints (both daemons) |

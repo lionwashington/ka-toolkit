@@ -97,6 +97,7 @@ async function setupConfig(): Promise<Record<string, any>> {
       interval: distillInterval,
     },
     retrieval: {
+      mode: 'fts5',
       max_results: 5,
     },
   }

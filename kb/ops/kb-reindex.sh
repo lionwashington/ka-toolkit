@@ -1,8 +1,9 @@
 #!/bin/bash
-# ka kb reindex — (re)build the LanceDB index via the running kb-retrieval daemon,
-# reusing its already-loaded embedding model (no 2GB reload).
-#   ka kb reindex          incremental: only files changed since last index (+ drop vanished)
-#   ka kb reindex --full   drop + rebuild everything (slow; CPU embed of the whole KB)
+# ka kb reindex — (re)build one or both search indexes via the retrieval daemon.
+#   ka kb reindex                         incremental active/configured mode
+#   ka kb reindex --mode fts5             incremental low-memory FTS5 index
+#   ka kb reindex --mode embedding --full full LanceDB embedding rebuild
+#   ka kb reindex --mode all              update both indexes (benchmark/switch prep)
 # This is a thin curl to the daemon's /api/reindex — no native deps here. distill calls
 # the same endpoint after writing topics, so new knowledge shows up in kb_search in seconds.
 set -u
@@ -17,8 +18,30 @@ PORT="$(awk '
 ' "$CONFIG_YAML" 2>/dev/null)"
 [ -n "$PORT" ] || PORT="7705"
 
-QS=""; MAXT=300
-if [ "${1:-}" = "--full" ]; then QS="?full=1"; MAXT=3600; fi
+FULL=0; MODE=""; MAXT=300
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --full) FULL=1; MAXT=3600 ;;
+    --mode)
+      shift
+      MODE="${1:-}"
+      case "$MODE" in embedding|fts5|all) ;; *)
+        echo "usage: ka kb reindex [--full] [--mode embedding|fts5|all]" >&2
+        exit 2
+      esac
+      ;;
+    *)
+      echo "usage: ka kb reindex [--full] [--mode embedding|fts5|all]" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+QS="?"
+[ "$FULL" = 1 ] && QS="${QS}full=1&"
+[ -n "$MODE" ] && QS="${QS}mode=${MODE}&"
+QS="${QS%[?&]}"
 
 r=$(curl -sf --max-time "$MAXT" -X POST "http://$HOST:$PORT/api/reindex$QS" 2>/dev/null || true)
 if [ -n "$r" ]; then

@@ -17,7 +17,7 @@ VERB="${1:-status}"; [ $# -gt 0 ] && shift || true
 case "$VERB" in
     start)
         [ -x "$DIR/start.sh" ] || { log_err "kb-retrieval not deployed at $DIR (run ./install.sh --only node-mcp)"; exit 1; }
-        log_info "starting kb-retrieval daemon (model warmup may take ~10-50s on cold start)…"
+        log_info "starting kb-retrieval daemon (FTS5 starts quickly; embedding cold start may take ~10-50s)…"
         exec "$DIR/start.sh"
         ;;
     stop)

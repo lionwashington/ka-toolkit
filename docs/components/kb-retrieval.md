@@ -1,9 +1,15 @@
-# kb retrieval — LanceDB hybrid search (as-built)
+# kb retrieval — embedding + FTS5 dual-mode search
 
-How `kb_search` works: a chunk-level **LanceDB hybrid** engine (vector ANN +
-Chinese-aware FTS + RRF) served by one shared daemon, kept fresh by incremental
-sync. The four MCP tools (`kb_search` / `kb_read_topic` / `kb_list_topics` /
-`kb_status`) are the stable surface; everything below is behind them.
+`kb_search` supports two explicit modes behind the same shared daemon:
+
+- `fts5` (default): SQLite FTS5 lexical search over the same chunks. It uses no
+  embedding model, so startup, resident memory and query latency are much lower.
+- `embedding`: the existing chunk-level LanceDB hybrid
+  engine (vector ANN + Lance FTS + RRF).
+
+Select the default with `retrieval.mode`; a caller may override it per
+`kb_search` call with `mode: embedding|fts5`. The remaining MCP tools are
+unchanged.
 
 **Only `topics/` is indexed.** Topics are the distilled, structured knowledge —
 the retrieval target. Raw `conversations/*.md` are NOT indexed: per memory-system
@@ -15,16 +21,17 @@ index each daily log's short `## TL;DR` only — not the full log.)
 Ground truth: `kb/core/src/retrieval/` (engine) + `kb/mcp-server/src/daemon.ts`
 (daemon). Code is authoritative for mechanism.
 
-## Pipeline
+## Pipelines
 
 ```
 topics/*.md  (conversations/ NOT indexed — distill mines them into topics)
-   └─ chunk (by ## H2, parent/sub aware, "topic › heading" prefix)
-        └─ embed (multilingual-e5-large, passage side)        ─┐
-challenge query ─ embed (query side) ─┐                        │
-                                      ▼                        ▼
-                       vector ANN  +  Intl-segmented FTS  →  RRF fuse
-                          → de-dupe to topic (best chunk) → top-k
+   └─ chunk (by ## H2, parent/sub aware)
+        ├─ embedding mode: "topic › heading" context + multilingual-e5-large
+        │    query vector + passage vectors → LanceDB vector ANN + FTS → RRF
+        │    → de-dupe to topic → top-k
+        │
+        └─ fts5 mode: Intl.Segmenter(title + heading + chunk text)
+             → SQLite FTS5 unicode61/BM25 → de-dupe to topic → top-k
 ```
 
 - **Chunking** (`chunker.ts`): split on `## ` (H2), parent/sub aware, prepend
@@ -43,37 +50,43 @@ challenge query ─ embed (query side) ─┐                        │
   (best-scoring chunk). (A per-kind weight table remains for parent/sub; since only
   topics are indexed there are no conversation rows to down-weight anymore.)
 - **Chinese FTS** (`segmenter.ts`): Node's built-in `Intl.Segmenter` pre-segments
-  text into space-joined tokens → LanceDB's default FTS tokenizer. Zero-dependency;
-  avoids LanceDB's native jieba dict (a non-portable per-machine install).
+  text into space-joined tokens for both backends. This avoids a native jieba
+  dictionary and gives portable Chinese lexical recall.
+- **SQLite FTS5** (`fts5-engine.ts`): Node 22's built-in `node:sqlite`, WAL mode,
+  atomic full/incremental updates, an independent manifest, and an independent
+  `.vectors/fts5/kb.sqlite` file. It never imports fastembed/ONNX/LanceDB.
 
 ## Freshness / sync
 
-The index is rebuilt out-of-band, never on the read path. `index-manifest.json`
+Indexes are rebuilt out-of-band, never on the read path. Each mode has its own
+`index-manifest.json`
 (`manifest.ts`) is the single source of truth: `version` / `source_mtime_max` /
 `status` / counts. 
 - **Reader reload-on-version**: a long-lived reader (the daemon) re-opens the table
   when the manifest version changes — kills in-memory staleness with no restart.
-- **Incremental sync** (`indexer.ts` `incrementalReindex`): re-embed only files with
-  `mtime > source_mtime_max` (and drop rows for files deleted from disk), then
-  `upsert` (delete changed/removed rows → add new → refresh FTS → bump version).
-  No-op (no model load, no version bump) when nothing changed.
-- **Triggers**: distill calls it after writing topics (so new knowledge is
-  searchable in seconds); the daemon also runs an incremental self-heal on startup
-  (catches files changed while it was down — mtime-based, so misses self-correct).
+- **Incremental sync**: update only files with `mtime > source_mtime_max` and
+  remove vanished paths. Embedding mode re-embeds changed chunks; FTS5 updates
+  lexical rows only. `ka kb reindex --mode all` prepares both indexes.
+- **Triggers**: if the configured mode has no index, daemon startup builds it once.
+  For the default FTS5 mode this is local lexical work and never loads embedding.
+  Distill then keeps the configured mode fresh after writing topics. In embedding
+  mode the daemon also runs an incremental self-heal on later startups.
 - **Fail-loud**: build errors record `status:'error'` in the manifest and re-throw
   — never silently swallowed.
 
 ## Shared daemon (kb-retrieval)
 
-One resident process holds a single retriever — one LanceDB connection + the e5
-model **loaded once** — and serves every CC over `/mcp` (Streamable HTTP), instead
-of each CC spawning its own stdio server (which would load a multi-GB model per CC).
-- Routes: `/mcp` (MCP transport), `/api/status`, `/api/reindex` (`?full=1` else
-  incremental, serialized), `/api/shutdown`.
+One resident process holds a dual-mode retriever and serves every CC over `/mcp`.
+With `retrieval.mode: fts5`, the e5 model is not loaded at startup; an explicit
+embedding search still loads it lazily.
+- Routes: `/mcp`, `/api/status`, `/api/reindex`
+  (`?full=1&mode=embedding|fts5|all`), `/api/search` (loopback benchmark), and
+  `/api/shutdown`.
 - Singleton via fixed loopback port (`retrieval.daemon.{host,port}`, default
   `127.0.0.1:7705`) — a second daemon hits EADDRINUSE and exits cleanly.
-- CLI: `ka kb [start|stop|restart|status]`, `ka kb reindex [--full]`
-  (a thin curl to `/api/reindex`).
+- CLI: `ka kb [start|stop|restart|status]`,
+  `ka kb reindex [--full] [--mode embedding|fts5|all]`, and
+  `ka kb benchmark <fixture> [embedding|fts5|both]`.
 - **Session liveness**: a connected CC holds a GET SSE stream open; the daemon idle-evicts
   only sessions whose streams have ALL closed (genuinely disconnected), never a live-but-idle
   CC. This matters because a wrongly-evicted Claude Code drops `kb_search` from its tool list
@@ -81,7 +94,7 @@ of each CC spawning its own stdio server (which would load a multi-GB model per 
 
 ## Deployment note (native deps)
 
-The engine pulls in native modules (onnxruntime via fastembed, `@lancedb/lancedb`'s
+Embedding mode pulls in native modules (onnxruntime via fastembed, `@lancedb/lancedb`'s
 `.node`) that can't be esbuild-bundled into a self-contained file. So the kb MCP +
 daemon deploy as an esbuild bundle (with `@ka/core` + all pure-JS deps inlined,
 only the 3 native packages external) plus an `npm install` of just those natives
@@ -89,3 +102,12 @@ next to it. The retrieval engine is reached via the `@ka/core/retrieval` subpath
 behind a dynamic import, so `import '@ka/core'` loads zero native modules —
 non-search consumers (cron CLIs, distill, hooks) don't pay the model/onnxruntime
 load. See `install.sh` `deploy_kb_mcp()`.
+
+FTS5 adds no deployed npm dependency: it uses the SQLite/FTS5 library included in
+the required Node 22.5+ runtime. Node labels
+`node:sqlite` experimental, so it may emit one startup warning; the API used here
+is covered by unit and daemon integration tests.
+
+Use `ka kb benchmark <fixture> both` to compare quality, latency, CPU and daemon
+RSS on a sanitized corpus. Benchmark fixtures and raw results may contain private
+knowledge-base information and must remain outside this public repository.

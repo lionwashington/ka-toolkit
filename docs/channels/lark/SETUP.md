@@ -21,7 +21,7 @@ Lark group <──webhook POST── lark daemon       <──reply tool── C
 
 ## 1. Prerequisites
 
-- **Node 22+**: `node -v`
+- **Node 22.5+**: `node -v`
 - **pnpm**: `npm i -g pnpm`
 - **lark-cli**: installed and **authenticated** (logged in with your Lark app credentials; needs `im:message`/read-message permission).
   Verify: `lark-cli im +chat-messages-list --chat-id <some group id> --page-size 1 --format json` returns `{"ok":true,...}`.

@@ -4,11 +4,13 @@
 // distill); this reader opens it lazily and reloads on manifest version bump.
 import { join } from 'node:path'
 import type { LanceEngine } from './lance-engine.js'
+import type { Fts5Engine } from './fts5-engine.js'
 import type { Embedder } from './embedder.js'
-import type { SearchOptions, SearchResult } from './types.js'
+import type { SearchMode, SearchOptions, SearchResult } from './types.js'
 
 export interface ReindexResult {
   full: boolean
+  mode?: SearchMode | 'all'
   changedPaths?: string[]
   removedPaths?: string[]
   rowCount?: number
@@ -23,27 +25,32 @@ export interface ReindexResult {
 export interface Retriever {
   search(query: string, options?: SearchOptions): Promise<SearchResult[]>
   indexAll(): Promise<void>
-  /** (Re)build the index. Optional — only the LanceDB retriever supports it. */
-  reindex?(opts?: { full?: boolean }): Promise<ReindexResult>
+  /** (Re)build one or both retrieval indexes. */
+  reindex?(opts?: { full?: boolean; mode?: SearchMode | 'all' }): Promise<ReindexResult>
   /** Compact + prune the index (reclaim append/MVCC churn). Optional — LanceDB only.
    * `retentionMs` overrides the version-retention margin (0 = deepest clean; used by the
    * one-time cleanup — the default margin keeps a safety window for ongoing compaction). */
   optimize?(retentionMs?: number): Promise<unknown>
   /** Index freshness manifest (version/built_at/counts/status). Optional. */
-  indexStatus?(): Promise<import('./manifest.js').IndexManifest | null>
+  indexStatus?(mode?: SearchMode): Promise<import('./manifest.js').IndexManifest | null>
+  readonly defaultMode?: SearchMode
 }
 
 /** LanceDB index location under the knowledge base. */
 export const LANCE_DB_SUBDIR = join('.vectors', 'lancedb')
+export const FTS5_DB_SUBDIR = join('.vectors', 'fts5')
 
 export class LanceRetriever implements Retriever {
   private enginePromise: Promise<LanceEngine> | null = null
+  private fts5EnginePromise: Promise<Fts5Engine> | null = null
   private embedderInstance: Embedder | null = null
 
   constructor(
     private readonly kbPath: string,
     private readonly embedder?: Embedder,
     private readonly dbDir?: string,
+    readonly defaultMode: SearchMode = 'fts5',
+    private readonly fts5DbPath?: string,
   ) {}
 
   /** Resolve + cache the embedder (so search and reindex share one loaded model). */
@@ -74,14 +81,26 @@ export class LanceRetriever implements Retriever {
     return this.enginePromise
   }
 
+  /** SQLite is also lazy: embedding-only deployments never even open its file. */
+  private fts5Engine(): Promise<Fts5Engine> {
+    if (!this.fts5EnginePromise) {
+      this.fts5EnginePromise = import('./fts5-engine.js').then(
+        ({ Fts5Engine }) => new Fts5Engine(this.fts5DbPath ?? join(this.kbPath, FTS5_DB_SUBDIR, 'kb.sqlite')),
+      )
+    }
+    return this.fts5EnginePromise
+  }
+
   // No-op: the index is (re)built by reindex(); search opens it lazily and reloads
   // on manifest version bump. Keeps MCP/daemon startup fast.
   async indexAll(): Promise<void> {}
 
   /** Read the index manifest directly (no engine/model load) — for kb_status. */
-  async indexStatus() {
+  async indexStatus(mode: SearchMode = this.defaultMode) {
     const { readManifest, MANIFEST_FILE } = await import('./manifest.js')
-    const dir = this.dbDir ?? join(this.kbPath, LANCE_DB_SUBDIR)
+    const dir = mode === 'fts5'
+      ? (this.fts5DbPath ? join(this.fts5DbPath, '..') : join(this.kbPath, FTS5_DB_SUBDIR))
+      : (this.dbDir ?? join(this.kbPath, LANCE_DB_SUBDIR))
     return readManifest(join(dir, MANIFEST_FILE))
   }
 
@@ -90,21 +109,51 @@ export class LanceRetriever implements Retriever {
    * daemon doesn't reload the 2GB model). Default = incremental (only files changed
    * since the index's source_mtime_max, + drop vanished files); `full` = drop+rebuild.
    */
-  async reindex(opts: { full?: boolean } = {}): Promise<ReindexResult> {
+  async reindex(opts: { full?: boolean; mode?: SearchMode | 'all' } = {}): Promise<ReindexResult> {
+    const mode = opts.mode ?? this.defaultMode
+    if (mode === 'fts5') return this.reindexFts5(!!opts.full)
+    if (mode === 'all') {
+      const embedding = await this.reindex({ ...opts, mode: 'embedding' })
+      const fts5 = await this.reindex({ ...opts, mode: 'fts5' })
+      return {
+        ...embedding,
+        mode: 'all',
+        changedPaths: [...new Set([...(embedding.changedPaths ?? []), ...(fts5.changedPaths ?? [])])],
+        removedPaths: [...new Set([...(embedding.removedPaths ?? []), ...(fts5.removedPaths ?? [])])],
+      }
+    }
     const engine = await this.engine()
     const emb = await this.resolveEmbedder()
     const { reindex, incrementalReindex } = await import('./indexer.js')
     if (opts.full) {
       const b = await reindex(engine, this.kbPath, emb)
       const opt = await this.runOptimize(engine)
-      return { full: true, rowCount: b.rows.length, docCount: b.docCount, sourceMtimeMax: b.sourceMtimeMax, ...opt }
+      return { full: true, mode: 'embedding', rowCount: b.rows.length, docCount: b.docCount, sourceMtimeMax: b.sourceMtimeMax, ...opt }
     }
     const r = await incrementalReindex(engine, this.kbPath, emb)
     // B1: only compact when the upsert actually mutated rows (skip the common no-op
     // incremental where nothing changed → nothing to reclaim).
     const changed = (r.changedPaths?.length ?? 0) + (r.removedPaths?.length ?? 0) > 0
     const opt = changed ? await this.runOptimize(engine) : {}
-    return { full: false, changedPaths: r.changedPaths, removedPaths: r.removedPaths, rowCount: r.rowCount, sourceMtimeMax: r.sourceMtimeMax, ...opt }
+    return { full: false, mode: 'embedding', changedPaths: r.changedPaths, removedPaths: r.removedPaths, rowCount: r.rowCount, sourceMtimeMax: r.sourceMtimeMax, ...opt }
+  }
+
+  private async reindexFts5(full: boolean): Promise<ReindexResult> {
+    const engine = await this.fts5Engine()
+    const { reindexFts5, incrementalReindexFts5 } = await import('./fts5-indexer.js')
+    const result = full ? reindexFts5(engine, this.kbPath) : incrementalReindexFts5(engine, this.kbPath)
+    try {
+      engine.optimize()
+      return { full, mode: 'fts5', ...result, optimized: true }
+    } catch (error) {
+      return {
+        full,
+        mode: 'fts5',
+        ...result,
+        optimized: false,
+        optimizeError: error instanceof Error ? error.message : String(error),
+      }
+    }
   }
 
   /** Compact after a mutating reindex (B1). Non-fatal: a failed optimize leaves the
@@ -120,15 +169,22 @@ export class LanceRetriever implements Retriever {
 
   /** Public compaction entry (daemon /api/optimize + the one-time cleanup). */
   async optimize(retentionMs?: number): Promise<unknown> {
+    if (this.defaultMode === 'fts5') {
+      const engine = await this.fts5Engine()
+      engine.optimize()
+      return null
+    }
     const engine = await this.engine()
     return engine.optimize(retentionMs)
   }
 
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
     const k = options?.maxResults ?? 5
+    const mode = options?.mode ?? this.defaultMode
     try {
-      const engine = await this.engine()
-      const hits = await engine.search(query, k)
+      const hits = mode === 'fts5'
+        ? (await this.fts5Engine()).search(query, k)
+        : await (await this.engine()).search(query, k)
       return hits.map((h) => ({
         path: h.path,
         title: h.title || h.topic,
@@ -143,18 +199,19 @@ export class LanceRetriever implements Retriever {
 }
 
 export interface RetrieverConfig {
-  retrieval?: unknown
+  retrieval?: {
+    mode?: SearchMode
+  }
 }
 
 /**
- * Construct the retriever. There is a single backend (LanceDB hybrid); the
- * config param is kept for call-site stability and future knobs. An optional
- * embedder lets the daemon share one model across all CCs.
+ * Construct the dual-mode retriever. `embedding` preserves the existing LanceDB
+ * hybrid behavior; `fts5` is a low-memory lexical backend.
  */
 export function createRetriever(
   kbPath: string,
-  _config: RetrieverConfig,
+  config: RetrieverConfig,
   opts: { embedder?: Embedder } = {},
 ): Retriever {
-  return new LanceRetriever(kbPath, opts.embedder)
+  return new LanceRetriever(kbPath, opts.embedder, undefined, config.retrieval?.mode ?? 'fts5')
 }

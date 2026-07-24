@@ -24,6 +24,7 @@ distiller:
   interval: "1h"
   runtime: codex
 retrieval:
+  mode: fts5
   max_results: 10
 `)
 
@@ -35,6 +36,7 @@ retrieval:
     expect(config.distiller.runtime).toBe('codex')
     expect(config.state_dir).toBeDefined()
     expect(config.retrieval.max_results).toBe(10)
+    expect(config.retrieval.mode).toBe('fts5')
   })
 
   it('returns defaults when the explicit config file is missing', () => {
@@ -45,6 +47,7 @@ retrieval:
     expect(config.distiller.interval).toBeDefined()
     expect(config.distiller.runtime).toBe('cc')
     expect(config.channel_kind).toBe('telegram')
+    expect(config.retrieval.mode).toBe('fts5')
   })
 
   it('rejects an unknown distill runtime', () => {

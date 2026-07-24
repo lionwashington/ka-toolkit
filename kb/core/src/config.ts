@@ -18,6 +18,10 @@ const ConfigSchema = z.object({
   }).default({}),
   retrieval: z.object({
     max_results: z.number().default(5),
+    // Two user-visible search modes:
+    // - fts5: SQLite FTS5 lexical search; low-memory default, no embedding model
+    // - embedding: existing LanceDB vector + lexical hybrid, available on demand
+    mode: z.enum(['embedding', 'fts5']).default('fts5'),
     // Shared HTTP retrieval daemon (kb-retrieval): one resident process holds the
     // LanceDB connection + embedding model (loaded once) and serves every CC over
     // /mcp, instead of each CC spawning its own stdio server. Loopback-only by
