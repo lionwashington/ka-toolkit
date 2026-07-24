@@ -231,17 +231,19 @@ ka channel restart         # reload (CCs re-adopt)
 
 ## `ka kb` — the kb retrieval daemon (+ index / distill)
 
-`ka kb start|stop|restart|status` operate the shared **LanceDB retrieval daemon** — the resident process
-that holds the LanceDB connection and the embedding model (loaded once, shared by every CC), backing the
-`kb_search` MCP tool over HTTP on port `7705` (`retrieval.daemon.port`, default 7705).
+`ka kb start|stop|restart|status` operate the shared dual-mode retrieval daemon,
+backing `kb_search` over HTTP on port `7705`. `retrieval.mode` selects
+`embedding` (existing LanceDB hybrid) or `fts5` (low-memory SQLite lexical) as
+the default; `kb_search` may override the mode per call.
 
 | Verb | Effect |
 |---|---|
-| `ka kb start` | start the kb retrieval daemon (cold start warms the model ~10–50s) |
+| `ka kb start` | start the daemon (embedding warms the model; FTS5 does not) |
 | `ka kb stop` | stop it |
 | `ka kb restart` | stop + start |
 | `ka kb status` | health check (`/api/status`: pid / ready / engine) |
-| `ka kb reindex [--full]` | rebuild the search index (incremental by default; `--full` rebuilds everything) |
+| `ka kb reindex [--full] [--mode embedding\|fts5\|all]` | rebuild the selected search index |
+| `ka kb benchmark <fixture> [embedding\|fts5\|both]` | compare quality, latency, CPU and daemon RSS |
 | `ka kb lint [--json / --fix]` | read-only KB structural self-check (dead wikilinks / orphan topics / bad frontmatter / raw↔topic back-refs / undistilled backlog) + full-picture stats; `--fix` only regenerates a catalog INDEX |
 
 ```bash
@@ -259,7 +261,7 @@ The same cluster also holds the index + distillation ops:
 
 | Command | Effect |
 |---|---|
-| `ka kb reindex [--full]` | (re)build the `kb_search` index — incremental, or `--full` for a full rebuild |
+| `ka kb reindex [--full] [--mode embedding\|fts5\|all]` | update one or both search indexes |
 | `ka kb distill [status]` | background distillation (see the dedicated section below) |
 
 ---

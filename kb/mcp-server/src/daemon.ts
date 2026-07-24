@@ -27,7 +27,7 @@ import { pathToFileURL } from 'node:url'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 import { loadConfig } from '@ka/core'
-import { createRetriever, type Retriever } from '@ka/core/retrieval'
+import { createRetriever, SEARCH_MODES, type Retriever, type SearchMode } from '@ka/core/retrieval'
 import { createMcpServer } from './index.js'
 
 interface Session {
@@ -175,16 +175,29 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
   })
 
   app.get('/api/status', (_req, res) => {
+    const memory = process.memoryUsage()
+    const cpu = process.cpuUsage()
     res.json({
       ok: true,
       service: 'kb-retrieval',
       pid: process.pid,
       uptime_seconds: Math.floor(process.uptime()),
-      engine: 'lancedb',
+      engine: config.retrieval.mode === 'fts5' ? 'fts5' : 'lancedb',
+      search_mode: config.retrieval.mode,
+      search_modes: SEARCH_MODES,
       ready,
       warm_error: warmError,
       mcp_sessions: sessions.size,
       knowledge_base_path: config.knowledge_base_path,
+      memory: {
+        rss_bytes: memory.rss,
+        heap_used_bytes: memory.heapUsed,
+        external_bytes: memory.external,
+      },
+      cpu: {
+        user_us: cpu.user,
+        system_us: cpu.system,
+      },
     })
   })
 
@@ -205,10 +218,16 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
     if (!retriever.reindex) { res.status(400).json({ ok: false, error: 'reindex not supported by engine' }); return }
     if (reindexing) { res.status(409).json({ ok: false, error: 'reindex already in progress' }); return }
     const full = (req.query as any)?.full === '1' || (req.body && (req.body as any).full === true)
+    const requestedMode = String((req.query as any)?.mode ?? (req.body && (req.body as any).mode) ?? config.retrieval.mode)
+    if (![...SEARCH_MODES, 'all'].includes(requestedMode as any)) {
+      res.status(400).json({ ok: false, error: `invalid mode: ${requestedMode}` })
+      return
+    }
+    const mode = requestedMode as SearchMode | 'all'
     reindexing = true
     try {
-      const r = await retriever.reindex({ full: !!full })
-      log(`reindex (${full ? 'full' : 'incremental'}): changed=${r.changedPaths?.length ?? r.docCount ?? 0} removed=${r.removedPaths?.length ?? 0} rows=${r.rowCount ?? 0} optimized=${r.optimized ?? false}${r.optimizeError ? ` optimizeError=${r.optimizeError}` : ''}`)
+      const r = await retriever.reindex({ full: !!full, mode })
+      log(`reindex (${full ? 'full' : 'incremental'}, mode=${mode}): changed=${r.changedPaths?.length ?? r.docCount ?? 0} removed=${r.removedPaths?.length ?? 0} rows=${r.rowCount ?? 0} optimized=${r.optimized ?? false}${r.optimizeError ? ` optimizeError=${r.optimizeError}` : ''}`)
       res.json({ ok: true, ...r })
     } catch (e: any) {
       log(`reindex failed: ${e?.message ?? e}`)
@@ -237,48 +256,80 @@ export async function runRetrievalDaemon(configPath?: string): Promise<Server> {
     }
   })
 
+  // Loopback benchmark/diagnostic endpoint. MCP remains the public tool surface;
+  // this returns structured hits so operators can compare the two engines without
+  // parsing Markdown tool output.
+  app.post('/api/search', async (req, res) => {
+    const query = typeof req.body?.query === 'string' ? req.body.query.trim() : ''
+    const requestedMode = String(req.body?.mode ?? config.retrieval.mode)
+    if (!query) { res.status(400).json({ ok: false, error: 'query is required' }); return }
+    if (!SEARCH_MODES.includes(requestedMode as SearchMode)) {
+      res.status(400).json({ ok: false, error: `invalid mode: ${requestedMode}` })
+      return
+    }
+    const maxResults = Math.max(1, Math.min(50, Number(req.body?.max_results) || config.retrieval.max_results))
+    const started = performance.now()
+    try {
+      const results = await retriever.search(query, {
+        maxResults,
+        mode: requestedMode as SearchMode,
+      })
+      res.json({
+        ok: true,
+        mode: requestedMode,
+        elapsed_ms: Number((performance.now() - started).toFixed(3)),
+        results,
+      })
+    } catch (error) {
+      res.status(500).json({ ok: false, error: error instanceof Error ? error.message : String(error) })
+    }
+  })
+
   app.use((_req, res) => res.status(404).json({ ok: false, error: 'not_found' }))
 
   const httpServer = app.listen(port, host, async () => {
-    log(`kb-retrieval daemon listening on ${host}:${port}/mcp (pid=${process.pid}, engine=lancedb)`)
-    // Become searchable ASAP. The ONLY hard prerequisite for serving a search is the
-    // embedding model — load it (via a warmup search), flip ready, and serve against the
-    // EXISTING index. The startup incremental reindex is NOT on this path: it runs in the
-    // background below, so files changed while the daemon was down fold in when it
-    // finishes (the reader hot-swaps on the manifest version bump). Previously reindex +
-    // model ran serially BEFORE ready, blocking readiness for minutes (model + re-embedding
-    // changed topics) and making the keepalive misjudge the warming daemon as down.
+    log(`kb-retrieval daemon listening on ${host}:${port}/mcp (pid=${process.pid}, mode=${config.retrieval.mode})`)
+    // Become searchable ASAP against the EXISTING configured-mode index. FTS5 opens
+    // SQLite and becomes ready without indexing. Embedding mode loads its model via
+    // the warmup search, then performs its startup incremental reindex in the
+    // background below. Previously embedding reindex + model ran serially BEFORE
+    // ready, blocking readiness for minutes and confusing keepalive health checks.
     let didInitialBuild = false
     try {
-      const manifest = retriever.indexStatus ? await retriever.indexStatus() : null
-      const hasIndex = !!manifest && manifest.version > 0 && manifest.status === 'ok' && manifest.chunk_count > 0
-      // Fresh KB with no usable index: there's nothing to serve, so build it ONCE
-      // synchronously (one-time cost; doesn't recur on normal restarts).
+      const manifest = retriever.indexStatus ? await retriever.indexStatus(config.retrieval.mode) : null
+      // A valid zero-row manifest is still an initialized index (for example an
+      // intentionally empty KB). Rebuilding is only necessary when the manifest
+      // is absent or explicitly unusable.
+      const hasIndex = !!manifest && manifest.version > 0 && manifest.status === 'ok'
+      // Build the configured mode once when its index does not exist. The default
+      // FTS5 build is local lexical work and never imports the embedding stack.
+      // Embedding is reached here only when the operator explicitly configured it.
       if (!hasIndex && retriever.reindex) {
         reindexing = true
         try {
-          const r = await retriever.reindex()
+          const r = await retriever.reindex({ full: true, mode: config.retrieval.mode })
           log(`initial index build: rows=${r.rowCount ?? 0}`)
           didInitialBuild = true
         } finally {
           reindexing = false
         }
       }
-      await retriever.search('warmup', { maxResults: 1 }) // loads the embedding model
+      await retriever.search('warmup', { maxResults: 1, mode: config.retrieval.mode })
       ready = true
-      log(`retriever warm — ready (serving${didInitialBuild ? '' : '; startup reindex in background'})`)
+      const startupNote = config.retrieval.mode === 'embedding' && !didInitialBuild
+        ? '; startup reindex in background'
+        : ''
+      log(`retriever warm — ready (serving${startupNote})`)
     } catch (e: any) {
       warmError = e?.message ?? String(e)
       log(`retriever warmup failed: ${warmError}`)
     }
-    // Background self-heal: fold in files changed while the daemon was down. NOT awaited —
-    // it does NOT gate readiness; searches serve the existing index until the reader
-    // hot-swaps on the version bump. Skipped right after an initial full build (nothing
-    // changed since) or if a reindex is already running. Serialized via `reindexing` so
-    // /api/reindex returns 409 while it runs.
-    if (retriever.reindex && !reindexing && !didInitialBuild) {
+    // Embedding-only background self-heal: fold in files changed while the daemon
+    // was down. After its one-time missing-index build, FTS5 incremental sync is
+    // owned by distill or an explicit `ka kb reindex`.
+    if (config.retrieval.mode === 'embedding' && retriever.reindex && !reindexing && !didInitialBuild) {
       reindexing = true
-      void retriever.reindex()
+      void retriever.reindex({ mode: config.retrieval.mode })
         .then((r) => log(`startup incremental reindex (background): changed=${r.changedPaths?.length ?? 0} removed=${r.removedPaths?.length ?? 0} rows=${r.rowCount ?? 0}`))
         .catch((e: any) => log(`startup incremental reindex (background) failed: ${e?.message ?? e}`))
         .finally(() => { reindexing = false })

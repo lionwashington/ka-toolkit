@@ -13,6 +13,7 @@ import { createServer } from 'node:net'
 import type { Server } from 'node:http'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { createRetriever } from '@ka/core/retrieval'
 import { runRetrievalDaemon } from '../src/daemon.js'
 
 const REPO = join(import.meta.dirname, '..', '..', '..') // kb/mcp-server/tests → repo root
@@ -71,6 +72,8 @@ async function removeTempDir(path: string): Promise<void> {
 async function withDaemon(
   fn: (client: Client) => Promise<void>,
   prepare?: (kbDir: string) => Promise<void>,
+  mode: 'embedding' | 'fts5' = 'fts5',
+  buildFts5 = true,
 ) {
   const home = mkdtempSync(join(tmpdir(), 'kb-daemon-'))
   const kbDir = join(home, 'kb')
@@ -78,6 +81,10 @@ async function withDaemon(
   cpSync(CORPUS, kbDir, { recursive: true })
   mkdirSync(stateDir, { recursive: true })
   if (prepare) await prepare(kbDir)
+  if (mode === 'fts5' && buildFts5) {
+    const retriever = createRetriever(kbDir, { retrieval: { mode: 'fts5' } })
+    await retriever.reindex?.({ full: true, mode: 'fts5' })
+  }
   const port = await freePort()
   const configPath = join(home, 'config.yaml')
   writeFileSync(
@@ -86,6 +93,7 @@ async function withDaemon(
       `knowledge_base_path: ${kbDir}`,
       `state_dir: ${stateDir}`,
       `retrieval:`,
+      `  mode: ${mode}`,
       `  daemon:`,
       `    host: 127.0.0.1`,
       `    port: ${port}`,
@@ -119,18 +127,26 @@ describe('kb-retrieval HTTP daemon', () => {
       const tools = (await client.listTools()).tools.map((t) => t.name).sort()
       expect(tools).toEqual(['kb_list_topics', 'kb_read_topic', 'kb_search', 'kb_status'])
 
-      // kb_list_topics shows frontmatter titles; the corpus's network topic is 网络配置.
       const list = await client.callTool({ name: 'kb_list_topics', arguments: {} })
-      expect(textOf(list)).toMatch(/网络配置/)
+      expect(textOf(list)).toMatch(/Knowledge base topics:/)
 
-      // kb_search with no index built yet returns gracefully (proves the HTTP path
-      // + retriever wiring without loading the embedding model).
+      // FTS5 is built and searched without loading the embedding model.
       const search = await client.callTool({
         name: 'kb_search',
-        arguments: { query: 'NAT 模式', max_results: 5 },
+        arguments: { query: 'NAT bridge', max_results: 5, mode: 'fts5' },
       })
-      expect(textOf(search).length).toBeGreaterThan(0)
+      expect(textOf(search)).toMatch(/sample-network/)
     })
+  }, 60_000)
+
+  it('builds a missing FTS5 index once during daemon startup', async () => {
+    await withDaemon(async (client) => {
+      const search = await client.callTool({
+        name: 'kb_search',
+        arguments: { query: 'NAT bridge', max_results: 5 },
+      })
+      expect(textOf(search)).toMatch(/sample-network/)
+    }, undefined, 'fts5', false)
   }, 60_000)
 
   it.runIf(process.env.RUN_E5 === '1')(
@@ -153,6 +169,7 @@ describe('kb-retrieval HTTP daemon', () => {
           const engine = new LanceEngine(join(kbDir, LANCE_DB_SUBDIR), emb)
           await reindex(engine, kbDir, emb)
         },
+        'embedding',
       )
     },
     300_000,

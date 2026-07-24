@@ -13,7 +13,7 @@ cron scheduled tasks. Each workshop mate can use Claude Code or Codex: a Lark me
 ## 1. Prerequisites
 
 ```bash
-# Node 22+ (nvm recommended; install.sh sources ~/.nvm/nvm.sh)
+# Node 22.5+ (nvm recommended; install.sh sources ~/.nvm/nvm.sh)
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
 . ~/.nvm/nvm.sh && nvm install 22
 

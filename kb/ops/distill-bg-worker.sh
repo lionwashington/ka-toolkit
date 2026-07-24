@@ -420,14 +420,22 @@ PHASE1="$(printf '%s' "$RAW" | cut -d'|' -f5)"
 printf '[distill-worker] success status=%s raw=%s conv=%s topics=%s tier=%s phase1=%s\n' \
     "$FINAL_STATUS" "$RAW_ADDED" "$CONV_UPDATED" "$TOPICS_UPDATED" "$TIER_OUT" "$PHASE1" >> "$LOG_PATH"
 
-# Sync the LanceDB index so newly distilled/updated topics show up in kb_search within
-# seconds. Best-effort incremental reindex via the running kb-retrieval daemon (reuses
-# its loaded model). If the daemon is down, this is a no-op — the daemon self-heals on
-# next start (incremental by mtime), so distill never fails on this.
+# Sync the configured search index so newly distilled/updated topics show up in
+# kb_search within seconds. Ensure the retrieval daemon is available first: after
+# the one-time missing-index build, distill owns each FTS5 incremental refresh.
+# This remains best-effort and never turns a
+# successful LLM distill into a failure.
+if [ -x "$KA_HOME/kb/ops/kb-retrieval.sh" ]; then
+  if KA_HOME="$KA_HOME" "$KA_HOME/kb/ops/kb-retrieval.sh" start >> "$LOG_PATH" 2>&1; then
+    printf '[distill-worker] kb-retrieval available for post-distill sync\n' >> "$LOG_PATH"
+  else
+    printf '[distill-worker] kb-retrieval start/check failed; index sync may be deferred\n' >> "$LOG_PATH"
+  fi
+fi
 if [ -x "$KA_HOME/kb/ops/kb-reindex.sh" ]; then
   if KA_HOME="$KA_HOME" "$KA_HOME/kb/ops/kb-reindex.sh" >> "$LOG_PATH" 2>&1; then
     printf '[distill-worker] kb-reindex (incremental) ok\n' >> "$LOG_PATH"
   else
-    printf '[distill-worker] kb-reindex skipped/failed (daemon down?) — self-heals on next start\n' >> "$LOG_PATH"
+    printf '[distill-worker] kb-reindex skipped/failed — run ka kb reindex to retry\n' >> "$LOG_PATH"
   fi
 fi

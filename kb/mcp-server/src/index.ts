@@ -5,7 +5,7 @@ import { appendFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { KnowledgeStore, loadConfig, type KaConfig } from '@ka/core'
-import { createRetriever, type Retriever } from '@ka/core/retrieval'
+import { createRetriever, SEARCH_MODES, type Retriever } from '@ka/core/retrieval'
 
 /**
  * Build the kb MCP server. Retrieval is the LanceDB hybrid engine via
@@ -37,18 +37,22 @@ export function createMcpServer(opts: { retriever?: Retriever; config?: KaConfig
     version: '0.1.0',
   })
 
-  // kb_search: semantic search across knowledge base
+  // kb_search: explicit dual mode. Omitting mode preserves the configured default.
   server.tool(
     'kb_search',
-    `Semantic search across the knowledge base. Available topics: ${topicList}`,
+    `Search the knowledge base using embedding (existing semantic hybrid) or fts5 (low-memory lexical) mode. Available topics: ${topicList}`,
     {
       query: z.string().describe('Search query'),
       max_results: z.number().optional().describe('Maximum number of results to return (default: 5)'),
+      mode: z.enum(SEARCH_MODES).optional().describe(
+        `Search mode; defaults to configured retrieval.mode (${config.retrieval.mode})`,
+      ),
     },
-    async ({ query, max_results }) => {
+    async ({ query, max_results, mode }) => {
       try {
         const results = await retriever.search(query, {
           maxResults: max_results ?? config.retrieval.max_results,
+          mode,
         })
 
         if (results.length === 0) {
@@ -172,17 +176,19 @@ export function createMcpServer(opts: { retriever?: Retriever; config?: KaConfig
       try {
         const topics = store.listTopics()
 
-        // Search-index freshness (lancedb manifest) — so a caller can tell if the
-        // index is built / when / how big, and spot a failed/stale build.
-        let indexLine: string | null = null
+        // Show both index manifests: switching modes must not hide a stale/missing
+        // alternate index.
+        const indexLines: string[] = []
         try {
-          const m = await retriever.indexStatus?.()
-          if (!m) {
-            indexLine = `Search index: NOT BUILT — run \`ka kb reindex --full\``
-          } else {
-            const built = m.built_at ? new Date(m.built_at).toISOString().replace('T', ' ').slice(0, 19) + 'Z' : '?'
-            indexLine = `Search index: ${m.engine} v${m.version}, ${m.chunk_count} chunks / ${m.doc_count} docs, built ${built}` +
-              (m.status === 'ok' ? '' : ` ⚠️ status=${m.status}${m.error ? ` (${m.error})` : ''}`)
+          for (const mode of SEARCH_MODES) {
+            const m = await retriever.indexStatus?.(mode)
+            if (!m) {
+              indexLines.push(`Search index (${mode}): NOT BUILT`)
+            } else {
+              const built = m.built_at ? new Date(m.built_at).toISOString().replace('T', ' ').slice(0, 19) + 'Z' : '?'
+              indexLines.push(`Search index (${mode}): ${m.engine} v${m.version}, ${m.chunk_count} chunks / ${m.doc_count} docs, built ${built}` +
+                (m.status === 'ok' ? '' : ` ⚠️ status=${m.status}${m.error ? ` (${m.error})` : ''}`))
+            }
           }
         } catch { /* index status is best-effort */ }
 
@@ -191,7 +197,8 @@ export function createMcpServer(opts: { retriever?: Retriever; config?: KaConfig
           `Path: ${config.knowledge_base_path}`,
           `Topics: ${topics.length}`,
           topics.length > 0 ? `Topic names: ${topics.map((t) => t.name).join(', ')}` : null,
-          indexLine,
+          `Default search mode: ${config.retrieval.mode}`,
+          ...indexLines,
           `Distiller interval: ${config.distiller.interval}`,
           `Max search results: ${config.retrieval.max_results}`,
         ]

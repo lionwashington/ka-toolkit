@@ -15,6 +15,8 @@ export interface IndexManifest {
   source_mtime_max: number
   doc_count: number
   chunk_count: number
+  /** Source files processed, including valid hub files that produced zero chunks. */
+  source_paths?: string[]
   embed_model: string
   status: 'ok' | 'error'
   error: string | null

@@ -31,6 +31,10 @@ cd "$ROOT"   # node_modules (native @lancedb/fastembed) resolve from here
 # fastembed model under $ROOT/local_cache). Explicit so it doesn't fall back to the
 # dev default ~/.cache/ka-toolkit/fastembed (which the runtime may not have).
 export KA_EMBED_CACHE_DIR="${KA_EMBED_CACHE_DIR:-$ROOT/local_cache}"
+# Keep MLE5Large document batches small on the supported low-memory host. The
+# TypeScript embedder has the same default; exporting it here makes the runtime
+# policy explicit and lets operators opt upward on larger machines.
+export KA_EMBED_BATCH_SIZE="${KA_EMBED_BATCH_SIZE:-4}"
 
 ENTRY="${KA_KB_DAEMON_ENTRY:-$ROOT/dist/daemon.mjs}"
 # gen3 config lives at $KA_HOME/config/config.yaml (KA_CONFIG_DIR), NOT the

@@ -10,6 +10,11 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 export const DEFAULT_EMBED_MODEL = EmbeddingModel.MLE5Large // 'fast-multilingual-e5-large'
+// MLE5Large is a multi-GB model. fastembed's historical default of 32 makes
+// document reindex peak above 3 GB RSS and swap-thrash a 4 GB KA host, starving
+// the daemon's HTTP event loop for minutes. Keep production batches deliberately
+// small; callers that run on larger machines can opt back up explicitly.
+export const DEFAULT_EMBED_BATCH_SIZE = 4
 
 // ONE shared model-cache location. fastembed otherwise defaults to `./local_cache`
 // relative to CWD, which spawned a duplicate multi-GB cache per package the embedder
@@ -39,9 +44,16 @@ export interface EmbedderOptions {
   batchSize?: number
 }
 
+export function resolveEmbedBatchSize(batchSize?: number, envValue = process.env.KA_EMBED_BATCH_SIZE): number {
+  if (Number.isInteger(batchSize) && Number(batchSize) > 0) return Number(batchSize)
+  const fromEnv = Number(envValue)
+  if (Number.isInteger(fromEnv) && fromEnv > 0) return fromEnv
+  return DEFAULT_EMBED_BATCH_SIZE
+}
+
 export function createEmbedder(opts: EmbedderOptions = {}): Embedder {
   const model = (opts.model ?? DEFAULT_EMBED_MODEL) as EmbeddingModel
-  const batchSize = opts.batchSize ?? 32
+  const batchSize = resolveEmbedBatchSize(opts.batchSize)
   let fe: FlagEmbedding | null = null
   let _dim = 0
   const toArr = (v: ArrayLike<number>) => Array.from(v as Float32Array)
@@ -70,6 +82,10 @@ export function createEmbedder(opts: EmbedderOptions = {}): Embedder {
           _dim = a.length
           out.push(a)
         }
+        // fastembed/ONNX does native CPU work on the main Node thread. Yield
+        // between bounded batches so /api/status and MCP transports stay live
+        // during a long incremental reindex.
+        await new Promise<void>(resolve => setImmediate(resolve))
       }
       return out
     },

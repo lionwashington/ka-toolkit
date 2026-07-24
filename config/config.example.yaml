@@ -34,7 +34,7 @@ distiller:
 
 # RAG retrieval
 retrieval:
+  # Search backend: fts5 (low-memory default) | embedding (LanceDB hybrid, on demand)
+  mode: fts5
   # Max search results
   max_results: 5
-  # Minimum similarity score (0-1)
-  min_score: 0.7

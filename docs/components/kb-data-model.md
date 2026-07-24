@@ -117,7 +117,9 @@ session .jsonl ──[offset/uuid watermark]──▶ raw/*.md ──[distilled:
    `topics/` (and into a catalog INDEX, if that's the style).
 4. **Reindex** (out-of-band): `incrementalReindex` re-embeds only topics whose `mtime` is
    newer than the index manifest's `source_mtime_max`, bumps the manifest version; the
-   resident daemon reopens the table. Runs after distill and on daemon startup (self-heal).
+   resident daemon reopens the table. Runs after distill for both modes; daemon
+   startup self-heal runs only in embedding mode. FTS5 performs only a one-time
+   startup build when its index is missing; distill/manual reindex owns later sync.
 
 The **watermarks** are what keep it convergent and idempotent: `last_parsed_offset` (don't
 re-read the jsonl), `distilled:` (don't re-distill a raw), `source_mtime_max` (don't

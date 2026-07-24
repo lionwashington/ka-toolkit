@@ -24,24 +24,64 @@ PORT="$(awk '
 ' "$CONFIG_YAML" 2>/dev/null)"
 [ -n "$PORT" ] || PORT="7705"
 LOG="$ROOT/daemon.stdout.log"
+STATE_DIR="${KA_STATE_DIR:-$KA_HOME/state}"
+HEALTH_FILE="$STATE_DIR/kb-retrieval-health"
+mkdir -p "$STATE_DIR"
+# shellcheck source=daemon-process.sh
+source "$ROOT/daemon-process.sh"
 
 status_resp=$(curl -sf --max-time 2 "http://$HOST:$PORT/api/status" 2>/dev/null || true)
 if [ -n "$status_resp" ]; then
+  rm -f "$HEALTH_FILE"
   echo "✓ already running"
   echo "$status_resp"
   exit 0
 fi
 
-# CRITICAL (race guard): /api/status can time out for MINUTES on cold start because
-# loading the 2.2GB e5 model blocks the event loop. A process LISTENING on the port is
-# the daemon (warming or ready) — treat it as up. The port bind IS the macOS singleton
-# (no flock), and the daemon's own EADDRINUSE exit prevents duplicates. No orphan-killing
-# cleanup here: it was redundant with the port singleton and caused a race where two
-# concurrent `start` invocations (e.g. the 1-min keepalive overlapping a manual start)
-# killed each other's freshly-started daemon — the exact boot-time restart storm we hit.
-if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "✓ already running (port $PORT bound — daemon up, may still be warming)"
-  exit 0
+# A bound port with an unresponsive event loop is ambiguous: cold model warmup is
+# legitimately silent, but a swap-thrashing ONNX process can stay half-dead forever.
+# Give every new PID a generous warmup grace, then require several consecutive
+# keepalive failures before an exact, validated-PID restart. This retains the old
+# race guard while making the one-minute keepalive actually self-heal a wedged daemon.
+daemon_pid="$(kb_daemon_pid "$PORT" 2>/dev/null || true)"
+if [ -n "$daemon_pid" ]; then
+  age="$(kb_pid_age_seconds)"
+  # A startup incremental reindex of several large topics can legitimately run
+  # for close to an hour on the supported 2-core/4-GB host with the low-memory
+  # embed batch. Do not let the one-minute keepalive kill that useful work.
+  # Existing long-lived PIDs do not receive this grace, so a later wedge still
+  # begins its three-strike recovery immediately.
+  warm_grace="${KA_KB_WARM_GRACE_SECONDS:-3600}"
+  failure_limit="${KA_KB_HEALTH_FAILURE_LIMIT:-3}"
+  if [ "$age" -lt "$warm_grace" ]; then
+    rm -f "$HEALTH_FILE"
+    echo "✓ already running (pid $daemon_pid, port $PORT bound — warming for ${age}s)"
+    exit 0
+  fi
+
+  old_pid=""; failures=0
+  if [ -f "$HEALTH_FILE" ]; then
+    read -r old_pid failures _ < "$HEALTH_FILE" || true
+  fi
+  [ "$old_pid" = "$daemon_pid" ] || failures=0
+  failures=$((failures + 1))
+  health_tmp="$HEALTH_FILE.$$"
+  printf '%s %s %s\n' "$daemon_pid" "$failures" "$(date +%s)" > "$health_tmp"
+  mv "$health_tmp" "$HEALTH_FILE"
+  if [ "$failures" -lt "$failure_limit" ]; then
+    echo "⚠ daemon pid $daemon_pid is listening but /api/status is unresponsive (health strike $failures/$failure_limit)"
+    exit 0
+  fi
+
+  echo "⚠ daemon pid $daemon_pid failed health $failures consecutive times; restarting"
+  if ! kb_stop_daemon_pid "$daemon_pid"; then
+    echo "✗ failed to stop unresponsive validated daemon pid $daemon_pid" >&2
+    exit 1
+  fi
+  rm -f "$HEALTH_FILE"
+elif lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "✗ port $PORT is bound by a process that is not the deployed KB daemon; refusing to kill it" >&2
+  exit 1
 fi
 
 # Launch detached. The model loads on warmup (~10-50s first time) before /api/status

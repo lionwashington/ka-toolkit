@@ -12,6 +12,7 @@ import { parseFrontmatter } from '../knowledge-store/markdown.js'
 import { chunkTopic } from './chunker.js'
 import { segment } from './segmenter.js'
 import type { ChunkRow, LanceEngine } from './lance-engine.js'
+import type { TextChunkRow } from './types.js'
 
 export interface IndexerEmbedder {
   readonly model: string
@@ -24,9 +25,9 @@ export interface BuiltIndex {
   docCount: number
 }
 
-interface FileEntry { path: string; abs: string; topic: string; kind: string; parent: string; mtime: number }
+export interface FileEntry { path: string; abs: string; topic: string; kind: string; parent: string; mtime: number }
 
-function listFiles(kbPath: string): FileEntry[] {
+export function listTopicFiles(kbPath: string): FileEntry[] {
   const out: FileEntry[] = []
   const topicsDir = join(kbPath, 'topics')
   if (existsSync(topicsDir)) {
@@ -50,8 +51,8 @@ function listFiles(kbPath: string): FileEntry[] {
 }
 
 /** Chunk + embed a given set of files → ChunkRow[] (shared by full + incremental). */
-async function buildRowsForFiles(files: FileEntry[], embedder: IndexerEmbedder): Promise<ChunkRow[]> {
-  const pending: { row: Omit<ChunkRow, 'vector'>; embedText: string }[] = []
+export function buildTextRowsForFiles(files: FileEntry[]): Array<TextChunkRow & { embedText: string }> {
+  const pending: Array<TextChunkRow & { embedText: string }> = []
   for (const f of files) {
     const raw = readFileSync(f.abs, 'utf-8')
     const { data } = parseFrontmatter(raw)
@@ -59,7 +60,7 @@ async function buildRowsForFiles(files: FileEntry[], embedder: IndexerEmbedder):
     for (const c of chunkTopic(raw, { topic: f.topic })) {
       pending.push({
         embedText: c.embedText,
-        row: {
+        ...{
           id: `${f.path}#${c.chunkIndex}`, path: f.path, topic: f.topic, kind: f.kind, parent: f.parent,
           title, heading: c.heading, chunk_index: c.chunkIndex, text: c.text, text_seg: segment(c.text),
           updated: (data.updated as string) ?? '',
@@ -67,13 +68,18 @@ async function buildRowsForFiles(files: FileEntry[], embedder: IndexerEmbedder):
       })
     }
   }
+  return pending
+}
+
+async function buildRowsForFiles(files: FileEntry[], embedder: IndexerEmbedder): Promise<ChunkRow[]> {
+  const pending = buildTextRowsForFiles(files)
   if (pending.length === 0) return []
   const vectors = await embedder.embedDocuments(pending.map((p) => p.embedText))
-  return pending.map((p, i) => ({ ...p.row, vector: vectors[i] }))
+  return pending.map(({ embedText: _embedText, ...row }, i) => ({ ...row, vector: vectors[i] }))
 }
 
 export async function buildChunkRows(kbPath: string, embedder: IndexerEmbedder): Promise<BuiltIndex> {
-  const files = listFiles(kbPath)
+  const files = listTopicFiles(kbPath)
   const sourceMtimeMax = files.reduce((m, f) => Math.max(m, f.mtime), 0)
   const rows = await buildRowsForFiles(files, embedder)
   return { rows, sourceMtimeMax, docCount: files.length }
@@ -86,6 +92,7 @@ export async function reindex(engine: LanceEngine, kbPath: string, embedder: Ind
     sourceMtimeMax: built.sourceMtimeMax,
     embedModel: embedder.model,
     docCount: built.docCount,
+    sourcePaths: listTopicFiles(kbPath).map((file) => file.path),
   })
   return built
 }
@@ -111,16 +118,25 @@ export async function incrementalReindex(
   since?: number,
 ): Promise<IncrementalResult> {
   const sinceMtime = since ?? engine.status()?.source_mtime_max ?? 0
-  const files = listFiles(kbPath)
+  const files = listTopicFiles(kbPath)
   const onDisk = new Set(files.map((f) => f.path))
-  const changed = files.filter((f) => f.mtime > sinceMtime)
+  const indexedPaths = await engine.indexedPaths()
+  const indexed = new Set(indexedPaths)
+  // A migrated/copied file may retain an mtime older than the global watermark.
+  // It is still new if its path has never been indexed.
+  const changed = files.filter((f) => f.mtime > sinceMtime || !indexed.has(f.path))
   // Removed = paths the index knew about but that no longer exist on disk.
-  const removedPaths = (await engine.indexedPaths()).filter((p) => !onDisk.has(p))
+  const removedPaths = indexedPaths.filter((p) => !onDisk.has(p))
   if (changed.length === 0 && removedPaths.length === 0) {
     return { changedPaths: [], removedPaths: [], rowCount: 0, sourceMtimeMax: sinceMtime }
   }
   const rows = await buildRowsForFiles(changed, embedder)
   const sourceMtimeMax = files.reduce((m, f) => Math.max(m, f.mtime), sinceMtime)
-  await engine.upsert(rows, { removedPaths, sourceMtimeMax, embedModel: embedder.model })
+  await engine.upsert(rows, {
+    changedPaths: changed.map((file) => file.path),
+    removedPaths,
+    sourceMtimeMax,
+    embedModel: embedder.model,
+  })
   return { changedPaths: changed.map((f) => f.path), removedPaths, rowCount: rows.length, sourceMtimeMax }
 }

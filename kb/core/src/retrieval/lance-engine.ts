@@ -12,22 +12,10 @@ import {
   writeManifest,
   type IndexManifest,
 } from './manifest.js'
+import type { TextChunkRow } from './types.js'
 
-export interface ChunkRow {
-  id: string
-  path: string
-  topic: string
-  kind: string // 'parent' | 'sub' | 'conversation'
-  parent: string
-  title: string
-  heading: string
-  chunk_index: number
-  /** Raw chunk text — returned as the excerpt. */
-  text: string
-  /** Intl-segmented text — the FTS column. */
-  text_seg: string
+export interface ChunkRow extends TextChunkRow {
   vector: number[]
-  updated: string
 }
 
 export interface SearchHit {
@@ -49,6 +37,7 @@ export interface RebuildMeta {
   sourceMtimeMax?: number
   embedModel?: string
   docCount?: number
+  sourcePaths?: string[]
 }
 
 /** Per-kind weight in the fusion — conversations rank below topic files. */
@@ -130,6 +119,7 @@ export class LanceEngine {
         source_mtime_max: meta.sourceMtimeMax ?? 0,
         doc_count: meta.docCount ?? new Set(rows.map((r) => r.path)).size,
         chunk_count: rows.length,
+        source_paths: meta.sourcePaths ?? [...new Set(rows.map((r) => r.path))],
         embed_model: meta.embedModel ?? '',
         status: 'ok',
         error: null,
@@ -146,6 +136,7 @@ export class LanceEngine {
         source_mtime_max: cur?.source_mtime_max ?? 0,
         doc_count: cur?.doc_count ?? 0,
         chunk_count: cur?.chunk_count ?? 0,
+        source_paths: cur?.source_paths,
         embed_model: cur?.embed_model ?? '',
         status: 'error',
         error: e instanceof Error ? e.message : String(e),
@@ -164,13 +155,13 @@ export class LanceEngine {
    */
   async upsert(
     rows: ChunkRow[],
-    opts: { removedPaths?: string[]; sourceMtimeMax?: number; embedModel?: string } = {},
+    opts: { changedPaths?: string[]; removedPaths?: string[]; sourceMtimeMax?: number; embedModel?: string } = {},
   ): Promise<void> {
     return this.withWrite(() => this._upsert(rows, opts))
   }
   private async _upsert(
     rows: ChunkRow[],
-    opts: { removedPaths?: string[]; sourceMtimeMax?: number; embedModel?: string } = {},
+    opts: { changedPaths?: string[]; removedPaths?: string[]; sourceMtimeMax?: number; embedModel?: string } = {},
   ): Promise<void> {
     const cur = readManifest(this.manifestPath)
     const prev = cur?.version ?? 0
@@ -184,7 +175,7 @@ export class LanceEngine {
         if (this.tbl) await this.tbl.createIndex('text_seg', { config: lancedb.Index.fts(), replace: true })
       } else {
         const tbl = await db.openTable(this.tableName)
-        const changed = [...new Set(rows.map((r) => r.path))]
+        const changed = [...new Set([...(opts.changedPaths ?? []), ...rows.map((r) => r.path)])]
         const deletePaths = [...new Set([...changed, ...(opts.removedPaths ?? [])])]
         if (deletePaths.length) {
           const inList = deletePaths.map((p) => `'${p.replace(/'/g, "''")}'`).join(', ')
@@ -197,18 +188,28 @@ export class LanceEngine {
       }
       let docCount = 0
       let chunkCount = 0
+      let indexedRowPaths: string[] = []
       if (this.tbl) {
         chunkCount = await this.tbl.countRows()
         const paths = await this.tbl.query().select(['path']).toArray()
-        docCount = new Set(paths.map((r: any) => r.path)).size
+        indexedRowPaths = [...new Set(paths.map((r: any) => String(r.path)))]
+        docCount = indexedRowPaths.length
       }
+      const sourcePaths = [
+        ...new Set([
+          ...(cur?.source_paths ?? indexedRowPaths)
+            .filter((path) => !(opts.removedPaths ?? []).includes(path)),
+          ...(opts.changedPaths ?? rows.map((r) => r.path)),
+        ]),
+      ]
       const m: IndexManifest = {
         engine: 'lancedb',
         version: prev + 1,
         built_at: new Date().toISOString(),
         source_mtime_max: Math.max(cur?.source_mtime_max ?? 0, opts.sourceMtimeMax ?? 0),
-        doc_count: docCount,
+        doc_count: sourcePaths.length || docCount,
         chunk_count: chunkCount,
+        source_paths: sourcePaths,
         embed_model: opts.embedModel ?? cur?.embed_model ?? '',
         status: 'ok',
         error: null,
@@ -223,6 +224,7 @@ export class LanceEngine {
         source_mtime_max: cur?.source_mtime_max ?? 0,
         doc_count: cur?.doc_count ?? 0,
         chunk_count: cur?.chunk_count ?? 0,
+        source_paths: cur?.source_paths,
         embed_model: cur?.embed_model ?? '',
         status: 'error',
         error: e instanceof Error ? e.message : String(e),
@@ -260,7 +262,9 @@ export class LanceEngine {
 
   /** Distinct source paths currently in the index ([] if no table) — for deletion detection. */
   async indexedPaths(): Promise<string[]> {
-    if (!readManifest(this.manifestPath)) return []
+    const manifest = readManifest(this.manifestPath)
+    if (!manifest) return []
+    if (manifest.source_paths) return manifest.source_paths
     try {
       const tbl = await this.table()
       const rows = await tbl.query().select(['path']).toArray()
