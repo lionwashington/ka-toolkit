@@ -216,8 +216,10 @@ Existing-session startup selects the most recent thread whose recorded cwd exact
 matches the mate cwd. `args: [resume, <thread-id>]` overrides that selection and must
 pass the same cwd check; `resume --last` and `resume latest` are normalized aliases.
 If no matching session exists, the selector does not manufacture a second App Server
-thread. Workshop starts the TUI without `resume`, waits for that TUI to create its
-canonical thread, and then registers the resulting ID.
+thread. Workshop starts the TUI without `resume` in the pane foreground. A
+background registrar waits for that TUI to create its canonical thread and then
+registers the resulting ID. The TUI itself must not be backgrounded because its
+terminal event reader requires foreground ownership during bootstrap.
 
 A new thread can be visible through `thread/list` before its rollout is resumable.
 Workshop therefore marks the initial control registration as

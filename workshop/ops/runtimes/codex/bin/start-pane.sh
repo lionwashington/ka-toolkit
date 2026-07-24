@@ -48,9 +48,7 @@ SERVER_LOG="$SOCKET_DIR/$SAFE_NAME.log"
 PORT_LOCK_DIR="$SOCKET_DIR/.port-allocation.lock"
 PORT_LOCK_HELD=0
 APP_SERVER_PID=""
-THREAD_SELECTOR_PID=""
-THREAD_SELECTOR_OUTPUT=""
-TUI_PID=""
+REGISTRAR_PID=""
 
 release_port_lock() {
     if [ "$PORT_LOCK_HELD" = "1" ]; then
@@ -62,12 +60,8 @@ release_port_lock() {
 
 cleanup() {
     release_port_lock
-    [ -n "$THREAD_SELECTOR_PID" ] && kill "$THREAD_SELECTOR_PID" 2>/dev/null || true
-    [ -n "$THREAD_SELECTOR_PID" ] && wait "$THREAD_SELECTOR_PID" 2>/dev/null || true
-    [ -n "$THREAD_SELECTOR_OUTPUT" ] && rm -f "$THREAD_SELECTOR_OUTPUT"
-    [ -n "$TUI_PID" ] && kill "$TUI_PID" 2>/dev/null || true
-    [ -n "$TUI_PID" ] && wait "$TUI_PID" 2>/dev/null || true
-    [ -n "${REGISTRAR_PID:-}" ] && kill "$REGISTRAR_PID" 2>/dev/null || true
+    [ -n "$REGISTRAR_PID" ] && kill "$REGISTRAR_PID" 2>/dev/null || true
+    [ -n "$REGISTRAR_PID" ] && wait "$REGISTRAR_PID" 2>/dev/null || true
     curl -sf -X DELETE "http://127.0.0.1:${KA_CHANNEL_PORT:-9877}/api/runtimes/codex/$SAFE_NAME" >/dev/null 2>&1 || true
     [ -n "$APP_SERVER_PID" ] && kill "$APP_SERVER_PID" 2>/dev/null || true
     [ -n "$APP_SERVER_PID" ] && wait "$APP_SERVER_PID" 2>/dev/null || true
@@ -194,48 +188,23 @@ THREAD_JSON="$(node "$THREAD_SELECTOR" "$APP_SERVER_ENDPOINT" "$EXPECTED_CWD" "$
 }
 FRESH_THREAD="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).fresh?"1":"0"))')"
 
-if [ "$FRESH_THREAD" = "1" ]; then
-    echo "[start-pane:$PANE_NAME] no existing Codex session; starting a new TUI thread"
-    THREAD_SELECTOR_OUTPUT="$SOCKET_DIR/.$SAFE_NAME.thread-select.$$"
-    node "$THREAD_SELECTOR" "$APP_SERVER_ENDPOINT" "$EXPECTED_CWD" "" wait > "$THREAD_SELECTOR_OUTPUT" &
-    THREAD_SELECTOR_PID=$!
-    CODEX_TUI_STDIN="${KA_CODEX_TUI_STDIN:-/dev/tty}"
-    run_codex "${TUI_ARGS[@]}" <"$CODEX_TUI_STDIN" &
-    TUI_PID=$!
-    for _ in $(seq 1 300); do
-        [ -s "$THREAD_SELECTOR_OUTPUT" ] && break
-        kill -0 "$THREAD_SELECTOR_PID" 2>/dev/null || break
-        kill -0 "$TUI_PID" 2>/dev/null || break
-        sleep 0.05
-    done
-    if [ ! -s "$THREAD_SELECTOR_OUTPUT" ]; then
-        wait "$THREAD_SELECTOR_PID" 2>/dev/null || true
-        THREAD_SELECTOR_PID=""
-        echo "[start-pane:$PANE_NAME] ERROR: TUI did not create a canonical Codex thread"
-        exit 1
-    fi
-    THREAD_JSON="$(cat "$THREAD_SELECTOR_OUTPUT")"
-    wait "$THREAD_SELECTOR_PID" 2>/dev/null || true
-    THREAD_SELECTOR_PID=""
-    rm -f "$THREAD_SELECTOR_OUTPUT"
-    THREAD_SELECTOR_OUTPUT=""
-fi
-
-CANONICAL_THREAD_ID="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).id))')"
-CANONICAL_THREAD_PATH="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).path||""))')"
-[ -n "$CANONICAL_THREAD_ID" ] || { echo "[start-pane:$PANE_NAME] ERROR: canonical thread id is empty"; exit 1; }
-if [ -z "$REQUESTED_THREAD_ID" ]; then
-    THREAD_OWNER_TMP="$THREAD_OWNER_FILE.$$"
-    printf '%s\n' "$CANONICAL_THREAD_ID" > "$THREAD_OWNER_TMP"
-    chmod 600 "$THREAD_OWNER_TMP" 2>/dev/null || true
-    mv "$THREAD_OWNER_TMP" "$THREAD_OWNER_FILE"
-fi
+persist_thread_owner() {
+    local thread_id="$1" owner_tmp
+    [ -n "$REQUESTED_THREAD_ID" ] && return 0
+    owner_tmp="$THREAD_OWNER_FILE.$$"
+    printf '%s\n' "$thread_id" > "$owner_tmp"
+    chmod 600 "$owner_tmp" 2>/dev/null || true
+    mv "$owner_tmp" "$THREAD_OWNER_FILE"
+}
 
 register_loop() {
+    local canonical_thread_id="$1"
+    local canonical_thread_path="$2"
+    local initially_unpersisted="$3"
     local port="${KA_CHANNEL_PORT:-9877}"
     local status body persisted_json resolved_path
-    local thread_path="$CANONICAL_THREAD_PATH"
-    local allow_unpersisted="$FRESH_THREAD"
+    local thread_path="$canonical_thread_path"
+    local allow_unpersisted="$initially_unpersisted"
     local last_registered_allow=""
     while kill -0 "$APP_SERVER_PID" 2>/dev/null; do
         # A fresh thread is visible to thread/list before its rollout can be
@@ -244,14 +213,14 @@ register_loop() {
         # registration. Without this transition Channel can poll the final turn
         # but receives no turn/started or agent-message delta notifications.
         if [ "$allow_unpersisted" = "1" ]; then
-            persisted_json="$(node "$THREAD_SELECTOR" "$APP_SERVER_ENDPOINT" "$EXPECTED_CWD" "$CANONICAL_THREAD_ID" select 2>/dev/null || true)"
-            resolved_path="$(printf '%s' "$persisted_json" | THREAD_ID="$CANONICAL_THREAD_ID" node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const j=JSON.parse(s);if(j.id===process.env.THREAD_ID)process.stdout.write(j.path||"resumable")}catch{}})' 2>/dev/null || true)"
+            persisted_json="$(node "$THREAD_SELECTOR" "$APP_SERVER_ENDPOINT" "$EXPECTED_CWD" "$canonical_thread_id" select 2>/dev/null || true)"
+            resolved_path="$(printf '%s' "$persisted_json" | THREAD_ID="$canonical_thread_id" node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const j=JSON.parse(s);if(j.id===process.env.THREAD_ID)process.stdout.write(j.path||"resumable")}catch{}})' 2>/dev/null || true)"
             if [ -n "$resolved_path" ]; then
                 [ "$resolved_path" = "resumable" ] || thread_path="$resolved_path"
                 allow_unpersisted=0
             fi
         fi
-        body="$(PANE_NAME="$SAFE_NAME" PANE_CWD="$EXPECTED_CWD" APP_SERVER_ENDPOINT="$APP_SERVER_ENDPOINT" THREAD_ID="$CANONICAL_THREAD_ID" THREAD_PATH="$thread_path" ALLOW_UNPERSISTED_THREAD="$allow_unpersisted" node -e \
+        body="$(PANE_NAME="$SAFE_NAME" PANE_CWD="$EXPECTED_CWD" APP_SERVER_ENDPOINT="$APP_SERVER_ENDPOINT" THREAD_ID="$canonical_thread_id" THREAD_PATH="$thread_path" ALLOW_UNPERSISTED_THREAD="$allow_unpersisted" node -e \
             'process.stdout.write(JSON.stringify({name:process.env.PANE_NAME,cwd:process.env.PANE_CWD,endpoint:process.env.APP_SERVER_ENDPOINT,thread_id:process.env.THREAD_ID,thread_path:process.env.THREAD_PATH||undefined,allow_unpersisted_thread:process.env.ALLOW_UNPERSISTED_THREAD==="1"}))')"
         status="$(curl -sf --max-time 1 "http://127.0.0.1:$port/api/status" 2>/dev/null || true)"
         if [ "$last_registered_allow" != "$allow_unpersisted" ] || ! printf '%s' "$status" | PANE_NAME="$SAFE_NAME" node -e \
@@ -265,17 +234,43 @@ register_loop() {
         sleep 5
     done
 }
-register_loop &
-REGISTRAR_PID=$!
+
+discover_and_register_fresh_thread() {
+    local thread_json canonical_thread_id canonical_thread_path
+    thread_json="$(node "$THREAD_SELECTOR" "$APP_SERVER_ENDPOINT" "$EXPECTED_CWD" "" wait)" || {
+        echo "[start-pane:$PANE_NAME] ERROR: TUI did not create a canonical Codex thread" >&2
+        return 1
+    }
+    canonical_thread_id="$(printf '%s' "$thread_json" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).id))')"
+    canonical_thread_path="$(printf '%s' "$thread_json" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).path||""))')"
+    [ -n "$canonical_thread_id" ] || {
+        echo "[start-pane:$PANE_NAME] ERROR: canonical thread id is empty" >&2
+        return 1
+    }
+    persist_thread_owner "$canonical_thread_id"
+    printf '[start-pane:%s] codex %s (new thread %s; Workshop-managed App Server)\n' \
+        "$PANE_NAME" "${TUI_ARGS[*]}" "$canonical_thread_id" >> "$SERVER_LOG"
+    register_loop "$canonical_thread_id" "$canonical_thread_path" 1
+}
 
 set +e
 if [ "$FRESH_THREAD" = "1" ]; then
-    printf '[start-pane:%s] codex %s (new thread %s; Workshop-managed App Server)\n' \
-        "$PANE_NAME" "${TUI_ARGS[*]}" "$CANONICAL_THREAD_ID" >> "$SERVER_LOG"
-    wait "$TUI_PID"
+    echo "[start-pane:$PANE_NAME] no existing Codex session; starting a new TUI thread"
+    # Codex/crossterm requires the TUI to own the pane's foreground terminal.
+    # Keep discovery + Channel registration in the background instead; putting
+    # the TUI itself in a background shell causes `reader source not set` during
+    # terminal bootstrap and leaks terminal-query replies into the fallback shell.
+    discover_and_register_fresh_thread &
+    REGISTRAR_PID=$!
+    run_codex "${TUI_ARGS[@]}"
     TUI_STATUS=$?
-    TUI_PID=""
 else
+    CANONICAL_THREAD_ID="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).id))')"
+    CANONICAL_THREAD_PATH="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).path||""))')"
+    [ -n "$CANONICAL_THREAD_ID" ] || { echo "[start-pane:$PANE_NAME] ERROR: canonical thread id is empty"; exit 1; }
+    persist_thread_owner "$CANONICAL_THREAD_ID"
+    register_loop "$CANONICAL_THREAD_ID" "$CANONICAL_THREAD_PATH" 0 &
+    REGISTRAR_PID=$!
     echo "[start-pane:$PANE_NAME] codex ${TUI_ARGS[*]} resume $CANONICAL_THREAD_ID (Workshop-managed App Server)"
     run_codex "${TUI_ARGS[@]}" resume "$CANONICAL_THREAD_ID"
     TUI_STATUS=$?
