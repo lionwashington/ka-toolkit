@@ -66,9 +66,11 @@ the sidecar.
 For an existing session, the selector resumes either the explicit validated
 thread ID or the latest exact-cwd thread (`resume --last` and `resume latest` are
 accepted compatibility aliases). For a fresh cwd, Workshop launches the TUI
-without `resume`, waits for its `thread/started`/`thread/list` result, and registers
-that ID immediately. Because the rollout may not yet be resumable, the first
-registration carries `allow_unpersisted_thread`; after persistence the registrar
+without `resume` in the pane foreground, while a background registrar waits for
+its `thread/started`/`thread/list` result and registers that ID immediately.
+Foreground ownership is required for reliable terminal input initialization.
+Because the rollout may not yet be resumable, the first registration carries
+`allow_unpersisted_thread`; after persistence the registrar
 reposts the same runtime identity without that flag. Channel promotes the existing
 client with `thread/resume`, preserving the active WebSocket and enabling delta
 notifications used by platform streaming.

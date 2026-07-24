@@ -166,7 +166,12 @@ fresh_tui_call="$(grep -- '--remote ' "$tmp_root/calls" | tail -1)"
 if printf '%s\n' "$fresh_tui_call" | grep -q -- ' resume '; then
     fail "fresh Codex TUI incorrectly tried to resume an empty thread"
 fi
-ok "missing Codex session starts a new TUI thread"
+if grep -Eq 'run_codex .*<[^\n]*&' "$OPS/runtimes/codex/bin/start-pane.sh"; then
+    fail "fresh Codex TUI is backgrounded and can lose its terminal reader"
+fi
+grep -q 'discover_and_register_fresh_thread &' "$OPS/runtimes/codex/bin/start-pane.sh" \
+    || fail "fresh thread discovery is not separated from the foreground TUI"
+ok "missing Codex session starts a foreground TUI and registers its new thread asynchronously"
 
 : > "$tmp_root/calls"
 pids=""
