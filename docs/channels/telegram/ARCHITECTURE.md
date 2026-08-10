@@ -63,7 +63,7 @@ the first chunk; finalization sends any remaining chunks as follow-up messages.
 
 - **Transport**: `StreamableHTTPServerTransport` (MCP SDK). Each CC connects to `/mcp` as an MCP client.
 - **The channel name comes from the URL query `?name=`**: on a new connection, `sanitizeChannelName((req.query).name)` extracts the channel name. There is no argv/env source.
-  - sanitize: `String(raw).toLowerCase().replace(/[^a-z0-9_-]/g,'')`, empty → default `'main'`. Only `a-z0-9_-` allowed (e.g. `weex.repo` → `weexrepo`).
+  - sanitize: `String(raw).toLowerCase().replace(/[^a-z0-9_-]/g,'')`, empty → default `'main'`. Only `a-z0-9_-` allowed (e.g. `week.repo` → `weekrepo`).
 - **Definition of "session"**: one CC MCP connection = one session (`{ id, server, transport, name, createdAt, monoTs, consecutiveFails, lastProbeOk, staleSince? }`). `id` is the mcp-session-id (UUID). When a CC is attached to a channel it may have ≥1 session (the tool client + the dev-channels consumer connection).
 - **Two routing tables** (kept strictly in sync):
   - `byName: Map<name, Session[]>` — the primary store, **per-name FIFO**. A new init `push`es to the tail; exceeding `PER_NAME_FIFO_CAP` (4) → `shift`s the oldest (also deletes it from `sessionsById` and closes its transport). Dispatch iterates the entire list (in parallel) to ensure the dev-channels consumer (which may land on any recent session) receives the notification. The "owner" (used for display/numbering) = the newest session (`list[length-1]`).
