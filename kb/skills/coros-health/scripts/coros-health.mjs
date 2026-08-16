@@ -8,6 +8,9 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Decoder, Stream } from '@garmin/fitsdk';
+import {
+  officialOauth, rebuildWellness, syncWellness, validateWellness, wellnessPaths, wellnessTrend,
+} from './coros-wellness.mjs';
 
 export const SCHEMA_VERSION = 1;
 export const ALGORITHM_VERSION = 2;
@@ -36,7 +39,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (!arg.startsWith('--')) out._.push(arg);
-    else if (arg === '--repair' || arg === '--json') out[arg.slice(2)] = true;
+    else if (['--repair', '--json', '--refresh-tools', '--fit-only', '--wellness-only'].includes(arg)) out[arg.slice(2)] = true;
     else {
       const [key, inline] = arg.slice(2).split('=', 2);
       out[key] = inline ?? argv[++i];
@@ -108,6 +111,7 @@ function ensureLayout(paths) {
     '- derived/baselines.json: cached aggregate comparison groups.',
     '- state/sync-state.json: sync watermarks and schema/algorithm versions.',
     '- state/annotations.json: optional user labels keyed by activity ID.',
+    '- wellness/: official OAuth MCP health/recovery observations, derived daily trends and an independent sync state.',
     '',
     'Derived files are rebuildable; raw FIT files are not modified by rebuild.',
     '',
@@ -502,6 +506,8 @@ export function rebuild(paths, { strict = false } = {}) {
     last_rebuild_at: new Date().toISOString(),
   }));
   if (strict && invalid.length) throw new Error(`${invalid.length} missing or invalid FIT files`);
+  const wp = wellnessPaths(paths);
+  if (existsSync(wp.raw)) result.wellness = rebuildWellness(paths);
   return result;
 }
 
@@ -712,7 +718,7 @@ export function validate(paths) {
     activity_id_count: state.activity_ids?.length || 0,
     valid_fit_id_count: state.valid_fit_ids?.length || 0,
   } : null;
-  return { metadata_count: metadata.length, valid_fit_count: valid, invalid_fit_count: checks.length - valid, invalid: checks.filter((x) => !x.valid), state: stateSummary };
+  return { metadata_count: metadata.length, valid_fit_count: valid, invalid_fit_count: checks.length - valid, invalid: checks.filter((x) => !x.valid), state: stateSummary, wellness: validateWellness(paths) };
 }
 
 function output(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}\n`); }
@@ -720,8 +726,25 @@ function output(value) { process.stdout.write(`${JSON.stringify(value, null, 2)}
 async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const command = args._[0];
+  if (command === 'oauth-start') { output(officialOauth('login-start', { cacheRoot: args['oauth-cache-root'] })); return; }
+  if (command === 'oauth-finish') { output(officialOauth('login-finish', { cacheRoot: args['oauth-cache-root'] })); return; }
+  if (command === 'oauth-status') { output(officialOauth('login-status', { cacheRoot: args['oauth-cache-root'] })); return; }
   const paths = resolvePaths({ workspace: args.workspace, dataRoot: args['data-root'] });
-  if (command === 'sync') output(await sync(paths, { repair: args.repair, secrets: args.secrets }));
+  if (command === 'sync') {
+    const official = args['fit-only'] ? null : await syncWellness(paths, {
+      startDate: args.from, endDate: args.to, refreshTools: args['refresh-tools'],
+      cacheRoot: args['oauth-cache-root'], timeZone: args.timezone,
+    });
+    const activity = args['wellness-only'] ? null : await sync(paths, { repair: args.repair, secrets: args.secrets });
+    output(activity ? { ...activity, official_wellness: official } : { official_wellness: official });
+  }
+  else if (command === 'sync-fit') output(await sync(paths, { repair: args.repair, secrets: args.secrets }));
+  else if (command === 'wellness-sync') output(await syncWellness(paths, {
+    startDate: args.from, endDate: args.to, refreshTools: args['refresh-tools'],
+    cacheRoot: args['oauth-cache-root'], timeZone: args.timezone,
+  }));
+  else if (command === 'wellness-rebuild') output(rebuildWellness(paths));
+  else if (command === 'wellness-trend') output(wellnessTrend(paths, { days: args.days }));
   else if (command === 'rebuild') output(rebuild(paths));
   else if (command === 'validate') output(validate(paths));
   else if (command === 'compare') output(compareLatest(paths));
@@ -732,7 +755,7 @@ async function main(argv = process.argv.slice(2)) {
     const legacy = args['legacy-dir'] || join(paths.workspace, 'tools', 'coros-data');
     output(migrate(paths, legacy));
   } else {
-    process.stderr.write('Usage: coros-health.mjs <sync|analyze-latest|compare|rebuild|validate|migrate> [--repair] [--data-root PATH] [--workspace PATH] [--secrets PATH] [--legacy-dir PATH]\n');
+    process.stderr.write('Usage: coros-health.mjs <sync|sync-fit|wellness-sync|wellness-trend|wellness-rebuild|oauth-start|oauth-finish|oauth-status|analyze-latest|compare|rebuild|validate|migrate> [--repair] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--days N] [--data-root PATH] [--workspace PATH]\n');
     process.exitCode = 2;
   }
 }

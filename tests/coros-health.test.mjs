@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -10,6 +10,10 @@ import {
   calculateSegments, compareLatest, fetchFitForActivity, inspectFitBuffer,
   migrate, rebuild, resolvePaths, sync, validate,
 } from '../kb/skills/coros-health/scripts/coros-health.mjs';
+import {
+  argumentsForTool, normalizeObservations, rebuildWellness, selectWellnessTools,
+  syncWellness, validateWellness, wellnessPaths, wellnessTrend,
+} from '../kb/skills/coros-health/scripts/coros-wellness.mjs';
 
 function makeFit({ start = '2026-01-20T00:00:00Z', device = 'PACE 4', finish = 330 } = {}) {
   const encoder = new Encoder();
@@ -137,6 +141,114 @@ test('offline sync keeps local cache analyzable and reports failure', async () =
   assert.equal(repeated.rebuild.skipped, true);
 });
 
+function wellnessProvider({ fail = false } = {}) {
+  const tools = [
+    { name: 'queryHrvAssessment', description: 'Query HRV', inputSchema: { properties: { startDate: {}, endDate: {} } } },
+    { name: 'querySleepData', description: 'Query sleep', inputSchema: { properties: { startDay: {}, endDay: {} } } },
+    { name: 'queryRestingHeartRate', description: 'Resting heart rate', inputSchema: { properties: { days: {} } } },
+    { name: 'queryStressLevel', description: 'Stress time series', inputSchema: { properties: { start_date: {}, end_date: {} } } },
+    { name: 'queryRecoveryStatus', description: 'Recovery status', inputSchema: { properties: {} } },
+  ];
+  return {
+    async listTools() {
+      if (fail) throw new Error('network unavailable');
+      return tools;
+    },
+    async callTool(name) {
+      return {
+        access_token: 'must-not-be-persisted',
+        content: [{ type: 'text', text: JSON.stringify({ records: [
+          { date: '20260120', hrv: name.includes('Hrv') ? 48 : undefined, totalSleepMinutes: name.includes('Sleep') ? 430 : undefined,
+            restingHeartRate: name.includes('Resting') ? 49 : undefined, stressLevel: name.includes('Stress') ? 31 : undefined,
+            recoveryScore: name.includes('Recovery') ? 82 : undefined },
+          { date: '2026-01-21T00:30:00+08:00', hrv: name.includes('Hrv') ? 52 : undefined, totalSleepMinutes: name.includes('Sleep') ? 445 : undefined,
+            restingHeartRate: name.includes('Resting') ? 48 : undefined, stressLevel: name.includes('Stress') ? 29 : undefined,
+            recoveryScore: name.includes('Recovery') ? 86 : undefined },
+        ] }) }],
+      };
+    },
+  };
+}
+
+test('official tool discovery and arguments cover health and date-range schemas', () => {
+  const selected = selectWellnessTools([
+    { name: 'queryHrvAssessment', description: '' },
+    { name: 'querySleepData', description: '' },
+    { name: 'queryRestingHeartRate', description: '' },
+    { name: 'queryStressLevel', description: '' },
+    { name: 'queryRecoveryStatus', description: '' },
+  ]);
+  assert.deepEqual(selected.map((row) => row.kind), ['hrv', 'sleep', 'resting_heart_rate', 'stress', 'recovery']);
+  assert.deepEqual(argumentsForTool({ inputSchema: { properties: { startDay: {}, endDay: {}, days: {} } } }, '2026-01-20', '2026-01-21'), {
+    startDay: '20260120', endDay: '20260121', days: 2,
+  });
+  assert.deepEqual(argumentsForTool({ inputSchema: { properties: { startDate: {}, endDate: {}, days: {} } } }, '2026-01-20', '2026-01-21'), {
+    startDate: '20260120', endDate: '20260121', days: 2,
+  });
+  assert.equal(argumentsForTool({ inputSchema: { properties: { days: { description: 'default 7 and maximum 7' } } } }, '2026-01-01', '2026-01-21').days, 7);
+});
+
+test('normalizes current official MCP JSON-encoded text responses', () => {
+  const observations = [
+    { kind: 'hrv', tool: 'querySleepHrv', range: { end_date: '2026-01-21' }, payload: { content: [{ type: 'text', text: JSON.stringify('2026-01-21:\nHRV Avg: 52 ms\nBaseline: 49 ms') }] } },
+    { kind: 'sleep', tool: 'querySleepData', range: { end_date: '2026-01-21' }, payload: { content: [{ type: 'text', text: JSON.stringify('2026-01-21\nSleep Score: 87\nMain Sleep: 7h 25m\nAwake Time: 15 min') }] } },
+    { kind: 'resting_heart_rate', tool: 'queryRestingHeartRate', range: { end_date: '2026-01-21' }, payload: { content: [{ type: 'text', text: JSON.stringify('2026-01-21: 48 bpm') }] } },
+    { kind: 'recovery', tool: 'queryRecoveryStatus', range: { end_date: '2026-01-21' }, payload: { content: [{ type: 'text', text: JSON.stringify('Recovery Status\nRecovery: 82%') }] } },
+  ];
+  const [row] = normalizeObservations(observations);
+  assert.equal(row.date, '2026-01-21');
+  assert.equal(row.hrv_ms, 52);
+  assert.equal(row.hrv_baseline_ms, 49);
+  assert.equal(row.sleep_minutes, 445);
+  assert.equal(row.sleep_score, 87);
+  assert.equal(row.awake_minutes, 15);
+  assert.equal(row.resting_hr_bpm, 48);
+  assert.equal(row.recovery, 82);
+});
+
+test('wellness sync is incremental, idempotent and strips OAuth secrets', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'coros-wellness-'));
+  const paths = fixture(root, [{ labelId: 'run-1', date: 20260120, name: 'Run', sportType: 100, trainingLoad: 60 }]);
+  rebuild(paths);
+  const options = { provider: wellnessProvider(), startDate: '2026-01-20', endDate: '2026-01-21' };
+  const first = await syncWellness(paths, options);
+  assert.equal(first.remote.status, 'ok');
+  assert.equal(first.data_through, '2026-01-21');
+  const wp = wellnessPaths(paths);
+  const rawHash = createHash('sha256').update(readFileSync(wp.raw)).digest('hex');
+  const second = await syncWellness(paths, options);
+  assert.equal(second.remote.status, 'ok');
+  assert.equal(second.observations_new, 0);
+  assert.equal(second.daily_changed, false);
+  assert.equal(createHash('sha256').update(readFileSync(wp.raw)).digest('hex'), rawHash);
+  assert.doesNotMatch(readFileSync(wp.raw, 'utf8'), /must-not-be-persisted|access_token/);
+  assert.deepEqual(validateWellness(paths).sensitive_key_hits, []);
+  const daily = readFileSync(wp.daily, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(daily[0].local_activity_training_load, 60);
+  const trend = wellnessTrend(paths);
+  assert.equal(trend.source, 'local_cache');
+  assert.equal(trend.latest.local_activity_training_load, null);
+});
+
+test('wellness normalization respects source dates and offline fallback keeps cache', async () => {
+  const rows = normalizeObservations([{ kind: 'hrv', tool: 'queryHrvAssessment', payload: { records: [
+    { date: 20260131, hrv: 41 },
+    { date: '2026-02-01T00:05:00+08:00', hrv: 44 },
+  ] } }]);
+  assert.deepEqual(rows.map((row) => row.date), ['2026-01-31', '2026-02-01']);
+  const root = mkdtempSync(join(tmpdir(), 'coros-wellness-offline-'));
+  const paths = fixture(root, []);
+  await syncWellness(paths, { provider: wellnessProvider(), startDate: '2026-01-20', endDate: '2026-01-21' });
+  const failed = await syncWellness(paths, { provider: wellnessProvider({ fail: true }), startDate: '2026-01-21', endDate: '2026-01-22' });
+  assert.equal(failed.remote.status, 'failed');
+  assert.match(failed.remote.error, /network unavailable/);
+  assert.equal(wellnessTrend(paths).data_through, '2026-01-21');
+  const wp = wellnessPaths(paths);
+  rmSync(wp.daily);
+  const rebuilt = rebuildWellness(paths);
+  assert.equal(rebuilt.daily_count, 2);
+});
+
 test('refuses to place private health data inside the public source repository', () => {
   const repo = join(import.meta.dirname, '..');
   assert.throws(
@@ -165,5 +277,12 @@ test('emits JSON when invoked through Codex and Claude discovery symlinks', () =
     const output = JSON.parse(result.stdout);
     assert.equal(output.valid_fit_count, 1);
     assert.equal(output.invalid_fit_count, 0);
+
+    const trend = spawnSync(process.execPath, [
+      join(skillLink, 'scripts', 'coros-health.mjs'),
+      'wellness-trend', '--workspace', root, '--data-root', paths.root,
+    ], { encoding: 'utf8' });
+    assert.equal(trend.status, 0, trend.stderr);
+    assert.equal(JSON.parse(trend.stdout).source, 'local_cache');
   }
 });

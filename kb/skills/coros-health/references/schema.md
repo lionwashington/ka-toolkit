@@ -13,6 +13,10 @@ derived/running-splits.csv   normalized lap table
 derived/baselines.json       cached comparison groups
 state/sync-state.json        watermarks, hashes, schema and algorithm versions
 state/annotations.json       optional user annotations keyed by activity ID
+wellness/raw/observations.jsonl  scrubbed official-MCP responses keyed by tool/date range
+wellness/derived/daily.jsonl     normalized daily health/recovery values
+wellness/derived/trends.json     cached 28-day mean/median summaries
+wellness/state/sync-state.json  independent OAuth-MCP sync watermark and versions
 README.md                    generated local schema note; contains no credentials
 ```
 
@@ -24,6 +28,16 @@ Raw FIT files are accepted only when:
 4. the file is written to the requested activity ID using an atomic rename.
 
 The COROS download endpoint may return JSON containing `data.fileUrl`. Follow that URL and validate the second response; never store the link JSON as FIT.
+
+OAuth access/refresh tokens, pending-login state, verifier values, and the official tool catalog never belong in this tree. Store them in the private KA configuration root with directory mode `0700` and token-file mode `0600`.
+
+## Wellness records
+
+The official COROS MCP is the source for HRV, sleep, resting heart rate, average heart rate, stress, recovery and daily/training-load data. `wellness/raw/observations.jsonl` is append-by-logical-key: a repeated tool/date-range response with identical content is unchanged, while a changed response replaces that logical observation. A normal incremental sync overlaps the prior watermark by two days so late-finalized sleep and recovery values can settle without a full historical pull.
+
+Normalize source-provided calendar dates as calendar dates; do not convert a sleep date through UTC and accidentally move it across a day boundary. Daily rows may contain `hrv_ms`, `sleep_minutes`, `sleep_score`, `resting_hr_bpm`, `avg_hr_bpm`, `stress`, `recovery`, `steps`, `calories_kcal`, `training_load`, and `local_activity_training_load` when the source provides them. Missing values remain absent/null rather than inferred.
+
+The training-load join is by local calendar date against cached normalized activities. It is an explanatory association only. Rebuild derives daily/trend files from raw observations and the existing activity cache without network access or FIT downloads.
 
 ## Normalized metrics
 
@@ -74,3 +88,5 @@ Percent difference is `(target - baseline) / baseline * 100`. For pace, a negati
 ## Versioning
 
 Increment `SCHEMA_VERSION` for incompatible persisted-shape changes and `ALGORITHM_VERSION` whenever derived metric logic changes. `rebuild` regenerates derived data without changing raw FIT files.
+
+Wellness has independent `WELLNESS_SCHEMA_VERSION` and `WELLNESS_ALGORITHM_VERSION` values so a health-data migration cannot silently invalidate the stable FIT analysis state.

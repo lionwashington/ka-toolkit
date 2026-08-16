@@ -1,4 +1,12 @@
 interface:
   display_name: "COROS Health"
-  short_description: "Sync and compare COROS running data locally"
-  default_prompt: "Use $coros-health to sync today’s COROS activity and compare the run with recent local baselines."
+  short_description: "Sync COROS recovery and analyze running locally"
+  default_prompt: "Use $coros-health to sync my recent COROS wellness data and relate recovery trends to cached training load."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "coros"
+      description: "Official read-only COROS health and training data"
+      transport: "streamable_http"
+      url: "https://mcp.coros.com/mcp"
