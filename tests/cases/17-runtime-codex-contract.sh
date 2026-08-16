@@ -73,7 +73,7 @@ fi
 printf '%s\n' "$*" | grep -q 'resume --last' && exit 2
 if [ -n "${FAKE_TUI_STARTED_MARKER:-}" ]; then
     printf 'started\n' > "$FAKE_TUI_STARTED_MARKER"
-    sleep 0.2
+    sleep "${FAKE_TUI_SLEEP:-0.2}"
 fi
 exit 0
 SH
@@ -172,6 +172,26 @@ fi
 grep -q 'discover_and_register_fresh_thread &' "$OPS/runtimes/codex/bin/start-pane.sh" \
     || fail "fresh thread discovery is not separated from the foreground TUI"
 ok "missing Codex session starts a foreground TUI and registers its new thread asynchronously"
+
+: > "$tmp_root/calls"
+rm -f "$tmp_root/single-instance-started"
+FAKE_CODEX_CALLS="$tmp_root/calls" FAKE_TUI_STARTED_MARKER="$tmp_root/single-instance-started" \
+    FAKE_TUI_SLEEP=2 PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" KA_CHANNEL=single-instance \
+    "$OPS/start-pane.sh" codex single-instance "$tmp_root/work" >/dev/null 2>&1 &
+single_instance_pid=$!
+for _ in $(seq 1 100); do
+    [ -f "$tmp_root/single-instance-started" ] && break
+    sleep 0.02
+done
+[ -f "$tmp_root/single-instance-started" ] || fail "first same-name Codex pane did not start"
+if FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" KA_CHANNEL=single-instance \
+    "$OPS/start-pane.sh" codex single-instance "$tmp_root/work" >/dev/null 2>&1; then
+    fail "second same-name Codex pane bypassed the instance lock"
+fi
+same_name_servers="$(grep -c 'app-server --listen' "$tmp_root/calls")"
+[ "$same_name_servers" = "1" ] || fail "same-name Codex panes launched more than one App Server"
+wait "$single_instance_pid" || fail "first same-name Codex pane failed"
+ok "Codex runtime names allow only one App Server and registrar instance"
 
 : > "$tmp_root/calls"
 pids=""

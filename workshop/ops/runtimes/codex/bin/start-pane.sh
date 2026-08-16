@@ -45,10 +45,13 @@ RUNTIME_NAME="${KA_CHANNEL:-$PANE_NAME}"
 SAFE_NAME="$(printf '%s' "$RUNTIME_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]//g')"
 [ -n "$SAFE_NAME" ] || SAFE_NAME="main"
 SERVER_LOG="$SOCKET_DIR/$SAFE_NAME.log"
+INSTANCE_LOCK_DIR="$SOCKET_DIR/$SAFE_NAME.instance.lock"
+INSTANCE_OWNER_FILE="$INSTANCE_LOCK_DIR/pid"
 PORT_LOCK_DIR="$SOCKET_DIR/.port-allocation.lock"
 PORT_LOCK_HELD=0
 APP_SERVER_PID=""
 REGISTRAR_PID=""
+INSTANCE_LOCK_HELD=0
 
 release_port_lock() {
     if [ "$PORT_LOCK_HELD" = "1" ]; then
@@ -60,13 +63,39 @@ release_port_lock() {
 
 cleanup() {
     release_port_lock
+    [ "$INSTANCE_LOCK_HELD" = "1" ] || return 0
     [ -n "$REGISTRAR_PID" ] && kill "$REGISTRAR_PID" 2>/dev/null || true
     [ -n "$REGISTRAR_PID" ] && wait "$REGISTRAR_PID" 2>/dev/null || true
     curl -sf -X DELETE "http://127.0.0.1:${KA_CHANNEL_PORT:-9877}/api/runtimes/codex/$SAFE_NAME" >/dev/null 2>&1 || true
     [ -n "$APP_SERVER_PID" ] && kill "$APP_SERVER_PID" 2>/dev/null || true
     [ -n "$APP_SERVER_PID" ] && wait "$APP_SERVER_PID" 2>/dev/null || true
+    rm -f "$INSTANCE_OWNER_FILE"
+    rmdir "$INSTANCE_LOCK_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM HUP
+
+# A Codex runtime name owns one App Server + registrar pair. Keep an atomic
+# directory lock for the wrapper's entire lifetime so a stale/orphaned pane
+# cannot race a new pane and replace the Channel target during an active turn.
+# A SIGKILL can leave the directory behind; reclaim it only when its recorded
+# owner process no longer exists.
+for _ in 1 2 3; do
+    if mkdir "$INSTANCE_LOCK_DIR" 2>/dev/null; then
+        chmod 700 "$INSTANCE_LOCK_DIR" 2>/dev/null || true
+        printf '%s\n' "$$" > "$INSTANCE_OWNER_FILE"
+        chmod 600 "$INSTANCE_OWNER_FILE" 2>/dev/null || true
+        INSTANCE_LOCK_HELD=1
+        break
+    fi
+    existing_owner="$(cat "$INSTANCE_OWNER_FILE" 2>/dev/null || true)"
+    if [[ "$existing_owner" =~ ^[0-9]+$ ]] && kill -0 "$existing_owner" 2>/dev/null; then
+        echo "[start-pane:$PANE_NAME] ERROR: Codex runtime '$SAFE_NAME' already has an active pane instance (pid=$existing_owner)" >&2
+        exit 1
+    fi
+    rm -f "$INSTANCE_OWNER_FILE"
+    rmdir "$INSTANCE_LOCK_DIR" 2>/dev/null || true
+done
+[ "$INSTANCE_LOCK_HELD" = "1" ] || { echo "[start-pane:$PANE_NAME] ERROR: cannot acquire Codex runtime instance lock for '$SAFE_NAME'" >&2; exit 1; }
 
 # Port discovery closes its temporary listener before App Server binds. Serialize
 # that small gap across Workshop panes so simultaneous Codex mates cannot select
