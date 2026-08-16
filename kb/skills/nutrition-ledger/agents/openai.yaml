@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nutrition Ledger"
+  short_description: "Audit-friendly offline nutrition and meal ledger"
+  default_prompt: "Use $nutrition-ledger to calculate and record this meal from my local nutrition data."
