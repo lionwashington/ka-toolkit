@@ -25,7 +25,7 @@ Never print credential values. The CLI reads `coros.api_url`, `coros.email`, and
 
 - Keep only the reusable skill code, synthetic tests, schemas, and locked dependency metadata in the skill repository.
 - Keep raw FIT files, activity metadata, annotations, sync state, and derived health metrics under the private data root. Never copy them into the skill directory or a public repository.
-- Ensure the private data root is ignored by its enclosing Git repository before syncing. The CLI refuses any data root inside the skill source checkout as a final guardrail.
+- Keep the private data root in a dedicated private repository when durable Git backup is desired. Track immutable FIT files and rebuildable metadata/derived/state assets there, while using precise ignore rules only for credentials, temporary downloads, locks, and test debris. Never place the data root in a public repository. The CLI refuses any data root inside the skill source checkout as a final guardrail.
 - Keep credentials only in the private runtime secrets file or process environment; never write them into the data root, logs, fixtures, or command output.
 
 ## Choose the command
