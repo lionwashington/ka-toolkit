@@ -233,7 +233,7 @@ describe('resolveTargetList', () => {
 })
 
 describe('sanitizeChannelName', () => {
-  test('strips disallowed chars', () => assert.equal(sanitizeChannelName('Weex.Repo'), 'weexrepo'))
+  test('strips disallowed chars', () => assert.equal(sanitizeChannelName('week.Repo'), 'weekrepo'))
   test('keeps a-z0-9_-', () => assert.equal(sanitizeChannelName('ka-dev_2'), 'ka-dev_2'))
   test('lowercases', () => assert.equal(sanitizeChannelName('MAIN'), 'main'))
   test('empty → main', () => assert.equal(sanitizeChannelName(''), 'main'))

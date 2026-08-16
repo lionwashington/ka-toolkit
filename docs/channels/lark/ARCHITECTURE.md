@@ -192,7 +192,7 @@ After a daemon restart, an old client comes in with a stale session-id:
 | `to <nonexistent>: content` | daemon replies `⚠️ channel "<name>" is offline` + lists online channels |
 
 - Case-insensitive
-- Channel name charset is only `a-z0-9_-` (`claude-ch` strips other characters like `.`: `weex.repo` → `weexrepo`)
+- Channel name charset is only `a-z0-9_-` (`claude-ch` strips other characters like `.`: `week.repo` → `weekrepo`)
 - **Sticky routing**: a no-prefix message reuses the last **single** target the chat routed to. The decision is the shared pure `applyStickyRouting` (`channels/core/src/routing.ts`, also used by telegram): only an explicit single, non-`all` target is remembered; multi-target / `to all` do not stick. Because a lark daemon serves many chats, the remembered value is keyed **per chat** (`last_target_by_chat`), unlike telegram's single global `last_target`. No remembered target (chat's first message) or it being offline → daemon prompts the owner to pick a channel + online list (no silent default to `main`). This same per-chat store also backs attachment targeting (it replaced the old separate `attachTarget`).
 
 ## 10. Key Invariants (must preserve when changing code)
