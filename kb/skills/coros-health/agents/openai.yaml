@@ -1,0 +1,4 @@
+interface:
+  display_name: "COROS Health"
+  short_description: "Sync and compare COROS running data locally"
+  default_prompt: "Use $coros-health to sync today’s COROS activity and compare the run with recent local baselines."

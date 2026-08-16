@@ -581,24 +581,38 @@ deploy_core_cli() {      # core CLI (called by kb skill) → runtime/core-cli (t
   log "  OK ${dest} (${cnt} core CLI(s) copied into runtime; kb skill no longer points at repo)"
 }
 
-deploy_skills() {        # skills → runtime/skills/<name>/SKILL.md (design→runtime copy; symlink created by switch_skills)
+deploy_skills() {        # skills → runtime/skills/<name> (design→runtime copy; symlink created by switch_skills)
   want skills || return 0
   local dest="$RUNTIME/kb/skills"
-  log "skills → ${dest} (copy kb/skills/*.md; symlink pointed at runtime by switch_skills)"
+  log "skills → ${dest} (copy flat and directory skills; symlink pointed at runtime by switch_skills)"
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  [dry-run] cp kb/skills/*.md -> ${dest}/<name>/SKILL.md (incl the kb entry kb/skills/kb.md)"
+    echo "  [dry-run] copy kb/skills/*.md and kb/skills/<name>/ -> ${dest}/<name>/"
     return 0
   fi
   mkdir -p "$dest"
-  # All skill sources live flat under kb/skills/*.md (the /kb entry kb.md included —
-  # the old kb/skill package shell was merged in). Each → runtime/kb/skills/<name>/SKILL.md.
-  local f name cnt=0
+  # Simple skills remain flat. Resource-bearing skills are directories and are
+  # copied without design-time node_modules; locked runtime dependencies are
+  # installed after the copy.
+  local f d entry name cnt=0
   for f in "$REPO_ROOT"/kb/skills/*.md; do
     [ -f "$f" ] || continue
     name="$(basename "$f" .md)"
     mkdir -p "$dest/$name"; cp "$f" "$dest/$name/SKILL.md"; cnt=$((cnt + 1))
   done
-  log "  OK ${dest} (${cnt} skill(s) copied into runtime; pure docs, self-contained)"
+  for d in "$REPO_ROOT"/kb/skills/*/; do
+    [ -f "$d/SKILL.md" ] || continue
+    name="$(basename "$d")"
+    mkdir -p "$dest/$name"
+    for entry in SKILL.md agents scripts references assets package.json package-lock.json; do
+      [ -e "$d/$entry" ] || continue
+      cp -R "$d/$entry" "$dest/$name/"
+    done
+    if [ -f "$dest/$name/package-lock.json" ] && [ "${KA_SKIP_SKILL_DEPS:-0}" != 1 ]; then
+      npm ci --omit=dev --ignore-scripts --prefix "$dest/$name" >/dev/null
+    fi
+    cnt=$((cnt + 1))
+  done
+  log "  OK ${dest} (${cnt} skill(s) copied into runtime)"
 }
 
 seed_config() {          # seed config/data directories (never overwrites existing user data)
@@ -921,17 +935,28 @@ switch_skills() {        # switch ⑥: runtime skill symlinks for Claude Code an
     return 0
   fi
   [ -d "$src" ] || { log "  WARN ${src} does not exist (run deploy_skills first), skipping"; return 0; }
-  local d name link tgt codex_link cnt=0
+  local d name link tgt claude_dir codex_link cnt=0
   for d in "$src"/*/; do
     [ -d "$d" ] || continue
     name="$(basename "$d")"
 
-    link="$CLAUDE_SKILLS_DIR/$name/SKILL.md"
-    mkdir -p "$CLAUDE_SKILLS_DIR/$name"
-    if [ -L "$link" ] && [ ! -f "${link}.pre-switch-target" ]; then
-      tgt="$(readlink "$link")"; printf '%s' "$tgt" > "${link}.pre-switch-target"
+    claude_dir="$CLAUDE_SKILLS_DIR/$name"
+    if [ -d "$d/scripts" ] || [ -d "$d/references" ] || [ -d "$d/assets" ]; then
+      # Resource-bearing skills need the complete directory so relative paths
+      # in SKILL.md resolve for Claude Code as well as Codex.
+      if [ -e "$claude_dir" ] && [ ! -L "$claude_dir" ]; then
+        log "  WARN ${claude_dir} already exists and is not KA-managed; skipping Claude link"
+      else
+        ln -sfn "$src/$name" "$claude_dir"; cnt=$((cnt + 1))
+      fi
+    else
+      link="$claude_dir/SKILL.md"
+      mkdir -p "$claude_dir"
+      if [ -L "$link" ] && [ ! -f "${link}.pre-switch-target" ]; then
+        tgt="$(readlink "$link")"; printf '%s' "$tgt" > "${link}.pre-switch-target"
+      fi
+      ln -sf "$src/$name/SKILL.md" "$link"; cnt=$((cnt + 1))
     fi
-    ln -sf "$src/$name/SKILL.md" "$link"; cnt=$((cnt + 1))
 
     # Codex discovers symlinked skill directories, but deliberately ignores a
     # symlinked SKILL.md inside a real directory. Migrate the old KA layout when
