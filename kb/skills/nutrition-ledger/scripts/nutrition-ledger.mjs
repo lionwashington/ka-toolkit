@@ -4,6 +4,7 @@ import {
   existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync,
   writeFileSync,
 } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,6 +42,13 @@ function findWorkspace(start = process.cwd()) {
     if (parent === current) break;
     current = parent;
   }
+  const candidates = [
+    process.env.OPENCLAW_WORKSPACE_ROOT,
+    process.env.KA_WORKSPACE_ROOT,
+    join(homedir(), 'workspace', 'openclaw-ws'),
+  ].filter(Boolean).map(candidate => resolve(candidate));
+  const discovered = candidates.find(candidate => existsSync(join(candidate, 'memory')) || existsSync(join(candidate, 'data', 'health')));
+  if (discovered) return discovered;
   return resolve(start);
 }
 

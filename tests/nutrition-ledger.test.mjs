@@ -215,3 +215,16 @@ test('16 Codex and Claude discovery symlink entrypoints both emit compact JSON',
     assert.equal(JSON.parse(result.stdout).ok, true);
   }
 });
+
+test('17 workspace discovery uses a generic configured root outside the current directory', () => {
+  const { workspace } = ledger();
+  mkdirSync(join(workspace, 'memory'), { recursive: true });
+  const unrelated = mkdtempSync(join(tmpdir(), 'nutrition-ledger-cwd-'));
+  const result = spawnSync(process.execPath, [script, 'validate'], {
+    cwd: unrelated, encoding: 'utf8', timeout: 5000,
+    env: { PATH: process.env.PATH, OPENCLAW_WORKSPACE_ROOT: workspace },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).ok, true);
+  assert.equal(validate(resolvePaths({ workspace })).ok, true);
+});
