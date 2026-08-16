@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -142,4 +143,27 @@ test('refuses to place private health data inside the public source repository',
     () => resolvePaths({ workspace: repo }),
     /refusing COROS data root inside the skill source repository/,
   );
+});
+
+test('emits JSON when invoked through Codex and Claude discovery symlinks', () => {
+  const root = mkdtempSync(join(tmpdir(), 'coros-health-discovery-'));
+  const paths = fixture(root, [{ labelId: 'cached-1', date: 20260120, name: 'Run', sportType: 100, device: 'PACE 4', distance: 6014 }]);
+  rebuild(paths);
+  const skillSource = join(import.meta.dirname, '..', 'kb', 'skills', 'coros-health');
+
+  for (const discovery of ['.codex', '.claude']) {
+    const skillsDir = join(root, discovery, 'skills');
+    mkdirSync(skillsDir, { recursive: true });
+    const skillLink = join(skillsDir, 'coros-health');
+    symlinkSync(skillSource, skillLink, 'dir');
+    const result = spawnSync(process.execPath, [
+      join(skillLink, 'scripts', 'coros-health.mjs'),
+      'validate', '--workspace', root, '--data-root', paths.root,
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.stdout.trim(), `${discovery} discovery invocation produced no stdout`);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.valid_fit_count, 1);
+    assert.equal(output.invalid_fit_count, 0);
+  }
 });

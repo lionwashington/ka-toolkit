@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import {
   copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync,
-  unlinkSync, writeFileSync,
+  realpathSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -737,5 +737,15 @@ async function main(argv = process.argv.slice(2)) {
   }
 }
 
-const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+function isDirectExecution(entrypoint = process.argv[1]) {
+  if (!entrypoint) return false;
+  const modulePath = fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(resolve(entrypoint)) === realpathSync(modulePath);
+  } catch {
+    return resolve(entrypoint) === modulePath;
+  }
+}
+
+const isMain = isDirectExecution();
 if (isMain) main().catch((error) => { process.stderr.write(`coros-health: ${error.message}\n`); process.exitCode = 1; });
