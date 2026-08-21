@@ -331,7 +331,7 @@ The runtime isn't one lump; it's **two big blocks belonging to different owners*
 | python MCP (ibkr / hkprop) | `kb/tools/*` | `kb/venvs/<name>` (**wheel install, not editable**) | build wheel + pip |
 | CC hooks (capture / compact) | `kb/adapter-cc/dist/hooks` | `kb/hooks/` (esbuild bundle, @ka/core folded in self-contained) | esbuild |
 | core CLI (called by the kb skill) | `kb/core/dist/*-cli.js` | `kb/core/dist/` (tsup already self-contained, pure copy) | copy |
-| skills (5 + kb) | `kb/skills/*.md` + `kb/skills/kb.md` | `kb/skills/<name>/SKILL.md`; `~/.claude/skills/<name>` symlink pointing at runtime | copy + symlink |
+| skills | `kb/skills/*.md` + `kb/skills/<name>/` | `kb/skills/<name>/`; discovery roots link to the runtime copy | copy + symlink |
 | telegram daemon | `channels/telegram` | `channels/telegram-daemon/` (esbuild bundle + scripts; no secrets) | esbuild + copy |
 | config / state / credentials | repo ships `config/*.example.{yaml,…}` templates | `$KA_HOME/config/{config,secrets,workshop,cron}.yaml` + `$KA_HOME/state/` + `$KA_HOME/raw/` | install seed (no overwrite) |
 | cron plist | `cron/ops/cron` generator | `~/Library/LaunchAgents/com.knowledge-assistant.ka.cron.*.plist` (platform-mandated) | ka cron install |
@@ -386,6 +386,7 @@ the capability is provided by the runtime; `planned` = not yet delivered.
 | **shopping** | shipped | `kb/skills/taobao-native/` + `kb/skills/jd.md` | Taobao / JD.com shopping skills |
 | **mail** | shipped | `kb/skills/mail.md` | send/receive email (gogcli backend), archive → KB |
 | **calendar** | shipped | `kb/skills/calendar.md` | Google Calendar scheduling skill (gogcli backend) |
+| **SecureLink renewal** | shipped | `kb/skills/securelink-renewal/` | renew the Windows-host SecureLink client from WSL with ephemeral, non-persisted TOTP handling |
 | **market-data** | shipped | `kb/tools/market-mcp/` | quotes MCP (stock / crypto) |
 | **hkprop** | shipped | `kb/tools/hkprop-mcp/` | Hong Kong property MCP (28Hse + Centanet) |
 | **ibkr** | shipped | `kb/tools/ibkr-mcp/` | IBKR position / quote query MCP |
@@ -427,7 +428,7 @@ Three big categories: **the Agent itself** / **KA products (design)** / **per-ma
 | `$KA_HOME/config/{config,secrets,cron,workshop}.yaml` | config / credentials / cron / layout (the `config/` data bucket) | **KA (user config)** |
 | `$KA_HOME/state/` + `$KA_HOME/{raw,pending-topics}/` | runtime state (the `state/` bucket) + capture/distill data | **KA (runtime state)** |
 | `~/Library/LaunchAgents/com.knowledge-assistant.ka.cron.*.plist` | cron (KA generates + loads, launchd executes) | **per-machine config (platform-mandated)** |
-| `~/.claude/settings.json` / `.claude.json` / `skills/<name>` | CC harness config / MCP registration / skills symlink | **CC backend; KA only places via the interface** |
+| `~/.claude/settings.json` / `.claude.json` / `skills/<name>` and `~/.codex/skills/<name>` | agent harness config / MCP registration / skill discovery symlinks | **Agent backends; KA only places via the interface** |
 
 > Credentials go in `$KA_HOME/config/secrets.yaml` (KA's native capability) — including the channel daemon's own token
 > (`channels.<kind>.token`, which the daemon reads directly; there is no per-daemon `.env` or `config.json` any more).

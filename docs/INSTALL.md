@@ -94,6 +94,7 @@ shared `config/config.yaml` without changing platform settings or secrets.
 |------|--------|
 | `--dry-run` | Print every action; change nothing. |
 | `--only <component>` | Deploy a single component. Valid: `ka`, `node-mcp`, `python-mcp`, `daemon`, `telegram-daemon`, `lark-daemon`, `hooks`, `core-cli`, `skills`, `config`. |
+| `--skill <name>` | With `--only skills`, deploy and switch only the named skill; unrelated skills remain untouched. |
 | `--switch` | After deploying, flip live registrations to the runtime (MCP, ka link, cron, hooks, daemon, skills). See Step 6. |
 | `--cleanup-old` | After a verified switch, remove the old standalone daemon dir and `.pre-switch` backups (irreversible). |
 
@@ -102,6 +103,24 @@ Each `--switch` step writes a `.pre-switch-*` backup first; there is **no
 
 `KA_HOME=/tmp/ka-itest ./install.sh --dry-run` runs an isolated test against a
 temp root, never touching your real runtime.
+
+Resource-bearing skills, including `securelink-renewal`, are deployed as complete
+directories. Each skill is built in a clean sibling stage and swapped with a
+scoped rollback trap; a later run reconciles stage/backup remnants from a hard
+interruption before replacing the runtime. The supported install is:
+
+```bash
+./install.sh --only skills --skill securelink-renewal --switch --dry-run
+./install.sh --only skills --skill securelink-renewal --switch
+```
+
+The repository and deployed skill directory contain code and documentation only.
+Do not put screenshots, logs, account identifiers, TOTP values, or machine-local
+credentials under `kb/skills/`. Persistent credentials belong only in
+`$KA_HOME/config/secrets.yaml` with mode `0600`; `securelink-renewal` needs no
+persistent secret and deliberately never writes a TOTP there. See
+[`docs/skills/securelink-renewal.md`](skills/securelink-renewal.md) for its data
+boundaries and verification procedure.
 
 ## Step 3: Put `ka` on your PATH
 

@@ -15,7 +15,7 @@
 #   - seed_config never overwrites existing config/credentials.
 #
 # Usage:
-#   ./install.sh [--dry-run] [--only ka|node-mcp|python-mcp|daemon|hooks|core-cli|skills|config] [--switch]
+#   ./install.sh [--dry-run] [--only ka|node-mcp|python-mcp|daemon|hooks|core-cli|skills|config] [--skill <name>] [--switch]
 #   KA_HOME=/tmp/ka-itest ./install.sh --dry-run    # isolated test, doesn't touch the real runtime
 #
 # Status: P1.1 skeleton — each component's deploy function is filled in over P1.2–P1.5.
@@ -40,33 +40,60 @@ LARK_DIR="${KA_LARK_DIR:-$HOME/.lark-channel}"                        # old lark
 # persisted to config.yaml `channel_kind` (see resolve_active_kind below).
 # `--only daemon` deploys both; the platform-specific targets deploy one.
 
-DRY_RUN=0; ONLY=""; DO_SWITCH=0; DO_CLEANUP=0; CHANNEL_KIND_ARG=""
+DRY_RUN=0; ONLY=""; DO_SWITCH=0; DO_CLEANUP=0; CHANNEL_KIND_ARG=""; SKILL_FILTER=""
 usage() {
   cat <<'EOF'
 Usage: ./install.sh [options]
   --dry-run                  Print actions without changing runtime files
   --only <component>         Deploy one component (daemon, telegram-daemon, or lark-daemon for channels)
+  --skill <name>             With --only skills, deploy/switch only this skill
   --switch                   Switch live registrations after deployment
   --cleanup-old              Remove obsolete deployed artifacts
   --channel-kind <kind>      Select telegram or lark
   -h, --help                 Show this help and exit
 EOF
 }
-for a in "$@"; do
-  case "$a" in
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     -h|--help) usage; exit 0 ;;
-    --dry-run)  DRY_RUN=1 ;;
-    --switch)   DO_SWITCH=1 ;;
-    --cleanup-old) DO_CLEANUP=1 ;;
-    --only=*)   ONLY="${a#--only=}" ;;
-    --only)     : ;;  # tolerate space form below
-    --channel-kind=*) CHANNEL_KIND_ARG="${a#--channel-kind=}" ;;
-    --channel-kind)   : ;;  # tolerate space form below
-    *) [ "${prev:-}" = "--only" ] && ONLY="$a"
-       [ "${prev:-}" = "--channel-kind" ] && CHANNEL_KIND_ARG="$a" ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    --switch) DO_SWITCH=1; shift ;;
+    --cleanup-old) DO_CLEANUP=1; shift ;;
+    --only=*)
+      ONLY="${1#--only=}"
+      [ -n "$ONLY" ] || { echo "--only requires a non-empty component" >&2; exit 2; }
+      shift
+      ;;
+    --only)
+      [ "$#" -ge 2 ] && [ -n "$2" ] && [[ "$2" != --* ]] || { echo "--only requires a component" >&2; exit 2; }
+      ONLY="$2"; shift 2
+      ;;
+    --skill=*)
+      SKILL_FILTER="${1#--skill=}"
+      [ -n "$SKILL_FILTER" ] || { echo "--skill requires a non-empty skill name" >&2; exit 2; }
+      shift
+      ;;
+    --skill)
+      [ "$#" -ge 2 ] && [ -n "$2" ] && [[ "$2" != --* ]] || { echo "--skill requires a skill name" >&2; exit 2; }
+      SKILL_FILTER="$2"; shift 2
+      ;;
+    --channel-kind=*)
+      CHANNEL_KIND_ARG="${1#--channel-kind=}"
+      [ -n "$CHANNEL_KIND_ARG" ] || { echo "--channel-kind requires a non-empty kind" >&2; exit 2; }
+      shift
+      ;;
+    --channel-kind)
+      [ "$#" -ge 2 ] && [ -n "$2" ] && [[ "$2" != --* ]] || { echo "--channel-kind requires a kind" >&2; exit 2; }
+      CHANNEL_KIND_ARG="$2"; shift 2
+      ;;
+    *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
   esac
-  prev="$a"
 done
+
+if [ -n "$SKILL_FILTER" ]; then
+  [[ "$SKILL_FILTER" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "Invalid --skill name: $SKILL_FILTER" >&2; exit 2; }
+  [ "$ONLY" = "skills" ] || { echo "--skill requires --only skills" >&2; exit 2; }
+fi
 
 log()  { echo "[install] $*"; }
 run()  { if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] $*"; else eval "$@"; fi; }
@@ -581,37 +608,116 @@ deploy_core_cli() {      # core CLI (called by kb skill) → runtime/core-cli (t
   log "  OK ${dest} (${cnt} core CLI(s) copied into runtime; kb skill no longer points at repo)"
 }
 
+SKILL_SWAP_DEST=""; SKILL_SWAP_STAGE=""; SKILL_SWAP_OLD=""; SKILL_SWAP_ACTIVE=0
+recover_active_skill_swap() {
+  [ "$SKILL_SWAP_ACTIVE" = 1 ] || return 0
+  if [ -e "$SKILL_SWAP_OLD" ] && [ ! -e "$SKILL_SWAP_DEST" ]; then
+    mv "$SKILL_SWAP_OLD" "$SKILL_SWAP_DEST" 2>/dev/null || true
+  elif [ -e "$SKILL_SWAP_OLD" ] && [ -e "$SKILL_SWAP_DEST" ]; then
+    rm -rf "$SKILL_SWAP_OLD"
+  fi
+  [ ! -e "$SKILL_SWAP_STAGE" ] || rm -rf "$SKILL_SWAP_STAGE"
+  SKILL_SWAP_ACTIVE=0
+}
+
+reconcile_skill_swap_artifacts() {
+  local dest_root="$1" name="$2" artifact restored=0
+  for artifact in "$dest_root/.${name}.old."*; do
+    [ -e "$artifact" ] || continue
+    if [ ! -e "$dest_root/$name" ] && [ "$restored" = 0 ]; then
+      mv "$artifact" "$dest_root/$name"
+      restored=1
+      log "  recovered interrupted runtime skill swap: ${name}"
+    else
+      rm -rf "$artifact"
+    fi
+  done
+  for artifact in "$dest_root/.${name}.stage."*; do
+    [ -e "$artifact" ] || continue
+    rm -rf "$artifact"
+  done
+}
+
+replace_runtime_skill() {
+  local dest_root="$1" name="$2" stage="$3"
+  SKILL_SWAP_DEST="$dest_root/$name"
+  SKILL_SWAP_STAGE="$stage"
+  SKILL_SWAP_OLD="$dest_root/.${name}.old.$$"
+  SKILL_SWAP_ACTIVE=1
+  trap 'recover_active_skill_swap' EXIT
+  trap 'recover_active_skill_swap; exit 130' HUP INT TERM
+
+  rm -rf "$SKILL_SWAP_OLD"
+  [ ! -e "$SKILL_SWAP_DEST" ] || mv "$SKILL_SWAP_DEST" "$SKILL_SWAP_OLD"
+  if [ "${KA_TEST_FAIL_SKILL_SWAP_AFTER_BACKUP:-}" = "$name" ]; then
+    log "  TEST injected skill swap failure after backup: ${name}"
+    return 99
+  fi
+  if ! mv "$SKILL_SWAP_STAGE" "$SKILL_SWAP_DEST"; then
+    recover_active_skill_swap
+    trap - EXIT HUP INT TERM
+    return 1
+  fi
+  [ ! -e "$SKILL_SWAP_OLD" ] || rm -rf "$SKILL_SWAP_OLD"
+  SKILL_SWAP_ACTIVE=0
+  trap - EXIT HUP INT TERM
+}
+
 deploy_skills() {        # skills → runtime/skills/<name> (design→runtime copy; symlink created by switch_skills)
   want skills || return 0
   local dest="$RUNTIME/kb/skills"
-  log "skills → ${dest} (copy flat and directory skills; symlink pointed at runtime by switch_skills)"
+  local selection="all skills"
+  [ -n "$SKILL_FILTER" ] && selection="skill ${SKILL_FILTER}"
+  log "skills → ${dest} (copy ${selection}; symlink pointed at runtime by switch_skills)"
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  [dry-run] copy kb/skills/*.md and kb/skills/<name>/ -> ${dest}/<name>/"
+    if [ -n "$SKILL_FILTER" ]; then
+      [ -f "$REPO_ROOT/kb/skills/$SKILL_FILTER.md" ] || [ -f "$REPO_ROOT/kb/skills/$SKILL_FILTER/SKILL.md" ] || {
+        log "  FAIL unknown skill: ${SKILL_FILTER}"
+        exit 2
+      }
+      echo "  [dry-run] copy kb/skills/${SKILL_FILTER} -> ${dest}/${SKILL_FILTER}/"
+    else
+      echo "  [dry-run] copy kb/skills/*.md and kb/skills/<name>/ -> ${dest}/<name>/"
+    fi
     return 0
   fi
   mkdir -p "$dest"
-  # Simple skills remain flat. Resource-bearing skills are directories and are
-  # copied without design-time node_modules; locked runtime dependencies are
-  # installed after the copy.
-  local f d entry name cnt=0
+  # Build each skill in a clean sibling directory and replace the exact runtime
+  # directory only after staging succeeds. This prevents removed source files,
+  # private screenshots, logs, or other stale artifacts from surviving an
+  # upgrade while keeping the swap on one filesystem.
+  local f d entry name stage old cnt=0
   for f in "$REPO_ROOT"/kb/skills/*.md; do
     [ -f "$f" ] || continue
     name="$(basename "$f" .md)"
-    mkdir -p "$dest/$name"; cp "$f" "$dest/$name/SKILL.md"; cnt=$((cnt + 1))
+    [ -z "$SKILL_FILTER" ] || [ "$name" = "$SKILL_FILTER" ] || continue
+    reconcile_skill_swap_artifacts "$dest" "$name"
+    stage="$dest/.${name}.stage.$$"; old="$dest/.${name}.old.$$"
+    rm -rf "$stage" "$old"; mkdir -p "$stage"; cp "$f" "$stage/SKILL.md"
+    replace_runtime_skill "$dest" "$name" "$stage" || { log "  FAIL replacing runtime skill: ${name}"; exit 1; }
+    cnt=$((cnt + 1))
   done
   for d in "$REPO_ROOT"/kb/skills/*/; do
     [ -f "$d/SKILL.md" ] || continue
     name="$(basename "$d")"
-    mkdir -p "$dest/$name"
+    [ -z "$SKILL_FILTER" ] || [ "$name" = "$SKILL_FILTER" ] || continue
+    reconcile_skill_swap_artifacts "$dest" "$name"
+    stage="$dest/.${name}.stage.$$"; old="$dest/.${name}.old.$$"
+    rm -rf "$stage" "$old"; mkdir -p "$stage"
     for entry in SKILL.md agents scripts references assets package.json package-lock.json; do
       [ -e "$d/$entry" ] || continue
-      cp -R "$d/$entry" "$dest/$name/"
+      cp -R "$d/$entry" "$stage/"
     done
-    if [ -f "$dest/$name/package-lock.json" ] && [ "${KA_SKIP_SKILL_DEPS:-0}" != 1 ]; then
-      npm ci --omit=dev --ignore-scripts --prefix "$dest/$name" >/dev/null
+    if [ -f "$stage/package-lock.json" ] && [ "${KA_SKIP_SKILL_DEPS:-0}" != 1 ]; then
+      npm ci --omit=dev --ignore-scripts --prefix "$stage" >/dev/null
     fi
+    replace_runtime_skill "$dest" "$name" "$stage" || { log "  FAIL replacing runtime skill: ${name}"; exit 1; }
     cnt=$((cnt + 1))
   done
+  if [ -n "$SKILL_FILTER" ] && [ "$cnt" -ne 1 ]; then
+    log "  FAIL unknown skill: ${SKILL_FILTER}"
+    exit 2
+  fi
   log "  OK ${dest} (${cnt} skill(s) copied into runtime)"
 }
 
@@ -931,14 +1037,20 @@ switch_skills() {        # switch ⑥: runtime skill symlinks for Claude Code an
   local src="$RUNTIME/kb/skills"
   log "switch ⑥ skills symlink → Claude Code + Codex discovery roots pointed at ${src}"
   if [ "$DRY_RUN" = 1 ]; then
-    echo "  [dry-run] for each runtime skill: link SKILL.md into ${CLAUDE_SKILLS_DIR}; link the skill directory into ${CODEX_SKILLS_DIR}"
+    if [ -n "$SKILL_FILTER" ]; then
+      echo "  [dry-run] link runtime skill ${SKILL_FILTER} into ${CLAUDE_SKILLS_DIR} and ${CODEX_SKILLS_DIR}"
+    else
+      echo "  [dry-run] for each runtime skill: link SKILL.md into ${CLAUDE_SKILLS_DIR}; link the skill directory into ${CODEX_SKILLS_DIR}"
+    fi
     return 0
   fi
   [ -d "$src" ] || { log "  WARN ${src} does not exist (run deploy_skills first), skipping"; return 0; }
+  mkdir -p "$CLAUDE_SKILLS_DIR" "$CODEX_SKILLS_DIR"
   local d name link tgt claude_dir codex_link cnt=0
   for d in "$src"/*/; do
     [ -d "$d" ] || continue
     name="$(basename "$d")"
+    [ -z "$SKILL_FILTER" ] || [ "$name" = "$SKILL_FILTER" ] || continue
 
     claude_dir="$CLAUDE_SKILLS_DIR/$name"
     if [ -d "$d/scripts" ] || [ -d "$d/references" ] || [ -d "$d/assets" ]; then

@@ -1,0 +1,4 @@
+interface:
+  display_name: "SecureLink Renewal"
+  short_description: "Safely renew Windows SecureLink from WSL"
+  default_prompt: "Use $securelink-renewal to safely renew my SecureLink connection."

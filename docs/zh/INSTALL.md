@@ -74,12 +74,28 @@ pnpm build
 |------|--------|
 | `--dry-run` | 打印每个动作；不做任何改动。 |
 | `--only <component>` | 只部署单个组件。有效值：`ka`、`node-mcp`、`python-mcp`、`daemon`、`telegram-daemon`、`lark-daemon`、`hooks`、`core-cli`、`skills`、`config`。 |
+| `--skill <name>` | 与 `--only skills` 配合，仅部署并切换指定 Skill，不触碰其他 Skill。 |
 | `--switch` | 部署后，把线上注册项切换到 runtime（MCP、ka 链接、cron、hooks、daemon、skills）。见第六步。 |
 | `--cleanup-old` | 在确认切换无误后，删除旧的独立守护进程目录和 `.pre-switch` 备份（不可逆）。 |
 
 每个 `--switch` 步骤会先写一份 `.pre-switch-*` 备份；**没有 `--rollback` 命令** —— 要回退需手动还原这些备份（见第六步）。
 
 `KA_HOME=/tmp/ka-itest ./install.sh --dry-run` 会针对一个临时根目录做隔离测试，绝不触碰你真实的 runtime。
+
+带资源的 Skill（包括 `securelink-renewal`）会以完整目录部署。安装器先在同一文件系统的
+干净暂存目录构建，再通过带恢复 trap 的替换流程切换；若遭遇硬中断，下次运行会先协调
+遗留的 stage/backup 再替换 runtime。正式安装方式是：
+
+```bash
+./install.sh --only skills --skill securelink-renewal --switch --dry-run
+./install.sh --only skills --skill securelink-renewal --switch
+```
+
+仓库和部署后的 Skill 目录只允许包含代码与文档。截图、日志、账户标识、TOTP
+值和主机私密配置不得进入 `kb/skills/`。需要持久化的凭据只能放在权限为
+`0600` 的 `$KA_HOME/config/secrets.yaml`；`securelink-renewal` 不需要持久化密钥，
+也绝不会把 TOTP 写入该文件。数据边界及验证方法见
+[`docs/skills/securelink-renewal.md`](../skills/securelink-renewal.md)。
 
 ## 第三步：把 `ka` 加入 PATH
 
