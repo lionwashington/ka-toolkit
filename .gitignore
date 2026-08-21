@@ -26,6 +26,9 @@ tests/results/
 local_cache/
 **/local_cache/
 
+# Generated OpenNutrition SQLite dataset (large, reproducible build artifact)
+packages/mcp-opennutrition/data_local/
+
 # Local runtime / per-machine scaffolding (migrated from the old ops/.gitignore)
 state/
 *.local.env
