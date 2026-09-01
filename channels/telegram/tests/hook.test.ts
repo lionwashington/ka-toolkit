@@ -9,7 +9,7 @@
 import { test, before, after, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { writeFileSync, mkdtempSync, appendFileSync } from 'node:fs'
+import { writeFileSync, mkdtempSync, appendFileSync, truncateSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -31,10 +31,16 @@ after(async () => { await main?.close(); await daemon?.stop(); await mock?.close
 // Run the hook ASYNC (not spawnSync — that would block this process's event loop which
 // hosts the in-process mock telegram, falsely hanging /api/send). Returns the hook's
 // stdout (the decision:block JSON, when it nudges).
-function runHook(lines: object[], opts: { home?: string; channel?: string; appendAfterMs?: number; appendLines?: object[] } = {}): Promise<string> {
+function runHook(lines: object[], opts: { home?: string; channel?: string; appendAfterMs?: number; appendLines?: object[]; sparsePrefixBytes?: number } = {}): Promise<string> {
   const home = opts.home ?? mkdtempSync(join(tmpdir(), 'hook-home-'))
   const tpath = join(home, 'transcript.jsonl')
-  writeFileSync(tpath, lines.map(l => JSON.stringify(l)).join('\n') + '\n')
+  if (opts.sparsePrefixBytes) {
+    writeFileSync(tpath, '')
+    truncateSync(tpath, opts.sparsePrefixBytes)
+    appendFileSync(tpath, `\n${lines.map(l => JSON.stringify(l)).join('\n')}\n`)
+  } else {
+    writeFileSync(tpath, lines.map(l => JSON.stringify(l)).join('\n') + '\n')
+  }
   return new Promise<string>((resolve) => {
     let out = ''
     const env: Record<string, string> = { ...process.env as Record<string, string>, KA_HOME: home }
@@ -110,6 +116,16 @@ describe('reply-safety hook — forgot-reply nudge branch', () => {
     const d = decision(out)
     assert.equal(d.decision, 'block', 'should nudge to reply')
     assert.match(d.reason, /reply/, 'reason instructs using the reply tool')
+  })
+
+  test('large historical transcript reads only the current tail turn', async () => {
+    const started = Date.now()
+    const out = await runHook(
+      [ownerMsg('tail question', 'mtail1'), asstText(ANSWER)],
+      { sparsePrefixBytes: 96 * 1024 * 1024 },
+    )
+    assert.equal(decision(out).decision, 'block')
+    assert.ok(Date.now() - started < 2_000, 'bounded tail scan should not scale with transcript size')
   })
 
   test('forgot: nudge x2 then ONE fixed notice, then idempotent (bounded, no loop)', async () => {

@@ -524,6 +524,7 @@ deploy_hooks() {         # CC hooks (capture-hook) → runtime (esbuild bundle +
   log "CC hooks → ${dest} (esbuild bundle; workspace deps like @ka/core bundled in, self-contained)"
   if [ "$DRY_RUN" = 1 ]; then
     echo "  [dry-run] esbuild --bundle ${src}/*.js -> ${dest} (self-contained, no dependence on @ka/core in repo node_modules)"
+    echo "  [dry-run] install channels/ops/reply-safety-hook.py -> ${RUNTIME}/channels/ops/"
     return 0
   fi
   if [ ! -d "$src" ]; then
@@ -555,6 +556,9 @@ deploy_hooks() {         # CC hooks (capture-hook) → runtime (esbuild bundle +
   for d in "$dest"/*.js; do
     [ -f "$d" ] || continue
     bn="$(basename "$d")"
+    # This bundle comes from adapter-codex below, not adapter-cc/$bn. Keep the
+    # last known-good copy until its replacement has bundled successfully.
+    [ "$bn" = "codex-capture-hook.js" ] && continue
     if [ ! -f "$src/$bn" ]; then
       rm -f "$d" "${d}.map"
       log "  pruned stale hook: $bn (source removed)"
@@ -572,6 +576,11 @@ deploy_hooks() {         # CC hooks (capture-hook) → runtime (esbuild bundle +
   else
     log "  WARN Codex hook dist missing (build @ka/adapter-codex first): ${codex_hook}"
   fi
+  # reply-safety is part of the Claude Stop-hook set. Deploy it with hooks so
+  # `--only hooks --switch` never registers a stale copy from an earlier `ka` deploy.
+  mkdir -p "$RUNTIME/channels/ops"
+  cp "$REPO_ROOT/channels/ops/reply-safety-hook.py" "$RUNTIME/channels/ops/reply-safety-hook.py"
+  chmod +x "$RUNTIME/channels/ops/reply-safety-hook.py"
   log "  OK ${dest} (${cnt} hook(s), esbuild bundle self-contained, no external @ka/core resolution needed)"
 }
 
@@ -885,32 +894,22 @@ PY
   fi
 }
 
-switch_hooks() {         # switch ④: CLAUDE_SETTINGS hook paths → runtime/hooks
+switch_hooks() {         # switch ④: install runtime-specific Claude/Codex hooks
   want hooks || return 0
   [ "$DO_SWITCH" = 1 ] || return 0
-  log "switch ④ hooks → ${CLAUDE_SETTINGS} re-pointed at ${RUNTIME}/hooks (backed up)"
-  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] back up + re-point Claude hooks; merge Codex Stop capture into ${CODEX_HOOKS} (preserve existing hooks)"; return 0; fi
+  log "switch ④ hooks → isolate Claude and Codex lifecycle hooks (backed up)"
+  if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] back up + configure runtime-specific hooks; preserve unrelated hooks"; return 0; fi
+  local hook_configurator="$REPO_ROOT/scripts/configure-runtime-hooks.mjs"
+  if [ ! -f "$hook_configurator" ]; then
+    log "  FAIL hook configurator missing: ${hook_configurator}"
+    return 1
+  fi
   if [ -f "$CLAUDE_SETTINGS" ]; then
     cp "$CLAUDE_SETTINGS" "${CLAUDE_SETTINGS}.pre-switch-$(date +%Y%m%d%H%M%S)"
-  # Re-point the hooks dir to the new $KA_HOME/kb/hooks, whatever the settings.json
-  # currently points at. Match ALL three known prior locations, not just the gen3
-  # repo path — otherwise a machine migrating from an OLD DEPLOYED runtime (hooks at
-  # `runtime/hooks`) or an OLD repo layout (`packages/adapters/claude-code/dist/hooks`)
-  # is left with stale hook paths that break once the old runtime/ is removed.
-    RT="$RUNTIME" python3 - "$CLAUDE_SETTINGS" <<'PY'
-import os, re, sys
-rt = os.environ["RT"]; p = sys.argv[1]
-raw = open(p).read()
-# Use /[^<>"\s]* (not \S*) for the prefix to avoid greedily swallowing the leading
-# quote/tag. Alternation covers: gen3 repo path, pre-gen3 repo path, and the old
-# DEPLOYED runtime/hooks location — all collapse to the new runtime kb/hooks.
-raw2 = re.sub(
-    r'/[^<>"\s]*/(?:kb/adapter-cc/dist/hooks|packages/adapters/claude-code/dist/hooks|runtime/hooks)',
-    rt + "/kb/hooks", raw)
-open(p, "w").write(raw2)
-print("  hook paths rewired" if raw2 != raw else "  no hook path matched")
-PY
-    log "  OK Claude hooks re-pointed at runtime/hooks"
+    node "$hook_configurator" claude "$CLAUDE_SETTINGS" \
+      "$RUNTIME/kb/hooks/capture-hook.js" \
+      "$RUNTIME/channels/ops/reply-safety-hook.py"
+    log "  OK Claude has Claude capture + reply-safety only"
   else
     log "  WARN ${CLAUDE_SETTINGS} does not exist; skipping Claude hook switch"
   fi
@@ -922,29 +921,8 @@ PY
   fi
   mkdir -p "$(dirname "$CODEX_HOOKS")"
   [ -f "$CODEX_HOOKS" ] && cp "$CODEX_HOOKS" "${CODEX_HOOKS}.pre-switch-$(date +%Y%m%d%H%M%S)"
-  CODEX_HOOK_PATH="$codex_hook" python3 - "$CODEX_HOOKS" <<'PY'
-import json, os, shlex, sys
-p = sys.argv[1]
-try:
-    with open(p) as f: data = json.load(f)
-except (FileNotFoundError, json.JSONDecodeError):
-    data = {}
-hooks = data.setdefault("hooks", {})
-groups = hooks.setdefault("Stop", [])
-command = "node " + shlex.quote(os.environ["CODEX_HOOK_PATH"])
-replacement = {"hooks": [{"type": "command", "command": command, "timeout": 30}]}
-for i, group in enumerate(groups):
-    handlers = group.get("hooks", []) if isinstance(group, dict) else []
-    if any(isinstance(h, dict) and "codex-capture-hook.js" in h.get("command", "") for h in handlers):
-        groups[i] = replacement
-        break
-else:
-    groups.append(replacement)
-with open(p, "w") as f:
-    json.dump(data, f, indent=2)
-    f.write("\n")
-PY
-  log "  OK Codex Stop capture hook registered in ${CODEX_HOOKS} (review trust with /hooks)"
+  node "$hook_configurator" codex "$CODEX_HOOKS" "$codex_hook"
+  log "  OK Codex has incremental Codex capture only in ${CODEX_HOOKS} (review trust with /hooks)"
 }
 
 switch_daemon() {        # switch ⑤: migrate secrets + (re)start the telegram daemon IFF it is the active kind

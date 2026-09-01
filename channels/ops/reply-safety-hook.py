@@ -55,6 +55,8 @@ REPLY_LEAK_TAG = re.compile(r'<invoke\s+name="mcp__[a-z0-9_-]+__reply"')
 CHAT_ID_RE = re.compile(r'chat_id="([^"]+)"')
 PARSE_ERR = "could not be parsed"
 TEXT_MIN = 30
+TAIL_INITIAL_BYTES = 1024 * 1024
+TAIL_MAX_BYTES = 64 * 1024 * 1024
 
 # Per-type nudge reasons (decision:block) and owner-facing notices (hook → /api/send;
 # the daemon adds the [#num-name] prefix, so these don't name the pane themselves).
@@ -136,26 +138,39 @@ def send_via_daemon(port, channel, target, text):
         return False
 
 def load_messages(transcript):
-    """Parse the transcript JSONL into user/assistant messages (with _apierr flag).
-    Returns None on read error, [] when the file holds no qualifying messages yet."""
-    msgs = []
+    """Read only the recent transcript tail needed to police the current turn.
+
+    Grow the window until an owner message is present, but never fall back to a
+    whole-session scan. State files carry cross-turn nudge/notice history.
+    """
     try:
-        with open(transcript) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    o = json.loads(line)
-                except Exception:
-                    continue
-                m = o.get("message", o)
-                if isinstance(m, dict) and m.get("role") in ("user", "assistant"):
-                    m["_apierr"] = bool(o.get("isApiErrorMessage"))
-                    msgs.append(m)
+        size = os.path.getsize(transcript)
     except Exception:
         return None
-    return msgs
+
+    window = min(size, TAIL_INITIAL_BYTES)
+    while True:
+        start = max(0, size - window)
+        msgs = []
+        try:
+            with open(transcript, "rb") as f:
+                f.seek(start)
+                if start:
+                    f.readline()  # discard the partial JSONL record at the boundary
+                for raw in f:
+                    try:
+                        o = json.loads(raw)
+                    except Exception:
+                        continue
+                    m = o.get("message", o)
+                    if isinstance(m, dict) and m.get("role") in ("user", "assistant"):
+                        m["_apierr"] = bool(o.get("isApiErrorMessage"))
+                        msgs.append(m)
+        except Exception:
+            return None
+        if start == 0 or any(is_owner_msg(m) for m in msgs) or window >= TAIL_MAX_BYTES:
+            return msgs
+        window = min(size, TAIL_MAX_BYTES, max(window * 2, TAIL_INITIAL_BYTES))
 
 def main():
     try:

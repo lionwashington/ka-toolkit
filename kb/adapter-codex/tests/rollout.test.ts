@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseFrontmatter } from '@ka/core'
@@ -47,7 +47,60 @@ describe('parseCodexRollout', () => {
   })
 
   it('returns an empty result for a missing rollout', () => {
-    expect(parseCodexRollout('/missing/rollout.jsonl')).toEqual({ messages: [], malformedLines: 0 })
+    expect(parseCodexRollout('/missing/rollout.jsonl')).toMatchObject({
+      messages: [], malformedLines: 0, bytesRead: 0, reason: 'missing',
+    })
+  })
+
+  it('reads only the active tail turn from a large historical rollout', () => {
+    const root = tempRoot()
+    const rollout = join(root, 'large-rollout.jsonl')
+    writeFileSync(rollout, '')
+    truncateSync(rollout, 96 * 1024 * 1024)
+    const records = [
+      { type: 'event_msg', payload: { type: 'task_complete', turn_id: 'previous-turn' } },
+      { type: 'event_msg', payload: { type: 'task_started', turn_id: 'active-turn' } },
+      { type: 'event_msg', payload: { type: 'user_message', message: 'Tail question' } },
+      { type: 'event_msg', payload: { type: 'agent_message', message: 'Tail answer' } },
+    ]
+    appendFileSync(rollout, `\n${records.map(record => JSON.stringify(record)).join('\n')}\n`)
+
+    const parsed = parseCodexRollout(rollout, 'active-turn')
+    expect(statSync(rollout).size).toBeGreaterThan(96 * 1024 * 1024)
+    expect(parsed.messages.map(message => message.content)).toEqual(['Tail question', 'Tail answer'])
+    expect(parsed.bytesRead).toBeLessThan(256 * 1024)
+    expect(parsed.startOffset).toBeGreaterThanOrEqual(96 * 1024 * 1024)
+    expect(parsed.reason).toBeNull()
+  })
+
+  it('keeps all continuations that reuse the same turn id', () => {
+    const root = tempRoot()
+    const rollout = join(root, 'continued-rollout.jsonl')
+    const records = [
+      { type: 'event_msg', payload: { type: 'task_complete', turn_id: 'previous-turn' } },
+      { type: 'event_msg', payload: { type: 'task_started', turn_id: 'continued-turn' } },
+      { type: 'event_msg', payload: { type: 'user_message', message: 'Initial question' } },
+      { type: 'event_msg', payload: { type: 'agent_message', message: 'Initial answer' } },
+      { type: 'event_msg', payload: { type: 'task_started', turn_id: 'continued-turn' } },
+      { type: 'event_msg', payload: { type: 'user_message', message: 'Stop continuation' } },
+      { type: 'event_msg', payload: { type: 'agent_message', message: 'Final answer' } },
+    ]
+    writeFileSync(rollout, `${records.map(record => JSON.stringify(record)).join('\n')}\n`)
+
+    expect(parseCodexRollout(rollout, 'continued-turn').messages.map(message => message.content)).toEqual([
+      'Initial question', 'Initial answer', 'Stop continuation', 'Final answer',
+    ])
+  })
+
+  it('fails closed instead of falling back to a full scan when the turn is outside the lookback', () => {
+    const root = tempRoot()
+    const rollout = join(root, 'bounded-rollout.jsonl')
+    writeFileSync(rollout, `${JSON.stringify({ type: 'event_msg', payload: { type: 'task_started', turn_id: 'old-turn' } })}\n`)
+    appendFileSync(rollout, `${'x'.repeat(2 * 1024 * 1024)}\n`)
+    const parsed = parseCodexRollout(rollout, 'old-turn', { maxLookbackBytes: 1024 * 1024 })
+    expect(parsed.messages).toEqual([])
+    expect(parsed.reason).toBe('turn-not-found')
+    expect(parsed.bytesRead).toBe(1024 * 1024)
   })
 })
 
@@ -65,11 +118,20 @@ describe('Codex Stop capture', () => {
       model: 'test-model',
       turn_id: 'turn-1',
     }, rawDir)).toBe(true)
+    expect(await handleCodexStopEvent({
+      session_id: 'session-1',
+      transcript_path: rollout,
+      cwd: '/workspace',
+      hook_event_name: 'Stop',
+      model: 'test-model',
+      turn_id: 'turn-1',
+    }, rawDir)).toBe(true)
     const files = (await import('node:fs')).readdirSync(rawDir)
     expect(files).toHaveLength(1)
     const saved = parseFrontmatter(readFileSync(join(rawDir, files[0]), 'utf8'))
     expect(saved.data.source).toBe('codex')
     expect(saved.data.session_id).toBe('session-1:turn-1')
+    expect(Number(saved.data.metadata.rollout_bytes_read)).toBeLessThan(statSync(rollout).size * 3)
     expect(saved.content).toContain('First question')
     expect(saved.content).toContain('First answer')
   })

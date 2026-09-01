@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "tsup",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "pnpm build && node --test tests/capture-hook.e2e.mjs"
   },
   "dependencies": {
     "@ka/core": "workspace:*"
