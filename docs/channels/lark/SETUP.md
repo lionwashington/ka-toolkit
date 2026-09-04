@@ -2,7 +2,7 @@
 
 Connect a Claude Code session to a Lark group: send a message in the group → cc receives it; cc calls `reply` → it goes back to the group.
 
-> Deploy is via `install.sh`: `./install.sh --only lark-daemon --channel-kind=lark` bundles and selects only Lark. The combined `--only daemon` target remains available when both platform runtimes are wanted. Supervise with a cron self-heal job (see §5). Attachments ARE supported (image/file/audio/video → `lark-cli +messages-resources-download` → `attachments/` → surfaced as `meta.attachment_path`). See `docs/INSTALL_UBUNTU.md` for the full deploy.
+> Deploy is via `install.sh`: `./install.sh --only lark-daemon --channel-kind=lark` bundles and selects only Lark. The combined `--only daemon` target remains available when both platform runtimes are wanted. Supervise with a cron self-heal job (see §5). Attachments ARE supported (image/file/audio/video → `lark-cli +messages-resources-download` → `attachments/`). A single attachment uses `meta.attachment_path`; conservative multi-image bursts use one notification with `attachment_count` and ordered `attachment_N_path` fields. See `docs/INSTALL_UBUNTU.md` and `docs/MULTI_ATTACHMENT_BATCHING.md` for details.
 
 ---
 

@@ -67,6 +67,7 @@ export async function startDaemon(opts: {
   pollIntervalSeconds?: number
   cardKitFail?: boolean
   cardKitUpdateFail?: boolean
+  initialState?: Record<string, unknown>
 }): Promise<Daemon> {
   const dataDir = mkdtempSync(join(tmpdir(), 'lark-daemon-test-'))
   const mockDir = join(dataDir, 'mock')
@@ -87,6 +88,7 @@ export async function startDaemon(opts: {
   writeFileSync(join(dataDir, 'secrets.yaml'),
     `channels:\n  lark:\n    self_open_id: "${selfOpenId}"\n    groups:\n` +
     `      ${chatId}:\n        name: "Test Group"\n        webhook_url: "${opts.webhookUrl}"\n`)
+  if (opts.initialState) writeFileSync(join(dataDir, 'state.json'), JSON.stringify(opts.initialState))
 
   const env: Record<string, string> = {
     ...process.env as Record<string, string>,

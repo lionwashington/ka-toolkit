@@ -16,6 +16,9 @@ let main: ChannelClient
 let ka: ChannelClient
 const CHAT = 'oc_test'
 const SELF = 'ou_test_self'
+// A batched image can require two polls (observe, then flush) plus a spawned
+// lark-cli resource download. Leave headroom for loaded CI/workstations.
+const ATTACHMENT_WAIT_MS = 20_000
 
 // Lark create_time is minute precision; the daemon anchors its watermark at NOW on
 // first poll, so test messages must carry a create_time AFTER that. Use fixed future
@@ -41,6 +44,12 @@ after(async () => {
   await ka?.close()
   await daemon?.stop()
   await webhook?.close()
+})
+
+test('status exposes the pending attachment batch count', async () => {
+  const status: any = await fetch(`${daemon.baseUrl}/api/status`).then(response => response.json())
+  assert.equal(status.ok, true)
+  assert.equal(status.pending_attachment_batches, 0)
 })
 
 describe('inbound (lark-cli poll → dispatch)', () => {
@@ -105,7 +114,7 @@ describe('inbound attachments', () => {
       sender: { id: SELF, sender_type: 'user', name: 'Owner' },
       msg_type: 'image', content: '[Image: img_test_abc123]',
     }])
-    const ok = await waitFor(() => main.received.some(r => r.meta.attachment_path), 6000)
+    const ok = await waitFor(() => main.received.some(r => r.meta.attachment_path), ATTACHMENT_WAIT_MS)
     assert.ok(ok, 'main should receive a message carrying meta.attachment_path')
     const got = main.received.find(r => r.meta.attachment_path)!
     assert.equal(got.content, '[image]', 'no caption → English placeholder')
@@ -114,6 +123,90 @@ describe('inbound attachments', () => {
     assert.equal(got.meta.message_id, 'm-img')
     for (const v of Object.values(got.meta)) assert.equal(typeof v, 'string')  // meta all-string invariant
   })
+
+  test('consecutive same-minute images are delivered once as an ordered batch', async () => {
+    main.received.length = 0
+    const createTime = nextTime()
+    daemon.pushMessages(CHAT, [1, 2].map(index => ({
+      message_id: `m-album-${index}`, create_time: createTime, message_position: String(100 + index),
+      sender: { id: SELF, sender_type: 'user', name: 'Owner' },
+      msg_type: 'image', content: `[Image: img_album_${index}]`,
+    })))
+    assert.ok(await waitFor(() => main.received.some(r => r.meta.batch_id?.includes('m-album-1')), ATTACHMENT_WAIT_MS))
+    const batches = main.received.filter(r => r.meta.batch_id?.includes('m-album-1'))
+    assert.equal(batches.length, 1)
+    assert.equal(batches[0].content, '[images: 2]')
+    assert.equal(batches[0].meta.attachment_count, '2')
+    assert.match(batches[0].meta.attachment_1_path, /m-album-1$/)
+    assert.match(batches[0].meta.attachment_2_path, /m-album-2$/)
+  })
+
+  test('a message-position gap prevents unrelated images from being merged', async () => {
+    main.received.length = 0
+    const createTime = nextTime()
+    daemon.pushMessages(CHAT, [1, 3].map(position => ({
+      message_id: `m-gap-${position}`, create_time: createTime, message_position: String(200 + position),
+      sender: { id: SELF, sender_type: 'user', name: 'Owner' },
+      msg_type: 'image', content: `[Image: img_gap_${position}]`,
+    })))
+    assert.ok(await waitFor(() => main.received.filter(r => r.meta.message_id?.startsWith('m-gap-')).length === 2, ATTACHMENT_WAIT_MS))
+    assert.equal(main.received.some(r => r.meta.batch_id?.includes('m-gap-')), false)
+  })
+
+  test('different Lark thread scopes prevent otherwise consecutive images from being merged', async () => {
+    main.received.length = 0
+    const createTime = nextTime()
+    daemon.pushMessages(CHAT, [1, 2].map(index => ({
+      message_id: `m-scope-${index}`, create_time: createTime, message_position: String(400 + index),
+      root_id: `thread-${index}`,
+      sender: { id: SELF, sender_type: 'user', name: 'Owner' },
+      msg_type: 'image', content: `[Image: img_scope_${index}]`,
+    })))
+    assert.ok(await waitFor(() => main.received.filter(r => r.meta.message_id?.startsWith('m-scope-')).length === 2, ATTACHMENT_WAIT_MS))
+    assert.equal(main.received.some(r => r.meta.batch_id?.includes('m-scope-')), false)
+  })
+})
+
+test('persisted Lark image burst survives restart and waits for a target', async () => {
+  const isolatedWebhook = await startMockWebhook()
+  const createTime = '2031-01-01 00:01'
+  const ts = new Date(createTime.replace(' ', 'T')).getTime()
+  const pending = [1, 2].map(index => ({
+    ts,
+    pos: 300 + index,
+    sender: 'Owner',
+    scope: '',
+    text: '',
+    mid: `m-restart-${index}`,
+    att: { messageId: `m-restart-${index}`, resType: 'image', key: `img_restart_${index}`, kind: 'image' },
+  }))
+  const isolatedDaemon = await startDaemon({
+    webhookUrl: isolatedWebhook.url,
+    selfOpenId: SELF,
+    chatId: CHAT,
+    pollIntervalSeconds: 1,
+    initialState: {
+      last_seen_msg_time: { [CHAT]: new Date(ts).toISOString() },
+      recent_msg_ids: { [CHAT]: pending.map(item => item.mid) },
+      last_target_by_chat: { [CHAT]: 'main' },
+      channel_numbers: {},
+      next_channel_number: 1,
+      pending_image_batches: { [CHAT]: pending },
+    },
+  })
+  let isolatedMain: ChannelClient | undefined
+  try {
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    isolatedMain = await connectClient(isolatedDaemon.baseUrl, 'main')
+    assert.ok(await waitFor(() => isolatedMain!.received.some(r => r.meta.batch_id?.includes('m-restart-1')), ATTACHMENT_WAIT_MS))
+    const deliveries = isolatedMain.received.filter(r => r.meta.batch_id?.includes('m-restart-1'))
+    assert.equal(deliveries.length, 1)
+    assert.equal(deliveries[0].meta.attachment_count, '2')
+  } finally {
+    await isolatedMain?.close()
+    await isolatedDaemon.stop()
+    await isolatedWebhook.close()
+  }
 })
 
 describe('routing', () => {
@@ -136,7 +229,7 @@ describe('attachment routing follows the last text (option B)', () => {
     daemon.pushMessages(CHAT, [ownerMsg({ mid: 'b-text1', text: 'to ka: incoming pics', createTime: nextTime(), selfOpenId: SELF })])
     await waitFor(() => ka.received.some(r => r.content === 'incoming pics'), 5000)
     daemon.pushMessages(CHAT, [img('b-img1', 'img_b_1')])
-    assert.ok(await waitFor(() => ka.received.some(r => r.meta.message_id === 'b-img1' && r.meta.attachment_path), 6000), 'image1 → ka (follows the to-ka text)')
+    assert.ok(await waitFor(() => ka.received.some(r => r.meta.message_id === 'b-img1' && r.meta.attachment_path), ATTACHMENT_WAIT_MS), 'image1 → ka (follows the to-ka text)')
     assert.ok(!main.received.some(r => r.meta.message_id === 'b-img1'), 'image1 must NOT go to main')
     // v4 cross-channel isolation: saved under attachments/<channel>/ (here ka)
     assert.match(ka.received.find(r => r.meta.message_id === 'b-img1')!.meta.attachment_path, /attachments\/ka\//, 'image1 lands in the ka subdir')
@@ -146,7 +239,7 @@ describe('attachment routing follows the last text (option B)', () => {
     daemon.pushMessages(CHAT, [ownerMsg({ mid: 'b-text2', text: 'to main: back to main now', createTime: nextTime(), selfOpenId: SELF })])
     await waitFor(() => main.received.some(r => r.content === 'back to main now'), 5000)
     daemon.pushMessages(CHAT, [img('b-img2', 'img_b_2')])
-    assert.ok(await waitFor(() => main.received.some(r => r.meta.message_id === 'b-img2' && r.meta.attachment_path), 6000), 'image2 → main (the `to main:` text reset the target)')
+    assert.ok(await waitFor(() => main.received.some(r => r.meta.message_id === 'b-img2' && r.meta.attachment_path), ATTACHMENT_WAIT_MS), 'image2 → main (the `to main:` text reset the target)')
     assert.ok(!ka.received.some(r => r.meta.message_id === 'b-img2'), 'image2 must NOT stick to ka')
     assert.match(main.received.find(r => r.meta.message_id === 'b-img2')!.meta.attachment_path, /attachments\/main\//, 'image2 lands in the main subdir')
   })
@@ -160,7 +253,7 @@ describe('attachment routing follows the last text (option B)', () => {
     daemon.pushMessages(CHAT, [ownerMsg({ mid: 'c-text2', text: 'to main, ka: multi text', createTime: nextTime(), selfOpenId: SELF })])
     await waitFor(() => main.received.some(r => r.content === 'multi text') && ka.received.some(r => r.content === 'multi text'), 5000)
     daemon.pushMessages(CHAT, [img('c-img', 'img_c_1')])
-    assert.ok(await waitFor(() => ka.received.some(r => r.meta.message_id === 'c-img' && r.meta.attachment_path), 6000),
+    assert.ok(await waitFor(() => ka.received.some(r => r.meta.message_id === 'c-img' && r.meta.attachment_path), ATTACHMENT_WAIT_MS),
       'image → ka (the prior SINGLE target, not the multi list)')
     assert.ok(!main.received.some(r => r.meta.message_id === 'c-img'),
       'image must NOT follow the multi-target text to main')

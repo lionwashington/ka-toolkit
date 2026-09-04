@@ -16,7 +16,7 @@
  * this platform into runChannelDaemon().
  */
 import { Bot } from 'grammy'
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { homedir } from 'os'
@@ -56,11 +56,16 @@ type Config = {
   token: string             // bot token (secrets.yaml channels.telegram.token)
   owner_chat_id: string     // only this Telegram user id may reach the daemon
 }
+type PendingMediaGroup = {
+  mediaGroupId?: string
+  updates: any[]
+}
 type State = {
   offset: number                              // next getUpdates offset = last update_id + 1
   channel_numbers?: Record<string, number>    // stable channel name → number (persisted)
   next_channel_number?: number                // next number to assign
   last_target?: string                        // sticky routing: last single explicit target (no prefix → here)
+  pending_media_groups?: Record<string, PendingMediaGroup>
 }
 
 function log(msg: string): void {
@@ -108,7 +113,9 @@ function loadState(): State {
 }
 
 function saveState(state: State): void {
-  writeFileSync(STATE_PATH, JSON.stringify(state, null, 2))
+  const temporary = `${STATE_PATH}.tmp-${process.pid}`
+  writeFileSync(temporary, JSON.stringify(state, null, 2))
+  renameSync(temporary, STATE_PATH)
 }
 
 // Module-scoped singletons. ASSIGNED IN initTelegram(), NOT at import time — so
@@ -125,6 +132,9 @@ let pollErrors = 0
 let running = true
 // The core-bound dispatch handed to startInbound; handleUpdate calls it.
 let inboundDispatch: InboundDispatch
+const mediaGroupTimers = new Map<string, NodeJS.Timeout>()
+const mediaGroupFlushes = new Map<string, Promise<void>>()
+const MEDIA_GROUP_SETTLE_MS = 1000
 
 // ─────────────────────────── outbound: Telegram sendMessage (B2) ────────────────
 
@@ -297,6 +307,96 @@ function sleep(ms: number): Promise<void> {
 // Handle a single Telegram update. Returns 'stop' when delivery must be deferred
 // for replay (owner message but no MCP session) — the caller breaks the batch
 // WITHOUT advancing the offset, so the message is re-fetched on reconnect.
+async function deliverTelegramGroup(updates: any[], mediaGroupId?: string): Promise<void> {
+  const orderedUpdates = [...updates].sort((a, b) => Number(a.update_id) - Number(b.update_id))
+  const messages = orderedUpdates.map(u => u.message)
+  const routingMessage = messages.find(msg => msg?.text || msg?.caption) ?? messages[0]
+  const routingText = routingMessage?.text || routingMessage?.caption || ''
+  const p = parseRoutingPrefix(routingText)
+  const sticky = applyStickyRouting(p, state.last_target)
+  const rawTargets = sticky.rawTargets
+  let content = p.body
+  if (sticky.lastTarget !== state.last_target) {
+    state.last_target = sticky.lastTarget
+    saveState(state)
+  }
+
+  const refs = orderedUpdates.flatMap(u => {
+    const attachment = extractAttachment(u.message)
+    return attachment ? [{ u, attachment }] : []
+  })
+  const downloaded = await Promise.all(refs.map(async ({ u, attachment }) => {
+    const path = await telegramPlatform.fetchAttachment({ ...attachment, updateId: u.update_id })
+    return path ? { path, kind: attachment.kind, messageId: String(u.message?.message_id ?? '') } : null
+  }))
+  const attachments = downloaded.filter((item): item is NonNullable<typeof item> => item !== null)
+  const failed = refs.length - attachments.length
+  if (!content && refs.length) content = refs.length > 1 ? `[images: ${refs.length}]` : attachmentPlaceholder(refs[0].attachment.kind, refs[0].attachment.fileName)
+  if (failed) content += refs.length === 1
+    ? '\n (attachment download failed; text only)'
+    : `\n (${failed} attachment download(s) failed; remaining files only)`
+  const first = messages[0]
+  await inboundDispatch(rawTargets, content, {
+    chat_id: first.chat?.id ?? cfg.owner_chat_id,
+    sender_name: first.from?.first_name ?? first.from?.username ?? 'owner',
+    sender_id: first.from?.id,
+    message_id: messages.map(msg => msg?.message_id).filter(Boolean).join(','),
+    ts: first.date,
+    ...(mediaGroupId ? { media_group_id: mediaGroupId, batch_id: `telegram:${first.chat?.id}:${mediaGroupId}` } : {}),
+  }, attachments)
+}
+
+function flushMediaGroup(groupKey: string): Promise<void> {
+  const active = mediaGroupFlushes.get(groupKey)
+  if (active) return active
+  const pending = state.pending_media_groups?.[groupKey]
+  if (!pending) return Promise.resolve()
+  const timer = mediaGroupTimers.get(groupKey)
+  if (timer) clearTimeout(timer)
+  mediaGroupTimers.delete(groupKey)
+  const mediaGroupId = pending.mediaGroupId ?? groupKey.slice(groupKey.indexOf(':') + 1)
+  // Snapshot the members accepted by this flush. A later getUpdates response can
+  // append another member with the same media_group_id while attachment downloads
+  // are in flight; removing the whole group on completion would silently lose it.
+  const snapshot = [...pending.updates]
+  const deliveredIds = new Set(snapshot.map(update => update.update_id))
+  log(`media group flush: ${snapshot.length} item(s)`)
+  const flush = deliverTelegramGroup(snapshot, mediaGroupId).then(() => {
+    const current = state.pending_media_groups?.[groupKey]
+    if (!current) return
+    current.updates = current.updates.filter(update => !deliveredIds.has(update.update_id))
+    if (current.updates.length === 0) {
+      delete state.pending_media_groups?.[groupKey]
+    } else {
+      // The late members could not join a turn that has already started, but
+      // they remain durable and are flushed as the next ordered delivery.
+      scheduleMediaGroup(groupKey)
+    }
+    saveState(state)
+  }).finally(() => mediaGroupFlushes.delete(groupKey))
+  mediaGroupFlushes.set(groupKey, flush)
+  return flush
+}
+
+function scheduleMediaGroup(groupKey: string): void {
+  const old = mediaGroupTimers.get(groupKey)
+  if (old) clearTimeout(old)
+  const timer = setTimeout(() => {
+    mediaGroupTimers.delete(groupKey)
+    if (!state.pending_media_groups?.[groupKey]) return
+    // A restored batch may be scheduled before the runtime target reconnects.
+    // Keep it durable instead of consuming it into the core's no-target prompt.
+    if (totalTargetCount() === 0) {
+      scheduleMediaGroup(groupKey)
+      return
+    }
+    void flushMediaGroup(groupKey)
+      .catch(error => log(`media group flush failed (${groupKey}): ${error?.message ?? error}`))
+  }, MEDIA_GROUP_SETTLE_MS)
+  timer.unref()
+  mediaGroupTimers.set(groupKey, timer)
+}
+
 async function handleUpdate(u: any): Promise<'ok' | 'stop'> {
   const msg = u?.message
   const text: string = msg?.text ?? ''
@@ -319,9 +419,30 @@ async function handleUpdate(u: any): Promise<'ok' | 'stop'> {
     return 'stop'
   }
 
+  const mediaGroupId = attachment && msg.media_group_id ? String(msg.media_group_id) : ''
+  const groupKey = mediaGroupId ? `${String(msg.chat?.id ?? cfg.owner_chat_id)}:${mediaGroupId}` : ''
+  // A later standalone message or a different album is an exact boundary. Flush
+  // older groups first so the debounce timer cannot reorder the owner's input.
+  for (const pendingKey of Object.keys(state.pending_media_groups ?? {})) {
+    if (pendingKey === groupKey) continue
+    try { await flushMediaGroup(pendingKey) }
+    catch (error: any) {
+      log(`media group boundary flush failed (${pendingKey}): ${error?.message ?? error}`)
+      return 'stop'
+    }
+  }
+
   // B4 dedup truth: advance + persist the offset BEFORE delivery, so a crash or
   // session churn after this point can never re-dispatch the same update_id.
   state.offset = u.update_id + 1
+  if (mediaGroupId) {
+    const pending = state.pending_media_groups ?? (state.pending_media_groups = {})
+    const group = pending[groupKey] ?? (pending[groupKey] = { mediaGroupId, updates: [] })
+    if (!group.updates.some(existing => existing.update_id === u.update_id)) group.updates.push(u)
+    saveState(state)
+    scheduleMediaGroup(groupKey)
+    return 'ok'
+  }
   saveState(state)
 
   // Routing (sticky) — for an attachment the prefix (and caption) lives in `caption`.
@@ -331,39 +452,7 @@ async function handleUpdate(u: any): Promise<'ok' | 'stop'> {
   // become sticky. A bare message with no remembered target (first ever) dispatches an
   // EMPTY list; an offline remembered target dispatches that name — both land on the
   // core "pick a channel / not found" prompt (no silent default). Colon has no semantic.
-  const routingText = text || caption
-  const p = parseRoutingPrefix(routingText)
-  const sticky = applyStickyRouting(p, state.last_target)
-  const rawTargets = sticky.rawTargets
-  // p.body is the content to deliver in EVERY case: prefix-stripped (route), the original
-  // (bare), or unquoted (quote-escape). The old `matched ? body : routingText` dropped the
-  // quote-escape unwrap (delivered the literal with quotes still in it).
-  let content = p.body
-  if (sticky.lastTarget !== state.last_target) {
-    state.last_target = sticky.lastTarget
-    saveState(state)
-  }
-
-  // Attachment → local path in meta so the consumer CC can Read it. content falls
-  // back to a placeholder with no caption; on download failure deliver text + note.
-  let attachmentPath = ''
-  if (attachment) {
-    attachmentPath = await telegramPlatform.fetchAttachment({ ...attachment, updateId: u.update_id })
-    if (!content) content = attachmentPlaceholder(attachment.kind, attachment.fileName)
-    if (!attachmentPath) content += '\n (attachment download failed; text only)'
-  }
-
-  await inboundDispatch(rawTargets, content, {
-    chat_id: msg.chat?.id ?? cfg.owner_chat_id,
-    sender_name: msg.from?.first_name ?? msg.from?.username ?? 'owner',
-    sender_id: fromId,
-    message_id: msg.message_id,
-    ts: msg.date,
-    ...(attachmentPath ? {
-      attachment_path: attachmentPath,
-      attachment_kind: attachment?.kind ?? '',
-    } : {}),
-  })
+  await deliverTelegramGroup([u])
   return 'ok'
 }
 
@@ -459,8 +548,8 @@ export const telegramPlatform: Platform = {
       `**[#${channelNumber}-${channelName}]** (number-name) so the owner knows which session answered and can route back by number, e.g. \`to ${channelNumber}:\`.\n` +
       '• source="cc": ANOTHER Claude Code session sent this; the tag also has `from_channel=<their channel>`. ' +
       'To answer them, call `send_to_channel` with target=<that from_channel>. Do NOT use `reply` for a cc message (that goes to the owner, not the sender).\n' +
-      '• When the meta tag has `attachment_path` (a local absolute file path), the owner sent an image or file — use the Read tool on that path to view it. ' +
-      'The `content` is the caption, or a placeholder like "[image]" when the owner sent no caption.\n' +
+      '• When `attachment_count` is present, treat all ordered `attachment_N_path` values as one request and inspect them together before replying. For a legacy single file, use `attachment_path`. ' +
+      'The `content` is the shared caption, or a placeholder like "[image]"/"[images: N]" when the owner sent no caption.\n' +
       'Reply only when a response is actually warranted — do NOT reflexively bounce a message back (two CCs auto-replying to each other creates an infinite loop). ' +
       'For owner (telegram) messages a reply is normally expected; for cc messages, answer only if you have something to say.'
   },
@@ -468,7 +557,12 @@ export const telegramPlatform: Platform = {
     void bot.api.sendChatAction(target, 'typing').catch(() => {})
   },
   statusFields() {
-    return { poll_errors_total: pollErrors, last_poll_at: lastPollAt, offset: state.offset }
+    return {
+      poll_errors_total: pollErrors,
+      last_poll_at: lastPollAt,
+      offset: state.offset,
+      pending_attachment_batches: Object.keys(state.pending_media_groups ?? {}).length,
+    }
   },
   isSelf(msg: any): boolean {
     return msg?.from?.id === OWNER_ID
@@ -479,6 +573,7 @@ export const telegramPlatform: Platform = {
   async startInbound(dispatch: InboundDispatch): Promise<void> {
     inboundDispatch = dispatch
     await anchorOffsetIfFresh()
+    for (const groupKey of Object.keys(state.pending_media_groups ?? {})) scheduleMediaGroup(groupKey)
     log(`getUpdates long-poll starting (timeout=${cfg.poll_timeout}s, offset=${state.offset})`)
     void pollLoop()
   },

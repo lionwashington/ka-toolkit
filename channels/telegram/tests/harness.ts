@@ -31,6 +31,8 @@ export interface MockTelegram {
   getUpdatesCount(): number
   /** Make the next N file downloads fail with a socket reset (simulates the ~10% transient "fetch failed"). */
   failNextDownloads(n: number): void
+  /** Delay the next N downloads, allowing deterministic in-flight flush tests. */
+  delayNextDownloads(n: number, ms: number): void
   close(): Promise<void>
 }
 
@@ -43,6 +45,8 @@ export async function startMockTelegram(): Promise<MockTelegram> {
   let hang = false
   let getUpdatesCount = 0
   let downloadFailures = 0  // when >0, the next N file downloads abort (transient-failure injection)
+  let delayedDownloads = 0
+  let downloadDelayMs = 0
 
   // grammy posts to ${apiRoot}/bot<token>/<method>
   app.post('/bot:token/getUpdates', (req, res) => {
@@ -78,11 +82,15 @@ export async function startMockTelegram(): Promise<MockTelegram> {
   // File download (apiRoot-routed when TELEGRAM_API_ROOT is set): return fixed bytes.
   // Injection: while downloadFailures>0, reset the socket → the daemon's fetch()
   // rejects with "fetch failed" (the exact transient symptom downloadAttachment retries on).
-  app.get(/^\/file\/bot.*/, (_req, res) => {
+  app.get(/^\/file\/bot.*/, async (_req, res) => {
     if (downloadFailures > 0) {
       downloadFailures--
       res.destroy()
       return
+    }
+    if (delayedDownloads > 0) {
+      delayedDownloads--
+      await new Promise(resolve => setTimeout(resolve, downloadDelayMs))
     }
     res.setHeader('content-type', 'application/octet-stream')
     res.end(Buffer.from('MOCKIMGBYTES'))
@@ -101,6 +109,10 @@ export async function startMockTelegram(): Promise<MockTelegram> {
     setHang: (on: boolean) => { hang = on },
     getUpdatesCount: () => getUpdatesCount,
     failNextDownloads: (n: number) => { downloadFailures = n },
+    delayNextDownloads: (n: number, ms: number) => {
+      delayedDownloads = n
+      downloadDelayMs = ms
+    },
     close: () => new Promise<void>(r => http.close(() => r())),
   }
 }
@@ -126,6 +138,7 @@ export async function startDaemon(opts: {
   ownerChatId?: string
   pollTimeout?: number
   pollHardTimeoutMs?: number
+  initialState?: Record<string, unknown>
 }): Promise<Daemon> {
   const dataDir = mkdtempSync(join(tmpdir(), 'tg-daemon-test-'))
   const port = await getFreePort()
@@ -141,6 +154,7 @@ export async function startDaemon(opts: {
     `channels:\n  telegram:\n    port: ${port}\n    poll_timeout: ${pollTimeout}\n${hardLine}`)
   writeFileSync(join(dataDir, 'secrets.yaml'),
     `channels:\n  telegram:\n    token: "test-token"\n    owner_chat_id: "${ownerChatId}"\n`)
+  if (opts.initialState) writeFileSync(join(dataDir, 'state.json'), JSON.stringify(opts.initialState))
   // Two launch modes, SAME assertions:
   //  - default (source): node --experimental-strip-types channel-core/main.ts,
   //    platform plugin via KA_PLATFORM_MODULE (matches start.sh in source tree).

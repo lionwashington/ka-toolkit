@@ -114,6 +114,28 @@ test('serializes turns, emits normalized events, and persists a durable binding'
   await appServer.stop()
 })
 
+test('maps an ordered image batch into one turn/start input', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-multi-image-'))
+  const events: CodexChannelEvent[] = []
+  const appServer = client(join(dir, 'fake-state.json'))
+  const request = appServer.request.bind(appServer)
+  let observedInput: any[] = []
+  appServer.request = ((method: string, params?: any, timeoutMs?: number) => {
+    if (method === 'turn/start') observedInput = params.input
+    return request(method, params, timeoutMs)
+  }) as AppServerClient['request']
+  await target(dir, appServer, events).deliver({
+    content: 'compare together', meta: {},
+    attachments: [
+      { path: '/synthetic/one.jpg', kind: 'photo' },
+      { path: '/synthetic/two.png', kind: 'image' },
+    ],
+  })
+  assert.deepEqual(observedInput.map(item => item.type), ['text', 'localImage', 'localImage'])
+  assert.deepEqual(observedInput.slice(1).map(item => item.path), ['/synthetic/one.jpg', '/synthetic/two.png'])
+  await appServer.stop()
+})
+
 test('resumes the persisted thread after the App Server process changes', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ka-codex-resume-'))
   const statePath = join(dir, 'fake-state.json')

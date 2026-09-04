@@ -6,7 +6,21 @@ import { counters } from './counters.ts'
 import { type Session, sessionsOf, allSessions, resolveTargetToName } from './sessions.ts'
 import { resolveTargetList } from './routing.ts'
 import type { Platform } from './platform.ts'
-import { onlineTargetListStr, runtimeTargetOf, targetCount, targetNames, totalTargetCount } from './targets.ts'
+import { onlineTargetListStr, runtimeTargetOf, targetCount, targetNames, totalTargetCount, type RuntimeAttachment } from './targets.ts'
+
+function attachmentMeta(metaBase: Record<string, unknown>, attachments: RuntimeAttachment[]): Record<string, unknown> {
+  if (!attachments.length) return metaBase
+  const indexed: Record<string, unknown> = { ...metaBase, attachment_count: attachments.length }
+  attachments.forEach((attachment, index) => {
+    indexed[`attachment_${index + 1}_path`] = attachment.path
+    indexed[`attachment_${index + 1}_kind`] = attachment.kind
+    if (attachment.messageId) indexed[`attachment_${index + 1}_message_id`] = attachment.messageId
+  })
+  // Compatibility for consumers that only understand the original singular fields.
+  indexed.attachment_path ??= attachments[0].path
+  indexed.attachment_kind ??= attachments[0].kind
+  return indexed
+}
 
 // Lightweight cc loop guard: if the same (from→to) channel pair exchanges more
 // than CC_LOOP_MAX dispatches within CC_LOOP_WINDOW_MS, log a warning so a
@@ -82,7 +96,9 @@ export async function dispatchTargets(
   rawTargets: string[],
   content: string,
   metaBase: Record<string, unknown>,
+  attachments: RuntimeAttachment[] = [],
 ): Promise<void> {
+  metaBase = attachmentMeta(metaBase, attachments)
   // Sticky-routing escape hatch: a bare owner message with no remembered target
   // (first ever, or after the last target went away) arrives as an EMPTY list.
   // Nothing to deliver to — don't silently default. Ask the owner to pick a
@@ -112,7 +128,7 @@ export async function dispatchTargets(
     if (count > 0) {
       log(`dispatch → all [${count} targets] (${content.length} chars)`)
       counters.dispatches++
-      await Promise.allSettled(targetNames().map(name => deliverToTarget(name, content, metaBase, 'all')))
+      await Promise.allSettled(targetNames().map(name => deliverToTarget(name, content, metaBase, 'all', attachments)))
       delivered = count
     }
   } else {
@@ -121,7 +137,7 @@ export async function dispatchTargets(
       if (count === 0) continue
       log(`dispatch → "${name}" [${count} targets] (${content.length} chars)`)
       counters.dispatches++
-      await deliverToTarget(name, content, metaBase, name)
+      await deliverToTarget(name, content, metaBase, name, attachments)
       delivered += count
     }
   }
@@ -153,6 +169,7 @@ export async function deliverToTarget(
   content: string,
   metaBase: Record<string, unknown>,
   routedTarget: string,
+  attachments: RuntimeAttachment[] = [],
 ): Promise<void> {
   const sessions = sessionsOf(name)
   const runtime = runtimeTargetOf(name)
@@ -161,7 +178,10 @@ export async function deliverToTarget(
       .map(([key, value]) => [key, String(value)]),
   )
   if (runtime) {
-    void runtime.deliver({ content, meta: normalizedMeta })
+    const message = attachments.length
+      ? { content, meta: normalizedMeta, attachments }
+      : { content, meta: normalizedMeta }
+    void runtime.deliver(message)
       .catch(error => log(`runtime delivery failed for ${name}: ${error?.message ?? error}`))
   }
   if (sessions.length) await fanout(sessions, content, metaBase, routedTarget)

@@ -63,6 +63,7 @@ describe('HTTP /api/status', () => {
     assert.ok('ka' in j.channels_online, 'ka should be online')
     assert.equal(j.channel_numbers.main, 1)
     assert.equal(j.channel_numbers.ka, 2)
+    assert.equal(j.pending_attachment_batches, 0)
     // counters present
     for (const k of ['dispatches_total', 'replies_total', 'cc_dispatches_total', 'probe_reconnect_triggered_total']) {
       assert.equal(typeof j[k], 'number', `${k} should be a number`)
@@ -192,6 +193,105 @@ describe('inbound: Telegram → MCP notification (sticky routing)', () => {
     assert.equal(readFileSync(n.meta.attachment_path, 'utf8'), 'MOCKIMGBYTES', 'file downloaded to disk')
   })
 
+  test('Telegram media group is delivered once with ordered attachments', async () => {
+    main.received.length = 0
+    const group = 'album-e2e-1'
+    for (let index = 1; index <= 2; index++) {
+      updateId += 1
+      mock.push({
+        update_id: updateId,
+        message: {
+          message_id: updateId,
+          media_group_id: group,
+          from: { id: Number(OWNER), first_name: 'Owner' },
+          chat: { id: Number(OWNER) },
+          date: Math.floor(Date.now() / 1000),
+          caption: index === 1 ? 'to main: compare together' : undefined,
+          photo: [{ file_id: `album-${index}`, file_unique_id: `album-${index}` }],
+        },
+      })
+    }
+    assert.ok(await waitFor(() => main.received.some(r => r.meta.media_group_id === group), 6000))
+    const album = main.received.filter(r => r.meta.media_group_id === group)
+    assert.equal(album.length, 1)
+    assert.equal(album[0].content, 'compare together')
+    assert.equal(album[0].meta.attachment_count, '2')
+    assert.match(album[0].meta.attachment_1_path, /album-1\.jpg$/)
+    assert.match(album[0].meta.attachment_2_path, /album-2\.jpg$/)
+    assert.equal(album[0].meta.attachment_path, album[0].meta.attachment_1_path)
+  })
+
+  test('Telegram media group can span two getUpdates polls', async () => {
+    main.received.length = 0
+    const group = 'album-cross-poll'
+    const push = (index: number) => {
+      updateId += 1
+      mock.push({ update_id: updateId, message: {
+        message_id: updateId, media_group_id: group,
+        from: { id: Number(OWNER), first_name: 'Owner' }, chat: { id: Number(OWNER) },
+        date: Math.floor(Date.now() / 1000),
+        caption: index === 1 ? 'to main: compare across polls' : undefined,
+        photo: [{ file_id: `cross-${index}`, file_unique_id: `cross-${index}` }],
+      } })
+    }
+    push(1)
+    await new Promise(resolve => setTimeout(resolve, 300))
+    assert.equal(main.received.some(r => r.meta.media_group_id === group), false)
+    push(2)
+    assert.ok(await waitFor(() => main.received.some(r => r.meta.media_group_id === group), 5000))
+    assert.equal(main.received.filter(r => r.meta.media_group_id === group).length, 1)
+    assert.equal(main.received.find(r => r.meta.media_group_id === group)!.meta.attachment_count, '2')
+  })
+
+  test('an album member arriving during an active flush is retained and delivered', async () => {
+    main.received.length = 0
+    const group = 'album-during-flush'
+    const push = (index: number) => {
+      updateId += 1
+      mock.push({ update_id: updateId, message: {
+        message_id: updateId, media_group_id: group,
+        from: { id: Number(OWNER), first_name: 'Owner' }, chat: { id: Number(OWNER) },
+        date: Math.floor(Date.now() / 1000),
+        caption: index === 1 ? 'to main: delayed album' : undefined,
+        photo: [{ file_id: `delayed-${index}`, file_unique_id: `delayed-${index}` }],
+      } })
+    }
+    mock.delayNextDownloads(1, 1800)
+    push(1)
+    // The one-second settle timer has fired and the first download is in flight.
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    push(2)
+    assert.ok(await waitFor(() => main.received.filter(r => r.meta.media_group_id === group).length === 2, 7000))
+    const deliveredPaths = main.received
+      .filter(r => r.meta.media_group_id === group)
+      .flatMap(r => Object.entries(r.meta)
+        .filter(([key]) => /^attachment_\d+_path$/.test(key))
+        .map(([, path]) => path))
+    assert.equal(deliveredPaths.some(path => /delayed-1\.jpg$/.test(path)), true)
+    assert.equal(deliveredPaths.some(path => /delayed-2\.jpg$/.test(path)), true)
+  })
+
+  test('a following message cannot overtake a pending Telegram album', async () => {
+    main.received.length = 0
+    const group = 'album-before-text'
+    for (let index = 1; index <= 2; index++) {
+      updateId += 1
+      mock.push({ update_id: updateId, message: {
+        message_id: updateId, media_group_id: group,
+        from: { id: Number(OWNER), first_name: 'Owner' }, chat: { id: Number(OWNER) },
+        date: Math.floor(Date.now() / 1000),
+        caption: index === 1 ? 'to main: ordered album' : undefined,
+        photo: [{ file_id: `ordered-${index}`, file_unique_id: `ordered-${index}` }],
+      } })
+    }
+    pushOwnerText('after album')
+    assert.ok(await waitFor(() => main.received.some(r => r.content === 'after album'), 6000))
+    const albumIndex = main.received.findIndex(r => r.meta.media_group_id === group)
+    const textIndex = main.received.findIndex(r => r.content === 'after album')
+    assert.ok(albumIndex >= 0)
+    assert.ok(textIndex > albumIndex, 'the album must be dispatched before its following text')
+  })
+
   test('voice attachment: download fails twice then succeeds → retry delivers path', async () => {
     main.received.length = 0  // last_target=main → bare voice sticks to main
     mock.failNextDownloads(2)  // first 2 file-fetches reset the socket ("fetch failed"); 3rd succeeds
@@ -312,6 +412,50 @@ describe('inbound: Telegram → MCP notification (sticky routing)', () => {
     assert.equal(main.received.some(r => r.content === 'bare after ghost'), false)
     assert.equal(ka.received.some(r => r.content === 'bare after ghost'), false)
   })
+})
+
+test('persisted Telegram media group survives restart and waits for a target', async () => {
+  const isolatedMock = await startMockTelegram()
+  const group = 'album-restart'
+  const updates = [1, 2].map(index => ({
+    update_id: 9000 + index,
+    message: {
+      message_id: 9000 + index,
+      media_group_id: group,
+      from: { id: Number(OWNER), first_name: 'Owner' },
+      chat: { id: Number(OWNER) },
+      date: Math.floor(Date.now() / 1000),
+      photo: [{ file_id: `restart-${index}`, file_unique_id: `restart-${index}` }],
+    },
+  }))
+  const isolatedDaemon = await startDaemon({
+    apiRoot: isolatedMock.url,
+    ownerChatId: OWNER,
+    initialState: {
+      offset: 9003,
+      last_target: 'main',
+      channel_numbers: {},
+      next_channel_number: 1,
+      pending_media_groups: {
+        [`${OWNER}:${group}`]: { mediaGroupId: group, updates },
+      },
+    },
+  })
+  let isolatedMain: ChannelClient | undefined
+  try {
+    // The startup timer is intentionally armed before this connection. A correct
+    // recovery path retains and retries the durable batch until a target exists.
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    isolatedMain = await connectClient(isolatedDaemon.baseUrl, 'main')
+    assert.ok(await waitFor(() => isolatedMain!.received.some(r => r.meta.media_group_id === group), 5000))
+    const deliveries = isolatedMain.received.filter(r => r.meta.media_group_id === group)
+    assert.equal(deliveries.length, 1)
+    assert.equal(deliveries[0].meta.attachment_count, '2')
+  } finally {
+    await isolatedMain?.close()
+    await isolatedDaemon.stop()
+    await isolatedMock.close()
+  }
 })
 
 describe('outbound: reply → Telegram sendMessage', () => {

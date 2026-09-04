@@ -6,7 +6,7 @@ cron scheduled tasks. Each workshop mate can use Claude Code or Codex: a Lark me
 
 > Verified end-to-end in Docker Ubuntu (Linux aarch64 / Node 22 / pnpm / python3): the install flow,
 > the lark daemon build+run, the lark tests, the crontab cron backend — all passed (`tests/ubuntu-lark.Dockerfile`).
-> Lark attachments ARE supported (image/file/audio/video → downloaded via `lark-cli +messages-resources-download` to the daemon's `attachments/`, surfaced to Claude Code as `meta.attachment_path` or to Codex as `localImage`/a local file path). Claude Code and Codex targets can coexist in one workshop and share the same Lark routing bus.
+> Lark attachments ARE supported (image/file/audio/video → downloaded via `lark-cli +messages-resources-download` to the daemon's `attachments/`). Single attachments retain `meta.attachment_path`; conservative multi-image bursts are delivered once with ordered `attachment_N_path` metadata, and Codex receives them as multiple `localImage` inputs in one turn. Claude Code and Codex targets can coexist in one workshop and share the same Lark routing bus. See `docs/MULTI_ATTACHMENT_BATCHING.md` for batching boundaries and recovery behavior.
 
 ---
 

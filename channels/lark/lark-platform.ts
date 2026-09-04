@@ -19,7 +19,7 @@
  * { platform, init } contract.
  */
 import { spawn } from 'child_process'
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { homedir } from 'os'
@@ -64,12 +64,23 @@ type Config = {
   http_port: number
   groups: Record<string, GroupConfig> // chatId(oc_…) → group config
 }
+type LarkAttachment = { messageId: string; resType: 'image' | 'file'; key: string; kind: string }
+type LarkQueueItem = {
+  ts: number
+  pos: number
+  sender: string
+  scope: string
+  text: string
+  mid: string
+  att: LarkAttachment | null
+}
 type State = {
   last_seen_msg_time: Record<string, string>   // per-chat ISO watermark (create_time)
   recent_msg_ids?: Record<string, string[]>    // per-chat last RECENT_IDS_KEEP message_ids
   channel_numbers?: Record<string, number>     // stable channel name → number (persisted)
   next_channel_number?: number
   last_target_by_chat?: Record<string, string> // sticky routing: per-chat last single target (no prefix → here)
+  pending_image_batches?: Record<string, LarkQueueItem[]> // durable one-poll lookahead for image bursts
 }
 
 const RECENT_IDS_KEEP = 100
@@ -119,7 +130,9 @@ function loadState(): State {
 }
 
 function saveState(state: State): void {
-  writeFileSync(STATE_PATH, JSON.stringify(state, null, 2))
+  const temporary = `${STATE_PATH}.tmp-${process.pid}`
+  writeFileSync(temporary, JSON.stringify(state, null, 2))
+  renameSync(temporary, STATE_PATH)
 }
 
 // Module-scoped singletons. ASSIGNED IN initLark(), NOT at import time — so unit
@@ -346,8 +359,6 @@ function enqueueCardUpdate(handle: LarkStreamHandle, text: string, finish: boole
 // ─────────────────────────── inbound attachments (image/file/audio/video) ───────
 
 // Lark attachment ref: image_key for images, file_key for file/audio/video.
-type LarkAttachment = { messageId: string; resType: 'image' | 'file'; key: string; kind: string }
-
 // `lark-cli +chat-messages-list` renders a media message's content as a tagged string
 // with the resource key embedded, e.g. "[Image: img_xxx]" / "[File: file_xxx …]". Pull
 // the key out by msg_type; null for a pure-text/card message (no downloadable resource).
@@ -439,9 +450,12 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
   const lastSeenMs = new Date(lastSeenIso).getTime()
   const recent = state.recent_msg_ids ?? (state.recent_msg_ids = {})
   const recentIds = recent[chatId] ?? []
+  const carried = state.pending_image_batches?.[chatId] ?? []
+  const carriedIds = new Set(carried.map(item => item.mid))
+  if (state.pending_image_batches) delete state.pending_image_batches[chatId]
 
   const msgs = await fetchChatMessages(chatId)
-  const queue: { ts: number; pos: number; sender: string; text: string; mid: string; att: LarkAttachment | null }[] = []
+  const queue: LarkQueueItem[] = []
   for (const m of msgs) {
     const sender = m?.sender ?? {}
     // B3 self-filter: only the owner, only real users (not bots).
@@ -458,20 +472,76 @@ async function pollGroup(chatId: string, group: GroupConfig): Promise<void> {
     // that share a (minute-precision) create_time, so a "text then image" pair keeps
     // its real order even within the same minute (needed for caption pairing).
     const pos = parseInt(m?.message_position ?? '0', 10) || 0
-    queue.push({ ts: t, pos, sender: sender.name ?? 'owner', text, mid, att })
+    // Keep replies/threads isolated even when Lark assigns consecutive message
+    // positions in the same minute. Empty scope means an ordinary chat message.
+    const scope = String(m?.root_id || m?.parent_id || '')
+    queue.push({ ts: t, pos, sender: sender.name ?? 'owner', scope, text, mid, att })
   }
   queue.sort((a, b) => a.ts - b.ts || a.pos - b.pos)   // chronological (ts, then position)
+  queue.unshift(...carried)
 
-  for (const q of queue) {
+  for (let index = 0; index < queue.length;) {
+    const firstItem = queue[index]
+    const batch = [firstItem]
+    if (firstItem.att?.kind === 'image') {
+      while (index + batch.length < queue.length) {
+        const next = queue[index + batch.length]
+        const previous = batch[batch.length - 1]
+        if (next.att?.kind !== 'image' || next.sender !== firstItem.sender || next.ts !== firstItem.ts ||
+            (next.scope ?? '') !== (firstItem.scope ?? '') ||
+            previous.pos <= 0 || next.pos <= 0 || next.pos !== previous.pos + 1) break
+        batch.push(next)
+      }
+    }
+    index += batch.length
     // B4 replay: no sessions at all → defer (keep watermark for replay on reconnect).
     if (totalTargetCount() === 0) {
+      if (carried.length) {
+        const pending = state.pending_image_batches ?? (state.pending_image_batches = {})
+        pending[chatId] = carried
+      }
       log(`(no runtime targets; keeping watermark for replay on reconnect, chat=${group.name})`)
       break
     }
+    // Lark exposes no Telegram-like album id. Hold a trailing same-minute image
+    // burst for exactly one poll so images split across the polling boundary can
+    // join. The carry is durable; after restart the next poll flushes it.
+    if (firstItem.att?.kind === 'image' && index === queue.length &&
+        !batch.some(item => carriedIds.has(item.mid))) {
+      const pending = state.pending_image_batches ?? (state.pending_image_batches = {})
+      pending[chatId] = batch
+      for (const item of batch) rememberMsgId(recent, chatId, item.mid)
+      state.last_seen_msg_time[chatId] = new Date(batch[batch.length - 1].ts).toISOString()
+      saveState(state)
+      break
+    }
     // Dedup truth: record + persist watermark + msgid BEFORE delivery.
-    state.last_seen_msg_time[chatId] = new Date(q.ts).toISOString()
-    rememberMsgId(recent, chatId, q.mid)
+    for (const item of batch) rememberMsgId(recent, chatId, item.mid)
+    state.last_seen_msg_time[chatId] = new Date(batch[batch.length - 1].ts).toISOString()
     saveState(state)
+
+    if (batch.length > 1) {
+      log(`image batch flush: ${batch.length} item(s)`)
+      const stickyLast = state.last_target_by_chat?.[chatId]
+      const rawTargets = stickyLast ? [stickyLast] : []
+      const downloaded = await Promise.all(batch.map(item =>
+        larkPlatform.fetchAttachment({ ...item.att!, channel: rawTargets[0] ?? 'main' })
+          .then(path => path ? { path, kind: item.att!.kind, messageId: item.mid } : null)))
+      const attachments = downloaded.filter((item): item is NonNullable<typeof item> => item !== null)
+      let content = `[images: ${batch.length}]`
+      if (attachments.length !== batch.length) content += `\n (${batch.length - attachments.length} attachment download(s) failed; remaining files only)`
+      await inboundDispatch(rawTargets, content, {
+        chat_id: chatId,
+        sender_name: firstItem.sender,
+        sender_id: cfg.self_open_id,
+        message_id: batch.map(item => item.mid).join(','),
+        ts: Math.floor(firstItem.ts / 1000),
+        batch_id: `lark:${chatId}:${batch[0].mid}:${batch[batch.length - 1].mid}`,
+      }, attachments)
+      continue
+    }
+
+    const q = firstItem
 
     let rawTargets: string[]
     let content: string
@@ -558,14 +628,19 @@ export const larkPlatform: Platform = {
       '• Owner messages from Lark: the owner sent this from a Lark group (they read Lark on phone/laptop, NOT this terminal; your transcript never reaches them). ' +
       'Reply with the `reply` tool, passing the `chat_id` from the tag — it routes back to that same group. Replies are auto-prefixed with ' +
       `**[#${channelNumber}-${channelName}]** so the owner knows which session answered and can route back by number, e.g. \`to ${channelNumber}:\`.\n` +
-      '• When the meta tag has `attachment_path` (a local absolute file path), the owner sent an image/file — Read THAT EXACT path. Each image/file arrives as its OWN message with its own attachment_path, often right after a text. If a message says "look at these images/files" but carries no attachment_path yet, WAIT for the following image message(s) and use their attachment_path. NEVER `ls` the attachments directory or read other files there — it is shared across channels, so listing it would pick up OTHER channels\' attachments (cross-channel leak).\n' +
+      '• When `attachment_count` is present, all ordered `attachment_N_path` values belong to ONE request: inspect them together and reply once. A legacy single file uses `attachment_path`. NEVER `ls` the attachments directory or read paths not named in the message.\n' +
       '• source="cc": ANOTHER Claude Code session sent this; the tag also has `from_channel=<their channel>`. ' +
       'To answer them, call `send_to_channel` with target=<that from_channel>. Do NOT use `reply` for a cc message (that goes to the Lark group, not the sender).\n' +
       'Reply only when a response is actually warranted — do NOT reflexively bounce a message back (two CCs auto-replying to each other creates an infinite loop). ' +
       'For owner (Lark) messages a reply is normally expected; for cc messages, answer only if you have something to say.'
   },
   statusFields() {
-    return { poll_errors_total: pollErrors, last_poll_at: lastPollAt, watermarks: state.last_seen_msg_time }
+    return {
+      poll_errors_total: pollErrors,
+      last_poll_at: lastPollAt,
+      watermarks: state.last_seen_msg_time,
+      pending_attachment_batches: Object.keys(state.pending_image_batches ?? {}).length,
+    }
   },
   isSelf(msg: any): boolean {
     const sender = msg?.sender ?? {}

@@ -3,6 +3,13 @@ import { allSessions, byName, channelNumberOf, sessionsOf } from './sessions.ts'
 export interface RuntimeTargetMessage {
   content: string
   meta: Record<string, string>
+  attachments?: RuntimeAttachment[]
+}
+
+export interface RuntimeAttachment {
+  path: string
+  kind: string
+  messageId?: string
 }
 
 export interface RuntimeTarget {

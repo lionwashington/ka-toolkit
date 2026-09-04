@@ -8,6 +8,7 @@
 // inherits re-adopt (auto inbound recovery after daemon restart) for free.
 //
 // Only what crosses THIS interface differs between telegram and lark.
+import type { RuntimeAttachment } from './targets.ts'
 
 /** Core hands the platform's inbound loop a bound dispatch (one per owner message).
  *  `rawTargets` is the parsed routing list (names/numbers, e.g. ['main','2']); a single
@@ -16,6 +17,7 @@ export type InboundDispatch = (
   rawTargets: string[],
   content: string,
   metaBase: Record<string, unknown>,
+  attachments?: RuntimeAttachment[],
 ) => Promise<void>
 
 export interface Platform {

@@ -82,7 +82,7 @@ export function runChannelDaemon(opts: DaemonOptions): void {
     log(`${opts.platform.name}-channel daemon listening on ${opts.host}:${opts.port}/mcp (pid=${process.pid})`)
     // Hand the platform a dispatch bound to it; the platform starts its inbound loop.
     await opts.platform.startInbound(
-      (rawTargets, content, metaBase) => dispatchTargets(opts.platform, rawTargets, content, metaBase),
+      (rawTargets, content, metaBase, attachments) => dispatchTargets(opts.platform, rawTargets, content, metaBase, attachments),
     )
   })
   // Port-bind singleton: on macOS there is no flock binary, so the launcher can't

@@ -45,16 +45,30 @@ function messageItemBoundary(left: string, right: string): string {
 
 /** Map a platform message to the current Codex App Server UserInput schema. */
 export function buildCodexTurnInput(source: RuntimeTargetMessage): CodexUserInput[] {
-  const path = source.meta.attachment_path?.trim()
-  const kind = source.meta.attachment_kind?.trim().toLowerCase()
-  const isImage = Boolean(path && (kind === 'photo' || kind === 'image' || kind === 'sticker' || IMAGE_EXTENSIONS.test(path)))
+  const attachments = source.attachments?.length
+    ? source.attachments
+    : source.meta.attachment_path?.trim()
+      ? [{ path: source.meta.attachment_path.trim(), kind: source.meta.attachment_kind?.trim() ?? '' }]
+      : []
+  const files = attachments.filter(({ path, kind }) => {
+    const normalizedKind = kind.toLowerCase()
+    return !(normalizedKind === 'photo' || normalizedKind === 'image' || normalizedKind === 'sticker' || IMAGE_EXTENSIONS.test(path))
+  })
   // App Server exposes a first-class localImage input but no generic local-file
   // input. Include the downloaded path for other attachment types so Codex can
   // inspect them with its normal filesystem tools.
-  const text = path && !isImage ? `${source.content}\n\nLocal attachment path: ${path}` : source.content
+  const fileNote = files.length === 1
+    ? `\n\nLocal attachment path: ${files[0].path}`
+    : files.length > 1
+      ? `\n\nLocal attachment paths (ordered):\n${files.map((file, i) => `${i + 1}. ${file.path}`).join('\n')}`
+    : ''
+  const text = `${source.content}${fileNote}`
   const input: CodexUserInput[] = [{ type: 'text', text, text_elements: [] }]
-  if (path && isImage) {
-    input.push({ type: 'localImage', path })
+  for (const attachment of attachments) {
+    const kind = attachment.kind.toLowerCase()
+    if (kind === 'photo' || kind === 'image' || kind === 'sticker' || IMAGE_EXTENSIONS.test(attachment.path)) {
+      input.push({ type: 'localImage', path: attachment.path })
+    }
   }
   return input
 }
