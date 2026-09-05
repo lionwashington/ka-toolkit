@@ -73,3 +73,20 @@ process.exit(process.env.TEST_BUNDLE === 'failed' ? 1 : 0)
     }
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
+
+test('component publication handles absent and enabled bootstrap under system bash nounset', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ka-bootstrap-'))
+  try {
+    const script = join(root, 'install.sh')
+    writeFileSync(script, source + '\npython3() { printf "<%s>\\n" "$@"; }\ncomponent_publish /synthetic/dest /synthetic/stage\n')
+    for (const enabled of ['0', '1']) {
+      const result = spawnSync('/bin/bash', [script], {
+        encoding: 'utf8', env: { ...process.env, KA_HOME: join(root, 'runtime'), KA_COMPONENT_BOOTSTRAP: enabled },
+      })
+      assert.equal(result.status, 0, result.stderr)
+      assert.match(result.stdout, /<publish>\n<\/synthetic\/dest>\n<\/synthetic\/stage>/)
+      assert.equal(result.stdout.includes('<--bootstrap>'), enabled === '1')
+      assert.doesNotMatch(result.stdout, /<>/)
+    }
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})

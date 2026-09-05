@@ -91,3 +91,16 @@ and review component-level activation limitations. Preserve unrelated local
 work. Back up runtime configuration and ownership metadata before a separately
 authorized canary deployment. Never delete or shrink existing rollout files as
 part of this change.
+
+## Local compatibility and missing-owner fallback
+
+- Component publishing branches explicitly on bootstrap mode; ordinary publishing
+  never expands an empty array under system Bash 3.2 with nounset enabled.
+- Release tests compare canonical paths so macOS temporary-directory aliases do
+  not prevent rollback and corruption-rejection assertions from running.
+- A valid saved owner remains preferred over a newer thread in the same cwd.
+  Only a definitive missing-thread response for an implicit saved owner falls
+  back to the latest thread in that cwd; an empty list requests a fresh TUI.
+  The existing launcher records the newly selected or created owner.
+- Explicit missing IDs, wrong-cwd owners, RPC internal errors and timeouts still
+  fail visibly. They never silently select another conversation.

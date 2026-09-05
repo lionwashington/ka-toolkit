@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readlinkSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readlinkSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -39,8 +39,8 @@ test('component publication, pinning, rollback and corruption rejection preserve
     assert.equal(JSON.parse(output.trim().split('\n').at(-1)).version, 'one', 'a running import stays pinned to its release')
     const latest = () => JSON.parse(spawnSync(process.execPath, [join(dest, 'daemon.mjs')], { encoding: 'utf8' }).stdout)
     assert.equal(latest().version, 'two')
-    assert.equal(latest().data.replace(/\/$/, ''), dest)
-    assert.equal(spawnSync('bash', [join(dest, 'start.sh')], { encoding: 'utf8' }).stdout.trim(), dest)
+    assert.equal(realpathSync(latest().data), realpathSync(dest))
+    assert.equal(realpathSync(spawnSync('bash', [join(dest, 'start.sh')], { encoding: 'utf8' }).stdout.trim()), realpathSync(dest))
     assert.equal(run('rollback', first).status, 0)
     assert.equal(latest().version, 'one')
     const oldPointer = readlinkSync(join(dest, 'current'))

@@ -120,9 +120,11 @@ bundle_checked() {
 run()  { if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] $*"; else eval "$@"; fi; }
 component_begin() { python3 "$REPO_ROOT/shared/ops/component-release.py" begin "$1"; }
 component_publish() {
-  local -a bootstrap=()
-  [ "${KA_COMPONENT_BOOTSTRAP:-0}" != 1 ] || bootstrap=(--bootstrap)
-  python3 "$REPO_ROOT/shared/ops/component-release.py" publish "$1" "$2" "${bootstrap[@]}"
+  if [ "${KA_COMPONENT_BOOTSTRAP:-0}" = 1 ]; then
+    python3 "$REPO_ROOT/shared/ops/component-release.py" publish "$1" "$2" --bootstrap
+  else
+    python3 "$REPO_ROOT/shared/ops/component-release.py" publish "$1" "$2"
+  fi
 }
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 want_any() {

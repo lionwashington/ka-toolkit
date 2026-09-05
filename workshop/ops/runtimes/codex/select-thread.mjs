@@ -43,7 +43,7 @@ websocket.addEventListener('message', event => {
   if (!item) return
   clearTimeout(item.timer)
   pending.delete(message.id)
-  if (message.error) item.reject(new Error(`${item.method}: ${message.error.message ?? JSON.stringify(message.error)}`))
+  if (message.error) item.reject(Object.assign(new Error(`${item.method}: ${message.error.message ?? JSON.stringify(message.error)}`), { rpcError: message.error }))
   else item.resolve(message.result)
 })
 
@@ -67,21 +67,29 @@ try {
   let thread
   let fresh = false
   if (requestedThreadId) {
-    const checked = await request('thread/read', { threadId: requestedThreadId, includeTurns: false }, resumeTimeoutMs)
-    if (checked.thread.cwd !== cwd) throw new Error('saved thread belongs to another workspace')
-    const resumed = await request('thread/resume', { threadId: requestedThreadId, ...(model ? { model } : {}) }, resumeTimeoutMs)
-    thread = resumed.thread
-    if (thread.cwd !== cwd) {
-      throw new Error(`thread ${requestedThreadId} belongs to ${thread.cwd}, expected ${cwd}`)
+    try {
+      const checked = await request('thread/read', { threadId: requestedThreadId, includeTurns: false }, resumeTimeoutMs)
+      if (checked.thread.cwd !== cwd) throw new Error('saved thread belongs to another workspace')
+      const resumed = await request('thread/resume', { threadId: requestedThreadId, ...(model ? { model } : {}) }, resumeTimeoutMs)
+      thread = resumed.thread
+      if (thread.cwd !== cwd) throw new Error('saved thread belongs to another workspace')
+    } catch (error) {
+      // Only a definitive missing implicit owner may fall back. Explicit IDs,
+      // transport failures, timeouts and workspace mismatches remain errors.
+      const rpc = error.rpcError
+      const missing = rpc?.code === -32600 &&
+        /^(?:no rollout found for thread id|thread not found(?::| for thread id)?)[ :]/i.test(rpc.message ?? '')
+      if (explicitThreadId || !missing) throw error
     }
-  } else if (mode === 'wait') {
+  }
+  if (!thread && mode === 'wait') {
     const deadline = Date.now() + 15_000
     while (!thread && Date.now() < deadline) {
       thread = notifiedThread ?? await listLatest()
       if (!thread) await new Promise(resolve => setTimeout(resolve, 100))
     }
     if (!thread) throw new Error(`timed out waiting for the TUI to create a thread in ${cwd}`)
-  } else {
+  } else if (!thread) {
     const latest = await listLatest()
     if (!latest) {
       fresh = true
