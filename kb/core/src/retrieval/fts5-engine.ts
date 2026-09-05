@@ -21,6 +21,7 @@ export interface Fts5SearchHit {
 }
 
 export interface Fts5RebuildMeta {
+  fingerprints?: Record<string, string>
   sourceMtimeMax?: number
   docCount?: number
   sourcePaths?: string[]
@@ -51,6 +52,7 @@ export class Fts5Engine {
     const db = new DatabaseSync(this.dbPath)
     db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;')
     db.exec(`
+      CREATE TABLE IF NOT EXISTS source_fingerprints (path TEXT PRIMARY KEY, hash TEXT NOT NULL);
       CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
         id UNINDEXED,
         path UNINDEXED,
@@ -90,6 +92,8 @@ export class Fts5Engine {
     try {
       db.exec('BEGIN IMMEDIATE; DELETE FROM chunks;')
       this.insertRows(rows)
+      db.exec('DELETE FROM source_fingerprints;')
+      this.saveFingerprints(meta.fingerprints ?? {})
       db.exec('COMMIT;')
       writeManifest(this.manifestPath, {
         engine: 'fts5',
@@ -112,7 +116,7 @@ export class Fts5Engine {
 
   upsert(
     rows: TextChunkRow[],
-    opts: { changedPaths?: string[]; removedPaths?: string[]; sourceMtimeMax?: number } = {},
+    opts: { changedPaths?: string[]; removedPaths?: string[]; sourceMtimeMax?: number; fingerprints?: Record<string, string> } = {},
   ): void {
     const cur = readManifest(this.manifestPath)
     const db = this.conn()
@@ -123,6 +127,9 @@ export class Fts5Engine {
       const del = db.prepare('DELETE FROM chunks WHERE path = ?')
       for (const path of [...new Set([...changed, ...removed])]) del.run(path)
       this.insertRows(rows)
+      const forget = db.prepare('DELETE FROM source_fingerprints WHERE path = ?')
+      for (const path of [...new Set([...changed, ...removed])]) forget.run(path)
+      this.saveFingerprints(opts.fingerprints ?? {})
       db.exec('COMMIT;')
       const counts = db.prepare(
         'SELECT count(*) AS chunks, count(DISTINCT path) AS docs FROM chunks',
@@ -171,6 +178,16 @@ export class Fts5Engine {
 
   status(): IndexManifest | null {
     return readManifest(this.manifestPath)
+  }
+
+  fingerprints(): Record<string, string> {
+    const rows = this.conn().prepare('SELECT path, hash FROM source_fingerprints').all() as Array<{ path: string; hash: string }>
+    return Object.fromEntries(rows.map(row => [row.path, row.hash]))
+  }
+
+  private saveFingerprints(fingerprints: Record<string, string>): void {
+    const stmt = this.conn().prepare('INSERT OR REPLACE INTO source_fingerprints(path, hash) VALUES (?, ?)')
+    for (const [path, hash] of Object.entries(fingerprints)) stmt.run(path, hash)
   }
 
   indexedPaths(): string[] {

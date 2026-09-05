@@ -17,6 +17,7 @@ export interface CodexChannelTargetOptions {
   externalChatId: string
   externalThreadId?: string
   cwd: string
+  model?: string
   canonicalThreadId?: string
   canonicalThreadPath?: string
   allowUnpersistedThread?: boolean
@@ -28,6 +29,8 @@ export interface CodexChannelTargetOptions {
   completionPollIntervalMs?: number
   completionNotificationGraceMs?: number
   transportRecoveryTimeoutMs?: number
+  threadResumeTimeoutMs?: number
+  turnStartTimeoutMs?: number
 }
 
 type CodexUserInput =
@@ -124,6 +127,21 @@ export class CodexChannelTarget implements RuntimeTarget {
 
   isAlive(): boolean { return this.connected && this.options.client.running }
 
+  private observedModel?: string
+
+  configureModel(model?: string): void {
+    if (this.options.model !== model) this.observedModel = undefined
+    this.options.model = model
+  }
+
+  modelStatus(): { configured_model?: string; observed_model?: string } {
+    return { configured_model: this.options.model, observed_model: this.observedModel }
+  }
+
+  private observeModel(response: any): void {
+    this.observedModel = response.model ?? response.thread?.model ?? undefined
+  }
+
   /** True only while this target is processing a Channel-owned delivery for replyTarget. */
   hasActiveDelivery(replyTarget: string): boolean {
     return this.activeSource?.meta.chat_id === replyTarget
@@ -155,10 +173,12 @@ export class CodexChannelTarget implements RuntimeTarget {
     if (this.binding && !this.options.allowUnpersistedThread) {
       const resumed = await this.options.client.request('thread/resume', {
         threadId: this.binding.runtimeSessionId,
+        ...(this.options.model ? { model: this.options.model } : {}),
         approvalPolicy: 'never',
         sandbox: 'danger-full-access',
-      })
+      }, this.options.threadResumeTimeoutMs ?? 10 * 60_000)
       this.threadBusy = resumed.thread?.status?.type === 'active'
+      this.observeModel(resumed)
     }
     this.connected = true
   }
@@ -175,10 +195,12 @@ export class CodexChannelTarget implements RuntimeTarget {
     if (!this.options.allowUnpersistedThread || !this.binding) return
     const resumed = await this.options.client.request('thread/resume', {
       threadId: this.binding.runtimeSessionId,
+      ...(this.options.model ? { model: this.options.model } : {}),
       approvalPolicy: 'never',
       sandbox: 'danger-full-access',
-    })
+    }, this.options.threadResumeTimeoutMs ?? 10 * 60_000)
     this.threadBusy = resumed.thread?.status?.type === 'active'
+    this.observeModel(resumed)
     this.options.allowUnpersistedThread = false
   }
 
@@ -231,10 +253,12 @@ export class CodexChannelTarget implements RuntimeTarget {
     if (this.binding) return this.binding
     const started = await this.options.client.request('thread/start', {
       cwd: this.options.cwd,
+      ...(this.options.model ? { model: this.options.model } : {}),
       ephemeral: false,
       approvalPolicy: 'never',
       sandbox: 'danger-full-access',
     })
+    this.observeModel(started)
     const timestamp = (this.options.now ?? (() => new Date()))().toISOString()
     this.binding = {
       channelName: this.name,
@@ -255,6 +279,7 @@ export class CodexChannelTarget implements RuntimeTarget {
   private async runTurn(source: RuntimeTargetMessage): Promise<void> {
     let binding: ChannelBinding | undefined
     let turnId: string | undefined
+    let failCompleted: ((error: Error) => void) | undefined
     try {
       if (!this.connected || !this.options.client.running) await this.connect()
       binding = await this.ensureBinding()
@@ -292,6 +317,7 @@ export class CodexChannelTarget implements RuntimeTarget {
           cleanup()
           reject(error)
         }
+        failCompleted = fail
         resolveCompleted = finish
         const onExit = () => {
           this.connected = false
@@ -359,10 +385,11 @@ export class CodexChannelTarget implements RuntimeTarget {
       void completed.catch(() => {})
       const started = await this.options.client.request('turn/start', {
         threadId: binding.runtimeSessionId,
+        ...(this.options.model ? { model: this.options.model } : {}),
         input: buildCodexTurnInput(source),
         approvalPolicy: 'never',
         sandboxPolicy: DANGER_FULL_ACCESS,
-      })
+      }, this.options.turnStartTimeoutMs ?? 10 * 60_000)
       turnId = started.turn.id
       this.activeTurnId = turnId
       this.persistActiveTurn(binding, turnId)
@@ -374,6 +401,11 @@ export class CodexChannelTarget implements RuntimeTarget {
       if (finalText) await this.options.onEvent({ type: 'final', threadId: binding.runtimeSessionId, turnId, text: finalText }, source)
       await this.options.onEvent({ type: 'turn-completed', threadId: binding.runtimeSessionId, turnId, status: result.turn.status }, source)
     } catch (error: any) {
+      // A timed-out JSON-RPC mutation can still be accepted by App Server
+      // later. Detach this delivery's watcher before that late turn emits
+      // notifications, otherwise stale listeners duplicate every streamed
+      // delta handled by the next delivery.
+      failCompleted?.(error)
       await this.options.onEvent({ type: 'error', threadId: binding?.runtimeSessionId, turnId, error }, source)
       throw error
     } finally {
@@ -433,9 +465,10 @@ export class CodexChannelTarget implements RuntimeTarget {
         await this.options.client.reconnect()
         await this.options.client.request('thread/resume', {
           threadId: binding.runtimeSessionId,
+          ...(this.options.model ? { model: this.options.model } : {}),
           approvalPolicy: 'never',
           sandbox: 'danger-full-access',
-        })
+        }, this.options.threadResumeTimeoutMs ?? 10 * 60_000)
         this.connected = true
         const read = await this.options.client.request('thread/read', {
           threadId: binding.runtimeSessionId,

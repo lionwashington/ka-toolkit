@@ -3,7 +3,7 @@ import { Distiller } from '../src/distiller/distiller.js'
 import { KnowledgeStore } from '../src/knowledge-store/store.js'
 import { ConversationCapture } from '../src/capture/capture.js'
 import { WatermarkStore } from '../src/watermark/watermark.js'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -32,6 +32,15 @@ describe('Distiller', () => {
   })
 
   describe('generatePrompt', () => {
+    it('carries version acknowledgements across a serialized job and a new Distiller instance', () => {
+      const path = join(tempDir, 'conversations', '2026-01-01-versioned.md')
+      writeFileSync(path, '---\nid: versioned\nsource: codex\ncontent_hash: needs-computing\ndistilled: false\n---\n## User\n\nSynthetic information\n')
+      const job = JSON.parse(JSON.stringify(distiller.generatePrompt()))
+      expect(job.capturedVersions.versioned).toMatch(/^[a-f0-9]{64}$/)
+      const next = new Distiller(store, capture, watermarks)
+      next.processResult(JSON.stringify({ extractions: [{ topicName: 'health', isNew: false, content: 'Synthetic extraction', sourceConversationId: 'versioned' }] }), job.conversationIds, job.capturedVersions)
+      expect(capture.getUnprocessed()).toHaveLength(0)
+    })
     it('returns null when no unprocessed conversations', () => {
       expect(distiller.generatePrompt()).toBeNull()
     })

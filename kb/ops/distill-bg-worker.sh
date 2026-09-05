@@ -202,13 +202,32 @@ When calling ka-jsonl-reader you MUST pass:
     --batch <existing batch + 1, or 1 on first run>
 
 [Steps]
+IMPORTANT source separation: the numbered transcript-reader/append steps below
+apply only to Claude-format raw records. Never append Claude markdownDelta or
+Claude last_parsed_* fields into a raw record whose source is codex.
+For EACH Codex raw (including backlog), instead use this mandatory protocol:
+  1. Choose a new private job file under $KA_HOME/state/capture-snapshots/ (never
+     in a public repo). Run node "$KA_HOME/kb/core/dist/capture-snapshot-cli.js"
+     snapshot --raw-dir "$KNOWLEDGE_BASE_PATH/raw" --file <basename.md>
+     --job <new-private-job.json>. Read only its returned text as the delta.
+  2. Update knowledge topics using only that snapshot; do not reread the mutable
+     raw midway and do not directly edit Codex raw files or distilled fields.
+  3. Run the same CLI with ack --job <job.json> --topics-json '["topic-name"]'.
+     For noise use ["noise-spawn-handshake"]. Exit 3 means changed content:
+     leave it pending, do not force success. A later continuation stays pending
+     even when this snapshot was acknowledged. Repeated ack is idempotent.
+     Count raw_added only when the returned complete field is true, not when
+     a prefix was acknowledged but the raw still contains pending content.
+  4. If the CLI is missing or fails, stop with an error; never fall back to direct
+     frontmatter edits. Include only acknowledged work in statistics.
+
 1. Phase 0: locate the existing raw/<date>-<id>.md (match frontmatter by session_id), read its 4 last_parsed_* fields; if none exists, this is the first capture (omit --offset etc.)
 2. Call ka-jsonl-reader with the command above to get markdownDelta + new progress
 3. Append markdownDelta to the end of the raw file body; update the 4 frontmatter fields; keep distilled false
 4. Phase 1: read the raw delta, match topics, append to conversations/<date>.md (TL;DR protocol) + run daily-log-splitter-cli to see if a split is needed + append to topics/<name>.md
-5. **End of Phase 1**: markDistilled on every raw file you processed (set distilled: true + the topics array) — this step must NEVER be skipped, or the next run will treat them as un-distilled and reprocess them
+5. **End of Claude Phase 1**: markDistilled on each Claude raw you processed (set distilled: true + the topics array). Codex raws must instead use the snapshot CLI above, never direct edits.
 6. Phase 2 — backlog drain (BOUNDED, self-heal): after the current session above, list raw/*.md whose frontmatter has \`distilled: false\` that you did NOT just process (stranded by a past distill outage). Take AT MOST the ${DISTILL_BACKLOG_MAX} OLDEST by filename date. (If ${DISTILL_BACKLOG_MAX} is 0, or there are none, skip Phase 2 entirely.) For EACH of those (≤${DISTILL_BACKLOG_MAX}):
-   - Read the raw file fully. Classify: NOISE = a teammate spawn/handshake (<teammate-message> brief + "Acknowledged / Standing by / 收到待命"), an empty/aborted/trivial-test session, or pure boilerplate. SUBSTANTIVE = real reusable knowledge.
+   - First check the source. For codex, use ONLY the snapshot/ack protocol above and skip the remaining direct-edit instructions for that file. For Claude raws, read the raw file fully. Classify: NOISE = a teammate spawn/handshake (<teammate-message> brief + "Acknowledged / Standing by / 收到待命"), an empty/aborted/trivial-test session, or pure boilerplate. SUBSTANTIVE = real reusable knowledge.
    - NOISE → set its frontmatter \`distilled: true\` and \`topics: [noise-spawn-handshake]\` (this is the archival sink for non-knowledge raws); do nothing else for it.
    - SUBSTANTIVE → distill it like Phase 1: identify the topic(s) it belongs to, READ those topic files first and append ONLY genuinely net-new knowledge (the main session often already logged it in real time — do not duplicate), optionally update conversations/<that raw's date>.md, then set \`distilled: true\` + the real topics array.
    - Do NOT exceed ${DISTILL_BACKLOG_MAX} backlog raws in one run — leave the rest for the next run (gradual drain). Count these toward your stats (raw_added / topics_files etc.) the same as Phase 1.

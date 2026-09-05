@@ -16,7 +16,10 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"  # launchd/cron PATH lacks Homebrew/nvm → else `node: not found` on keepalive cold-start
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # self-contained: dir of this script (canonical: ~/.knowledge-assistant/channels/telegram-daemon)
+ROOT="${KA_COMPONENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+CODE_ROOT="${KA_COMPONENT_CODE_ROOT:-$ROOT}"
+export KA_COMPONENT_ROOT="$ROOT" KA_COMPONENT_CODE_ROOT="$CODE_ROOT"
+export KA_DAEMON_DATA_DIR="${KA_DAEMON_DATA_DIR:-$ROOT}"
 LOCK="$ROOT/.daemon.lock"
 # Single root: this dir is $KA_HOME/channels/telegram-daemon, so ../.. = KA_HOME.
 # Export it (unless already set) so the daemon resolves $KA_HOME/config the same
@@ -25,7 +28,7 @@ LOCK="$ROOT/.daemon.lock"
 export KA_HOME
 # D0: runtime is a single self-contained esbuild bundle (channel-core kernel +
 # telegram-platform + deps). No .ts source, no node_modules. Run it as ESM (.mjs).
-BUNDLE="${KA_DAEMON_BUNDLE:-$ROOT/daemon.mjs}"
+BUNDLE="${KA_DAEMON_BUNDLE:-$CODE_ROOT/daemon.mjs}"
 
 # Singleton: prefer `flock` when present (Linux). macOS has no flock binary, so
 # fall back to running node directly — the daemon enforces singleton by binding

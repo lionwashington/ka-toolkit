@@ -2,7 +2,10 @@
 # kb-retrieval status. Exit 0 + JSON if alive, exit 1 if down.
 set -u
 HOST="127.0.0.1"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${KA_COMPONENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+CODE_ROOT="${KA_COMPONENT_CODE_ROOT:-$ROOT}"
+export KA_COMPONENT_ROOT="$ROOT" KA_COMPONENT_CODE_ROOT="$CODE_ROOT"
+export KA_DAEMON_DATA_DIR="${KA_DAEMON_DATA_DIR:-$ROOT}"
 : "${KA_HOME:=$(cd "$ROOT/../../.." && pwd)}"
 CONFIG_YAML="${KA_CONFIG:-${KA_CONFIG_DIR:-$KA_HOME/config}/config.yaml}"
 PORT="$(awk '

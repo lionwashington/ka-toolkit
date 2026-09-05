@@ -1,5 +1,6 @@
 export { loadConfig, loadSecrets, isCaptureChannelAllowed, injectChannels, type KaConfig, type KaSecrets } from './config.js'
 export { ConversationCapture } from './capture/capture.js'
+export { atomicUpdateText } from './capture/atomic-update.js'
 export type { Conversation, ConversationMessage, ParseProgress, JsonlEntry, JsonlDelta } from './capture/types.js'
 export { readDelta } from './capture/jsonl-reader.js'
 export { splitDailyLog } from './daily-log/splitter.js'

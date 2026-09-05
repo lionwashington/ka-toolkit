@@ -1,5 +1,12 @@
 import type { Fts5Engine } from './fts5-engine.js'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { buildTextRowsForFiles, listTopicFiles } from './indexer.js'
+
+function fingerprint(file: ReturnType<typeof listTopicFiles>[number]): string {
+  // Version the transformation; upgrading it deliberately invalidates old rows.
+  return 'fts5-v1:' + createHash('sha256').update(file.raw ?? readFileSync(file.abs, 'utf8')).digest('hex')
+}
 
 export interface Fts5IndexResult {
   changedPaths: string[]
@@ -17,6 +24,7 @@ export function reindexFts5(engine: Fts5Engine, kbPath: string): Fts5IndexResult
     sourceMtimeMax,
     docCount: files.length,
     sourcePaths: files.map((file) => file.path),
+    fingerprints: Object.fromEntries(files.map(file => [file.path, fingerprint(file)])),
   })
   return {
     changedPaths: files.map((file) => file.path),
@@ -37,7 +45,9 @@ export function incrementalReindexFts5(
   const onDisk = new Set(files.map((file) => file.path))
   const indexedPaths = engine.indexedPaths()
   const indexed = new Set(indexedPaths)
-  const changed = files.filter((file) => file.mtime > sinceMtime || !indexed.has(file.path))
+  const previous = engine.fingerprints()
+  const hashes = Object.fromEntries(files.map(file => [file.path, fingerprint(file)]))
+  const changed = files.filter(file => hashes[file.path] !== previous[file.path] || !indexed.has(file.path) || (since !== undefined && file.mtime > since))
   const removedPaths = indexedPaths.filter((path) => !onDisk.has(path))
   if (changed.length === 0 && removedPaths.length === 0) {
     return {
@@ -53,6 +63,7 @@ export function incrementalReindexFts5(
     changedPaths: changed.map((file) => file.path),
     removedPaths,
     sourceMtimeMax,
+    fingerprints: Object.fromEntries(changed.map(file => [file.path, hashes[file.path]])),
   })
   return {
     changedPaths: changed.map((file) => file.path),

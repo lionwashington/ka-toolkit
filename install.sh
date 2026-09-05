@@ -95,8 +95,35 @@ if [ -n "$SKILL_FILTER" ]; then
   [ "$ONLY" = "skills" ] || { echo "--skill requires --only skills" >&2; exit 2; }
 fi
 
-log()  { echo "[install] $*"; }
+INSTALL_FAILURES=0
+log() {
+  echo "[install] $*"
+  case "$*" in *FAIL*) INSTALL_FAILURES=$((INSTALL_FAILURES + 1)) ;; esac
+}
+
+# Build beside the destination and atomically replace it only after syntax
+# validation. A failed/partial compiler output must not overwrite the live file.
+bundle_checked() {
+  local output="$1" compiler="$2" stage rc=0
+  shift 2
+  mkdir -p "$(dirname "$output")" || return 1
+  stage="$(mktemp -d "$(dirname "$output")/.bundle.XXXXXX")" || return 1
+  if "$compiler" "$@" --outfile="$stage/artifact.mjs" && node --check "$stage/artifact.mjs"; then
+    mv "$stage/artifact.mjs" "$output" || rc=$?
+  else
+    rc=1
+  fi
+  # Failure evidence is kept in the isolated staging directory for inspection.
+  if [ "$rc" = 0 ]; then rmdir "$stage"; fi
+  return "$rc"
+}
 run()  { if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] $*"; else eval "$@"; fi; }
+component_begin() { python3 "$REPO_ROOT/shared/ops/component-release.py" begin "$1"; }
+component_publish() {
+  local -a bootstrap=()
+  [ "${KA_COMPONENT_BOOTSTRAP:-0}" != 1 ] || bootstrap=(--bootstrap)
+  python3 "$REPO_ROOT/shared/ops/component-release.py" publish "$1" "$2" "${bootstrap[@]}"
+}
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 want_any() {
   [ -z "$ONLY" ] && return 0
@@ -210,7 +237,7 @@ deploy_node_mcp() {      # P1.2 — pure-JS node MCPs (no native deps): single s
       # --banner injects createRequire: when the bundle contains CJS dependencies (e.g.
       # yaml), the ESM output's dynamic require needs a real require, otherwise it fails
       # at runtime with "Dynamic require of X not supported".
-      if "$ESB" "$REPO_ROOT/$pkg/src/index.ts" --bundle --platform=node --format=esm --banner:js="import{createRequire}from'module';const require=createRequire(import.meta.url);" --outfile="$dest/index.mjs" >/dev/null 2>&1; then
+      if bundle_checked "$dest/index.mjs" "$ESB" "$REPO_ROOT/$pkg/src/index.ts" --bundle --platform=node --format=esm --banner:js="import{createRequire}from'module';const require=createRequire(import.meta.url);" >/dev/null 2>&1; then
         log "  OK $dest/index.mjs ($(wc -c < "$dest/index.mjs" | tr -d ' ')B, self-contained)"
       else
         log "  FAIL bundle"
@@ -248,22 +275,17 @@ deploy_kb_mcp() {        # kb (knowledge-assistant) MCP + kb-retrieval daemon �
   #    chunk keeps the bundle's native refs behind the dynamic import).
   ( cd "$REPO_ROOT" && pnpm --filter @ka/core build >/dev/null 2>&1 ) \
     || { log "  FAIL build @ka/core"; return 0; }
-  # 2) 🔒 Back up current dist+scripts (rollback net) — only if previously deployed.
-  if [ -d "$dest" ] && [ -e "$dest/daemon.sh" ]; then
-    local bak="${dest}.bak.$(date +%Y%m%d-%H%M%S)"
-    rm -rf "$bak"; mkdir -p "$bak"
-    cp -a "$dest/dist" "$bak/dist" 2>/dev/null || true
-    cp -a "$dest"/*.sh "$bak/" 2>/dev/null || true
-    log "  🔒 backed up current dist+scripts → ${bak}  (rollback: ka kb stop; restore dist/*.sh; ka kb start)"
-  fi
+  # Build the entire code/native closure away from the selected release.
+  local live="$dest"
+  dest="$(component_begin "$live")" || { log "  FAIL create KB staging directory"; return 0; }
   # 3) esbuild both entries → self-contained .mjs (natives external).
   mkdir -p "$dest/dist"
   local e ok=1
   for e in index daemon; do
-    if ! "$ESB" "$src/src/$e.ts" --bundle --platform=node --format=esm \
+    if ! bundle_checked "$dest/dist/$e.mjs" "$ESB" "$src/src/$e.ts" --bundle --platform=node --format=esm \
         --external:onnxruntime-node --external:@lancedb/lancedb --external:fastembed \
         --banner:js="import{createRequire}from'module';const require=createRequire(import.meta.url);" \
-        --outfile="$dest/dist/$e.mjs" >/dev/null 2>&1; then
+        >/dev/null 2>&1; then
       log "  FAIL esbuild $e.ts"; ok=0
     fi
   done
@@ -298,20 +320,10 @@ EOF
   #    DEFAULT_EMBED_CACHE_DIR = ~/.cache/ka-toolkit/fastembed); else download on first
   #    run. daemon.sh exports KA_EMBED_CACHE_DIR=$dest/local_cache so the daemon uses
   #    this shipped copy (offline), not the dev default.
-  if [ -e "$dest/local_cache" ]; then
-    log "  model cache present at ${dest}/local_cache (kept)"
-  else
-    local cache_src=""
-    [ -d "$HOME/.cache/ka-toolkit/fastembed" ] && cache_src="$HOME/.cache/ka-toolkit/fastembed"
-    if [ -n "$cache_src" ]; then
-      log "  copying model cache ${cache_src} → ${dest}/local_cache (one-time, multi-GB)…"
-      cp -R "$cache_src" "$dest/local_cache"
-    else
-      log "  ⚠️ no shared model cache (~/.cache/ka-toolkit/fastembed) — the daemon will download multilingual-e5-large to ${dest}/local_cache on first run (needs network)"
-    fi
-  fi
-  local nmsz; nmsz="$(du -sh "$dest/node_modules" 2>/dev/null | cut -f1)"
-  log "  OK ${dest} (dist[index.mjs+daemon.mjs] + node_modules[${nmsz}, natives only] + scripts; deployed, NOT registered/started)"
+  # Mutable model caches stay in the stable component root, never the release.
+  log "  model cache retained outside release at ${live}/local_cache (lazy creation if absent)"
+  component_publish "$live" "$dest" || { log "  FAIL publish KB component; selected release preserved"; return 0; }
+  log "  OK ${live}/current (bundles + native dependencies + scripts; NOT registered/started)"
   # Autostart / keepalive is NOT a custom plist here — it is a `ka cron` job
   # (kb-retrieval-keepalive: `ka kb start` on a short interval, a no-op when the daemon
   # is already up via the port singleton). That reuses the cron launchd plumbing
@@ -411,16 +423,8 @@ deploy_daemon() {        # telegram channel daemon → runtime/telegram-daemon (
   fi
   local ESB; ESB="$(find "$REPO_ROOT/node_modules/.pnpm" -path '*esbuild@*/node_modules/esbuild/bin/esbuild' -type f 2>/dev/null | head -1 || true)"
   [ -n "$ESB" ] || { log "  WARN esbuild not found (need pnpm install), skipping"; return 0; }
-  # 🔒 Auto-backup: before overwriting, back up the whole currently-working deploy dir
-  # (rollback safety net). Only back up when dest already has a daemon.sh (i.e. it was
-  # deployed before). Rollback: stop → rm -rf <dest> && mv <bak> <dest> → start.
-  if [ -d "$dest" ] && [ -e "$dest/daemon.sh" ]; then
-    local bak="${dest}.bak.$(date +%Y%m%d-%H%M%S)"
-    cp -a "$dest" "$bak"
-    log "  🔒 backed up current daemon → ${bak}"
-    log "     rollback: ${dest}/stop.sh; rm -rf ${dest}; mv ${bak} ${dest}; ${dest}/start.sh"
-  fi
-  mkdir -p "$dest"
+  local live="$dest"
+  dest="$(component_begin "$live")" || { log "  FAIL create Telegram staging directory"; return 0; }
   # Temp static entry (placed inside the platform package so relative + node_modules resolution is natural).
   local entry="$src/.bundle-entry.tmp.ts"
   cat > "$entry" <<'EOF'
@@ -433,9 +437,9 @@ EOF
   # --format=esm + .mjs: node runs it explicitly as ESM (no package.json type needed). The
   # banner injects createRequire to back any bare require inside the bundle (used indirectly
   # by CJS deps, same as deploy_hooks).
-  if "$ESB" "$entry" --bundle --platform=node --format=esm \
+  if bundle_checked "$dest/daemon.mjs" "$ESB" "$entry" --bundle --platform=node --format=esm \
       --banner:js="import{createRequire}from'module';const require=createRequire(import.meta.url);" \
-      --outfile="$dest/daemon.mjs" >/dev/null 2>&1; then
+      >/dev/null 2>&1; then
     rm -f "$entry"
     log "  OK bundle → ${dest}/daemon.mjs (self-contained, single core instance)"
   else
@@ -447,19 +451,8 @@ EOF
     [ -f "$src/$f" ] && cp "$src/$f" "$dest/$f"
   done
   chmod +x "$dest"/*.sh 2>/dev/null || true
-  # No per-daemon config to seed: the daemon reads config.yaml/secrets.yaml from
-  # $KA_HOME/config (seeded by deploy_config). config.example.json is dead in the
-  # new layout — prune it (a template, no secrets), but NEVER the old config.json/
-  # .env (they may still hold the running daemon's token until the owner migrates
-  # those secrets into secrets.yaml at --switch time).
-  # Prune previous-generation (pre-bundle) artifacts: raw server.ts + node_modules +
-  # package*.json + tg-ch are superseded by the self-contained bundle and are dead code if
-  # left behind. Keep secrets/state/logs/attachments.
-  local stale
-  for stale in server.ts node_modules package.json package-lock.json tg-ch config.example.json; do
-    [ -e "$dest/$stale" ] && { rm -rf "$dest/$stale"; log "  pruned previous-gen: $stale"; }
-  done
-  log "  OK ${dest} (bundle + scripts in place; config from \$KA_HOME/config, owner migrates legacy secrets at --switch)"
+  component_publish "$live" "$dest" || { log "  FAIL publish Telegram component; selected release preserved"; return 0; }
+  log "  OK ${live}/current (complete component; mutable data untouched; not restarted)"
 }
 
 deploy_lark_daemon() {   # lark channel daemon → runtime/lark-daemon (esbuild single-file bundle)
@@ -479,13 +472,8 @@ deploy_lark_daemon() {   # lark channel daemon → runtime/lark-daemon (esbuild 
   fi
   local ESB; ESB="$(find "$REPO_ROOT/node_modules/.pnpm" -path '*esbuild@*/node_modules/esbuild/bin/esbuild' -type f 2>/dev/null | head -1 || true)"
   [ -n "$ESB" ] || { log "  WARN esbuild not found (need pnpm install), skipping"; return 0; }
-  if [ -d "$dest" ] && [ -e "$dest/daemon.sh" ]; then
-    local bak="${dest}.bak.$(date +%Y%m%d-%H%M%S)"
-    cp -a "$dest" "$bak"
-    log "  🔒 backed up current lark daemon → ${bak}"
-    log "     rollback: ${dest}/stop.sh; rm -rf ${dest}; mv ${bak} ${dest}; ${dest}/start.sh"
-  fi
-  mkdir -p "$dest"
+  local live="$dest"
+  dest="$(component_begin "$live")" || { log "  FAIL create Lark staging directory"; return 0; }
   local entry="$src/.bundle-entry.tmp.ts"
   cat > "$entry" <<'EOF'
 // Generated by install.sh deploy_lark_daemon — esbuild entry. Single static graph
@@ -494,9 +482,9 @@ import { platform, init } from './lark-platform.ts'
 import { runChannelDaemon } from '../core/src/daemon.ts'
 runChannelDaemon({ platform, ...init() })
 EOF
-  if "$ESB" "$entry" --bundle --platform=node --format=esm \
+  if bundle_checked "$dest/daemon.mjs" "$ESB" "$entry" --bundle --platform=node --format=esm \
       --banner:js="import{createRequire}from'module';const require=createRequire(import.meta.url);" \
-      --outfile="$dest/daemon.mjs" >/dev/null 2>&1; then
+      >/dev/null 2>&1; then
     rm -f "$entry"
     log "  OK bundle → ${dest}/daemon.mjs (self-contained, single core instance)"
   else
@@ -508,14 +496,8 @@ EOF
     [ -f "$src/$f" ] && cp "$src/$f" "$dest/$f"
   done
   chmod +x "$dest"/*.sh 2>/dev/null || true
-  # No per-daemon config to seed: the daemon reads config.yaml/secrets.yaml from
-  # $KA_HOME/config. Prune the dead config.example.json template (never the old
-  # config.json/.env — they may hold the running daemon's creds until migration).
-  local stale
-  for stale in server.ts node_modules package.json package-lock.json config.example.json; do
-    [ -e "$dest/$stale" ] && { rm -rf "$dest/$stale"; log "  pruned previous-gen: $stale"; }
-  done
-  log "  OK ${dest} (bundle + scripts in place; fill channels.lark in config.yaml/secrets.yaml)"
+  component_publish "$live" "$dest" || { log "  FAIL publish Lark component; selected release preserved"; return 0; }
+  log "  OK ${live}/current (complete component; mutable data untouched; not restarted)"
 }
 
 deploy_hooks() {         # CC hooks (capture-hook) → runtime (esbuild bundle + prune stale; @ka/core bundled in, self-contained)
@@ -1124,6 +1106,10 @@ main() {
   deploy_core_cli
   deploy_skills
   seed_config
+  if [ "$INSTALL_FAILURES" -gt 0 ]; then
+    log "installation failed: ${INSTALL_FAILURES} component error(s); activation skipped"
+    return 1
+  fi
   persist_targeted_channel_kind
   register_mcp
   switch_ka_link
@@ -1132,7 +1118,11 @@ main() {
   switch_daemon
   switch_lark_daemon
   switch_skills
+  if [ "$INSTALL_FAILURES" -gt 0 ]; then
+    log "installation failed during activation; inspect component errors before retrying"
+    return 1
+  fi
   echo "----"
-  log "done. (P1.1 skeleton; component deploy logic filled in over P1.2–P1.6)"
+  log "done. all requested deployment steps completed"
 }
 main

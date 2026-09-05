@@ -21,6 +21,8 @@ export interface TopicSuggestion {
 }
 
 export interface DistillerPrompt {
+  /** Persist with the job when generation and acknowledgement run in different processes. */
+  capturedVersions?: Record<string, string>
   prompt: string
   conversationIds: string[]
   knownTopics: string[]

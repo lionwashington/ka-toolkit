@@ -25,7 +25,7 @@ export interface BuiltIndex {
   docCount: number
 }
 
-export interface FileEntry { path: string; abs: string; topic: string; kind: string; parent: string; mtime: number }
+export interface FileEntry { path: string; abs: string; topic: string; kind: string; parent: string; mtime: number; raw?: string }
 
 export function listTopicFiles(kbPath: string): FileEntry[] {
   const out: FileEntry[] = []
@@ -35,10 +35,11 @@ export function listTopicFiles(kbPath: string): FileEntry[] {
       if (!f.endsWith('.md')) continue
       const abs = join(topicsDir, f)
       const stem = f.replace(/\.md$/, '')
-      const { data } = parseFrontmatter(readFileSync(abs, 'utf-8'))
+      const raw = readFileSync(abs, 'utf-8')
+      const { data } = parseFrontmatter(raw)
       const parentField = typeof data.parent === 'string' ? data.parent.replace(/\.md$/, '') : ''
       out.push({
-        path: `topics/${f}`, abs, topic: stem,
+        path: `topics/${f}`, abs, topic: stem, raw,
         kind: parentField ? 'sub' : 'parent',
         parent: parentField ? `topics/${parentField}.md` : `topics/${f}`,
         mtime: statSync(abs).mtimeMs,
@@ -54,7 +55,7 @@ export function listTopicFiles(kbPath: string): FileEntry[] {
 export function buildTextRowsForFiles(files: FileEntry[]): Array<TextChunkRow & { embedText: string }> {
   const pending: Array<TextChunkRow & { embedText: string }> = []
   for (const f of files) {
-    const raw = readFileSync(f.abs, 'utf-8')
+    const raw = f.raw ?? readFileSync(f.abs, 'utf-8')
     const { data } = parseFrontmatter(raw)
     const title = (data.title as string) ?? f.topic
     for (const c of chunkTopic(raw, { topic: f.topic })) {

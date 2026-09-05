@@ -9,6 +9,7 @@ export class Distiller {
   private store: KnowledgeStore
   private capture: ConversationCapture
   private watermarks: WatermarkStore
+  private capturedVersions = new Map<string, string | undefined>()
 
   constructor(store: KnowledgeStore, capture: ConversationCapture, watermarks: WatermarkStore) {
     this.store = store
@@ -24,6 +25,7 @@ export class Distiller {
   generatePrompt(compactSummary?: string): DistillerPrompt | null {
     const unprocessed = this.capture.getUnprocessed()
     if (unprocessed.length === 0) return null
+    this.capturedVersions = new Map(unprocessed.map(conv => [conv.id, conv.contentHash]))
 
     const knownTopics = this.store.listTopics().map(t => t.name)
 
@@ -59,6 +61,7 @@ If no meaningful knowledge to extract, respond: { "extractions": [] }`
 
     return {
       prompt,
+      capturedVersions: Object.fromEntries(unprocessed.filter(c => c.contentHash).map(c => [c.id, c.contentHash!])),
       conversationIds: unprocessed.map(c => c.id),
       knownTopics,
     }
@@ -67,7 +70,7 @@ If no meaningful knowledge to extract, respond: { "extractions": [] }`
   /**
    * Phase 2: Process the LLM's response and update knowledge base.
    */
-  processResult(response: string, conversationIds: string[]): DistillResult {
+  processResult(response: string, conversationIds: string[], capturedVersions?: Record<string, string>): DistillResult {
     let extractions: any[] = []
     try {
       const parsed = JSON.parse(response)
@@ -116,7 +119,7 @@ If no meaningful knowledge to extract, respond: { "extractions": [] }`
     // Only mark distilled if at least one extraction succeeded or had suggestions
     if (updatedTopics.size > 0 || suggestedTopics.length > 0) {
       for (const id of conversationIds) {
-        this.capture.markDistilled(id, [...updatedTopics])
+        this.capture.markDistilled(id, [...updatedTopics], capturedVersions?.[id] ?? this.capturedVersions.get(id))
       }
     }
 

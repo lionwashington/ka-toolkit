@@ -15,11 +15,18 @@ session: workshop
 # Omit this key to accept the default (cc).
 # runtime: cc
 
+# Optional defaults, isolated by runtime. Existing args --model takes priority,
+# then the mate's model key, then the matching runtime default below.
+# models:
+#   cc: claude-opus-4-8
+#   codex: gpt-6-astra
+
 # Each entry supports these keys:
 #   name         (required) agent / channel name
 #   cwd          (required) working directory; must exist before `ka start`.
 #                ~ is expanded. Any entry refuses to start on a missing cwd.
 #   args         (optional) extra CLI args passed verbatim to the agent.
+#   model        (optional) overrides the matching runtime model default.
 #   description  (optional) human note; shown by `ka status` for mates.
 #   main         (optional) default FALSE. Zero or one entry may set true. It is
 #                only a channel alias (`main`), not a privileged lifecycle role.

@@ -1,5 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, openSync, readSync, closeSync } from 'fs'
 import { join } from 'path'
+import { createHash } from 'node:crypto'
+import { atomicUpdateText } from './atomic-update.js'
 import { parseFrontmatter, serializeWithFrontmatter } from '../knowledge-store/markdown.js'
 import type { Conversation, ConversationMessage, ParseProgress } from './types.js'
 
@@ -111,23 +113,36 @@ export class ConversationCapture {
 
     return readdirSync(this.dir)
       .filter(f => f.endsWith('.md'))
-      .map(f => this.loadConversation(join(this.dir, f)))
+      .map(f => this.loadConversation(join(this.dir, f), true))
       .filter(c => c !== null)
       .filter(c => !c.distilled)
   }
 
-  markDistilled(id: string, topics: string[]): void {
+  markDistilled(id: string, topics: string[], expectedHash?: string): boolean {
     const file = readdirSync(this.dir).find(f => f.endsWith(`-${id}.md`))
-    if (!file) return
+    if (!file) return false
 
     const filePath = join(this.dir, file)
-    const raw = readFileSync(filePath, 'utf-8')
-    const { data, content } = parseFrontmatter(raw)
+    let acknowledged = false
+    atomicUpdateText(filePath, raw => {
+      acknowledged = false
+      if (raw === null) return null
+      const { data, content } = parseFrontmatter(raw)
+      const hash = createHash('sha256').update(content.trim()).digest('hex')
+      // Versioned captures require the exact snapshot acknowledged by the caller.
+      if ((data.content_hash || expectedHash) && expectedHash !== hash) return null
 
-    data.distilled = true
-    data.topics = topics
+      data.distilled = true
+      data.topics = topics
+      if (data.content_hash) {
+        data.distilled_content_hash = hash
+        data.distilled_message_count = content.split(/^## (User|Assistant)$/m).slice(1).length / 2
+      }
 
-    writeFileSync(filePath, serializeWithFrontmatter(data, content), 'utf-8')
+      acknowledged = true
+      return serializeWithFrontmatter(data, content)
+    })
+    return acknowledged
   }
 
   loadConversationByPath(filePath: string): Conversation | null {
@@ -138,7 +153,7 @@ export class ConversationCapture {
     return conv
   }
 
-  private loadConversation(filePath: string): (Conversation & { distilled: boolean }) | null {
+  private loadConversation(filePath: string, incremental = false): (Conversation & { distilled: boolean }) | null {
     try {
       const raw = readFileSync(filePath, 'utf-8')
       const { data, content } = parseFrontmatter(raw)
@@ -160,8 +175,11 @@ export class ConversationCapture {
         source: data.source as string,
         sessionId: data.session_id as string,
         timestamp: data.timestamp as string,
-        messages,
+        messages: incremental && data.source === 'codex' && data.content_hash && !data.distilled
+          ? messages.slice(Math.max(0, Number(data.distilled_message_count ?? 0)))
+          : messages,
         distilled: data.distilled as boolean,
+        ...(typeof data.content_hash === 'string' ? { contentHash: createHash('sha256').update(content.trim()).digest('hex') } : {}),
         ...(progress ? { parseProgress: progress } : {}),
       }
     } catch {

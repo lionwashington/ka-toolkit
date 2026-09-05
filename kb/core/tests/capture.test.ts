@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { ConversationCapture } from '../src/capture/capture.js'
 import type { Conversation } from '../src/capture/types.js'
-import { mkdtempSync, rmSync, readFileSync, readdirSync } from 'fs'
+import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from 'fs'
+import { createHash } from 'node:crypto'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -104,5 +105,26 @@ describe('ConversationCapture', () => {
     const content = readFileSync(join(tempDir, 'conversations', '2026-04-07-conv-1.md'), 'utf-8')
     expect(content).toContain('distilled: true')
     expect(content).toContain('health')
+  })
+
+  it('rejects stale or unspecified acknowledgements for a versioned capture', () => {
+    const body = '## User\n\nsynthetic revision two'
+    const hash = createHash('sha256').update(body).digest('hex')
+    const path = join(tempDir, 'conversations', '2026-01-01-revision.md')
+    writeFileSync(path, `---\nid: revision\nsource: codex\ncontent_hash: ${hash}\ndistilled: false\n---\n${body}\n`)
+    expect(capture.markDistilled('revision', ['synthetic'])).toBe(false)
+    expect(capture.markDistilled('revision', ['synthetic'], 'old-hash')).toBe(false)
+    expect(readFileSync(path, 'utf8')).toContain('distilled: false')
+    expect(capture.markDistilled('revision', ['synthetic'], hash)).toBe(true)
+    expect(readFileSync(path, 'utf8')).toContain(`distilled_content_hash: ${hash}`)
+  })
+
+  it('limits distillation to a continuation while retaining complete browse results', () => {
+    const body = '## User\n\nold\n\n## Assistant\n\nnew'
+    const hash = createHash('sha256').update(body).digest('hex')
+    const path = join(tempDir, 'conversations', '2026-01-01-incremental.md')
+    writeFileSync(path, `---\nid: incremental\nsource: codex\ncontent_hash: ${hash}\ndistilled: false\ndistilled_message_count: 1\n---\n${body}\n`)
+    expect(capture.getUnprocessed()[0].messages.map(message => message.content)).toEqual(['new'])
+    expect(capture.loadConversationByPath(path)?.messages.map(message => message.content)).toEqual(['old', 'new'])
   })
 })

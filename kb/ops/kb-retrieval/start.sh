@@ -11,7 +11,10 @@ export NVM_DIR="$HOME/.nvm"
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 HOST="127.0.0.1"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # $KA_HOME/kb/mcp/kb
+ROOT="${KA_COMPONENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+CODE_ROOT="${KA_COMPONENT_CODE_ROOT:-$ROOT}"
+export KA_COMPONENT_ROOT="$ROOT" KA_COMPONENT_CODE_ROOT="$CODE_ROOT"
+export KA_DAEMON_DATA_DIR="${KA_DAEMON_DATA_DIR:-$ROOT}"
 : "${KA_HOME:=$(cd "$ROOT/../../.." && pwd)}"
 CONFIG_YAML="${KA_CONFIG:-${KA_CONFIG_DIR:-$KA_HOME/config}/config.yaml}"
 # Port = config.yaml retrieval.daemon.port (single source of truth; the daemon
@@ -28,7 +31,7 @@ STATE_DIR="${KA_STATE_DIR:-$KA_HOME/state}"
 HEALTH_FILE="$STATE_DIR/kb-retrieval-health"
 mkdir -p "$STATE_DIR"
 # shellcheck source=daemon-process.sh
-source "$ROOT/daemon-process.sh"
+source "$CODE_ROOT/daemon-process.sh"
 
 status_resp=$(curl -sf --max-time 2 "http://$HOST:$PORT/api/status" 2>/dev/null || true)
 if [ -n "$status_resp" ]; then
@@ -87,9 +90,9 @@ fi
 # Launch detached. The model loads on warmup (~10-50s first time) before /api/status
 # reports ready:true — so wait longer than a channel daemon.
 if command -v setsid >/dev/null 2>&1; then
-  nohup setsid bash "$ROOT/daemon.sh" </dev/null >>"$LOG" 2>&1 &
+  nohup setsid bash "$CODE_ROOT/daemon.sh" </dev/null >>"$LOG" 2>&1 &
 else
-  nohup bash "$ROOT/daemon.sh" </dev/null >>"$LOG" 2>&1 &
+  nohup bash "$CODE_ROOT/daemon.sh" </dev/null >>"$LOG" 2>&1 &
 fi
 disown 2>/dev/null || true
 

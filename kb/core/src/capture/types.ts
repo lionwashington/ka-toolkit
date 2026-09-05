@@ -13,6 +13,7 @@ export interface Conversation {
   messages: ConversationMessage[]
   metadata?: Record<string, unknown>
   parseProgress?: ParseProgress
+  contentHash?: string
 }
 
 export interface ParseProgress {

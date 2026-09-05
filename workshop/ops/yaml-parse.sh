@@ -67,6 +67,7 @@ def truthy(v):
 
 session = None
 runtime_default = 'cc'
+models = {}
 entries = []        # single unified list (the `mates:` section)
 section = None      # 'mates' | None
 cur = None
@@ -83,6 +84,13 @@ for raw in lines:
     line = strip_comment(raw)
     if not line.strip():
         continue
+    if re.match(r'^models:\s*$', line):
+        section = 'models'; continue
+    if section == 'models':
+        m = re.match(r'^\s{2}(cc|codex):\s*(.+)$', line)
+        if m:
+            models[m.group(1)] = unquote(m.group(2)); continue
+        if not line.startswith(' '): section = None
     m = re.match(r'^session:\s*(.+)$', line)
     if m:
         session = unquote(m.group(1)); continue
@@ -101,10 +109,13 @@ for raw in lines:
         flush()
         if section == 'mates':
             cur = {'name': unquote(m.group(1)), 'cwd': '', 'args': [],
-                   'description': '', 'main': False, 'default': True, 'runtime': ''}
+                   'description': '', 'main': False, 'default': True, 'runtime': '', 'model': ''}
         in_args = False; continue
     if cur is None:
         continue
+    m = re.match(r'^\s{4}model:\s*(.+)$', line)
+    if m:
+        cur['model'] = unquote(m.group(1)); in_args = False; continue
     m = re.match(r'^\s{4}cwd:\s*(.+)$', line)
     if m:
         cur['cwd'] = expand(unquote(m.group(1))); in_args = False; continue
@@ -152,6 +163,11 @@ for m in entries:
     print(f"mate\t{m['name']}\t{m['cwd']}\t{m['description']}\t{d}")
     if m['main']:
         print(f"mate_main\t{m['name']}\t1")
+    model = m['model'] or models.get(m['runtime'] or runtime_default, '')
+    if model and not any(a in ('--model', '-m') or a.startswith(('--model=', '-m=')) for a in m['args']):
+        if not re.fullmatch(r'[a-zA-Z0-9_.:/-]+', model):
+            print('ERROR: invalid model identifier', file=sys.stderr); sys.exit(2)
+        m['args'] += ['--model', model]
     if m['args']:
         print(f"mate_args\t{m['name']}\t{'|'.join(m['args'])}")
     if m['runtime']:

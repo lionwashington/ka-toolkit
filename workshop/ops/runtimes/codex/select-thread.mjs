@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 
-const [endpoint, cwd, requestedThreadId = '', mode = 'select'] = process.argv.slice(2)
+import { existsSync, readFileSync } from 'node:fs'
+
+const [endpoint, cwd, explicitThreadId = '', mode = 'select'] = process.argv.slice(2)
+const ownerFile = process.env.KA_CODEX_THREAD_OWNER_FILE
+const requestedThreadId = explicitThreadId || (mode === 'select' && ownerFile && existsSync(ownerFile)
+  ? readFileSync(ownerFile, 'utf8').trim() : '')
 if (!endpoint || !cwd) throw new Error('usage: select-thread.mjs <endpoint> <cwd> [thread-id]')
 if (!['select', 'wait'].includes(mode)) throw new Error(`invalid selection mode: ${mode}`)
 
@@ -8,14 +13,16 @@ const websocket = new WebSocket(endpoint)
 let nextId = 1
 const pending = new Map()
 let notifiedThread
+const model = process.env.KA_CODEX_MODEL || undefined
+const resumeTimeoutMs = Number(process.env.KA_CODEX_THREAD_RESUME_TIMEOUT_MS ?? 600_000)
 
-function request(method, params) {
+function request(method, params, timeoutMs = 15_000) {
   const id = nextId++
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id)
       reject(new Error(`${method} timed out`))
-    }, 15_000)
+    }, timeoutMs)
     pending.set(id, { method, resolve, reject, timer })
     websocket.send(JSON.stringify({ method, id, params }))
   })
@@ -60,7 +67,9 @@ try {
   let thread
   let fresh = false
   if (requestedThreadId) {
-    const resumed = await request('thread/resume', { threadId: requestedThreadId })
+    const checked = await request('thread/read', { threadId: requestedThreadId, includeTurns: false }, resumeTimeoutMs)
+    if (checked.thread.cwd !== cwd) throw new Error('saved thread belongs to another workspace')
+    const resumed = await request('thread/resume', { threadId: requestedThreadId, ...(model ? { model } : {}) }, resumeTimeoutMs)
     thread = resumed.thread
     if (thread.cwd !== cwd) {
       throw new Error(`thread ${requestedThreadId} belongs to ${thread.cwd}, expected ${cwd}`)
@@ -77,7 +86,7 @@ try {
     if (!latest) {
       fresh = true
     } else {
-      const resumed = await request('thread/resume', { threadId: latest.id })
+      const resumed = await request('thread/resume', { threadId: latest.id, ...(model ? { model } : {}) }, resumeTimeoutMs)
       thread = resumed.thread
     }
   }

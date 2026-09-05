@@ -126,7 +126,7 @@ describe('Codex Stop capture', () => {
       model: 'test-model',
       turn_id: 'turn-1',
     }, rawDir)).toBe(true)
-    const files = (await import('node:fs')).readdirSync(rawDir)
+    const files = (await import('node:fs')).readdirSync(rawDir).filter(file => file.endsWith('.md'))
     expect(files).toHaveLength(1)
     const saved = parseFrontmatter(readFileSync(join(rawDir, files[0]), 'utf8'))
     expect(saved.data.source).toBe('codex')
@@ -144,5 +144,32 @@ describe('Codex Stop capture', () => {
       cwd: '/workspace',
       hook_event_name: 'Stop',
     }, join(root, 'raw'))).toBe(false)
+  })
+
+  it('leaves identical captures untouched and invalidates distilled state on a continuation', async () => {
+    const root = tempRoot()
+    const rollout = join(root, 'changing.jsonl')
+    const rawDir = join(root, 'raw')
+    const records = [
+      { timestamp: '2026-01-01T00:00:00Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 't' } },
+      { timestamp: '2026-01-01T00:00:01Z', type: 'event_msg', payload: { type: 'user_message', message: 'Synthetic question' } },
+    ]
+    writeFileSync(rollout, records.map(r => JSON.stringify(r)).join('\n') + '\n')
+    const input = { session_id: 'synthetic', transcript_path: rollout, cwd: '/workspace', hook_event_name: 'Stop', turn_id: 't' }
+    await handleCodexStopEvent(input, rawDir)
+    const { readdirSync } = await import('node:fs')
+    const path = join(rawDir, readdirSync(rawDir).find(file => file.endsWith('.md'))!)
+    writeFileSync(path, readFileSync(path, 'utf8').replace('distilled: false', 'distilled: true'))
+    const before = readFileSync(path, 'utf8')
+    const mtime = statSync(path).mtimeMs
+    await handleCodexStopEvent(input, rawDir)
+    expect(readFileSync(path, 'utf8')).toBe(before)
+    expect(statSync(path).mtimeMs).toBe(mtime)
+    appendFileSync(rollout, JSON.stringify({ type: 'event_msg', payload: { type: 'agent_message', message: 'Synthetic continuation' } }) + '\n')
+    await handleCodexStopEvent(input, rawDir)
+    const changed = parseFrontmatter(readFileSync(path, 'utf8'))
+    expect(changed.data.distilled).toBe(false)
+    expect(changed.data.content_hash).not.toBe(parseFrontmatter(before).data.content_hash)
+    expect(changed.content).toContain('Synthetic continuation')
   })
 })

@@ -15,11 +15,11 @@ function client(statePath: string, extraEnv: Record<string, string> = {}): AppSe
     command: process.execPath,
     args: [fake],
     env: { ...process.env, ...extraEnv, FAKE_CODEX_STATE: statePath },
-    requestTimeoutMs: 500,
+    requestTimeoutMs: 5_000,
   })
 }
 
-function target(dir: string, appServer: AppServerClient, events: CodexChannelEvent[], turnInactivityTimeoutMs?: number, completionPollIntervalMs?: number, completionNotificationGraceMs?: number): CodexChannelTarget {
+function target(dir: string, appServer: AppServerClient, events: CodexChannelEvent[], turnInactivityTimeoutMs?: number, completionPollIntervalMs?: number, completionNotificationGraceMs?: number, turnStartTimeoutMs?: number, threadResumeTimeoutMs?: number): CodexChannelTarget {
   return new CodexChannelTarget({
     name: 'codex-main',
     platform: 'telegram',
@@ -30,6 +30,8 @@ function target(dir: string, appServer: AppServerClient, events: CodexChannelEve
     turnInactivityTimeoutMs,
     completionPollIntervalMs,
     completionNotificationGraceMs,
+    turnStartTimeoutMs,
+    threadResumeTimeoutMs,
     onEvent: event => { events.push(event) },
   })
 }
@@ -46,6 +48,30 @@ test('maps downloaded platform images to Codex localImage input', () => {
     content: '[attachment: notes.pdf]',
     meta: { attachment_path: '/tmp/notes.pdf', attachment_kind: 'document' },
   }), [{ type: 'text', text: '[attachment: notes.pdf]\n\nLocal attachment path: /tmp/notes.pdf', text_elements: [] }])
+})
+
+test('applies configured model on creation, resume and subsequent channel turns', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-model-lifecycle-'))
+  const statePath = join(dir, 'fake-state.json')
+  const appServer = client(statePath)
+  const options = { name: 'model-test', platform: 'telegram' as const, externalChatId: 'test-chat', cwd: dir,
+    model: 'synthetic-model-a', client: appServer, bindings: new BindingStore(join(dir, 'bindings.json')), onEvent: () => {} }
+  const first = new CodexChannelTarget(options)
+  try {
+    await first.deliver({ content: 'first', meta: {} })
+    first.shutdown()
+    const resumed = new CodexChannelTarget({ ...options, model: 'synthetic-model-b' })
+    await resumed.connect()
+    await resumed.deliver({ content: 'second', meta: {} })
+    resumed.configureModel('synthetic-model-c')
+    await resumed.deliver({ content: 'third', meta: {} })
+    resumed.shutdown()
+    const requests = JSON.parse(readFileSync(statePath, 'utf8')).requests
+    assert.equal(requests.find((r: any) => r.method === 'thread/start').params.model, 'synthetic-model-a')
+    assert.equal(requests.find((r: any) => r.method === 'thread/resume').params.model, 'synthetic-model-b')
+    assert.deepEqual(requests.filter((r: any) => r.method === 'turn/start').map((r: any) => r.params.model),
+      ['synthetic-model-a', 'synthetic-model-b', 'synthetic-model-c'])
+  } finally { await appServer.stop() }
 })
 
 test('uses the completed turn item when no agent-message delta was emitted', async () => {
@@ -87,7 +113,7 @@ test('lets delayed completion notifications preserve streaming before the pollin
   const dir = mkdtempSync(join(tmpdir(), 'ka-codex-poll-stream-race-'))
   const events: CodexChannelEvent[] = []
   const appServer = client(join(dir, 'fake-state.json'), { FAKE_COMPLETION_NOTIFICATION_DELAY_MS: '50' })
-  await target(dir, appServer, events, undefined, 5, 100).deliver({ content: 'delayed-stream', meta: {} })
+  await target(dir, appServer, events, undefined, 5, 1_000).deliver({ content: 'delayed-stream', meta: {} })
   const deltaIndex = events.findIndex(event => event.type === 'text-delta')
   const finalIndex = events.findIndex(event => event.type === 'final')
   assert.ok(deltaIndex >= 0, 'the polling fallback must not detach before the delayed delta arrives')
@@ -136,6 +162,49 @@ test('maps an ordered image batch into one turn/start input', async () => {
   await appServer.stop()
 })
 
+test('allows a mutating turn/start request to wait longer than ordinary RPCs', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-turn-start-timeout-'))
+  const events: CodexChannelEvent[] = []
+  const appServer = client(join(dir, 'fake-state.json'))
+  const request = appServer.request.bind(appServer)
+  let observedTimeout: number | undefined
+  appServer.request = ((method: string, params?: unknown, timeoutMs?: number) => {
+    if (method === 'turn/start') observedTimeout = timeoutMs
+    return request(method, params, timeoutMs)
+  }) as AppServerClient['request']
+
+  await target(dir, appServer, events).deliver({ content: 'slow-accept', meta: {} })
+
+  assert.equal(observedTimeout, 10 * 60_000)
+  assert.equal(events.find(event => event.type === 'final')?.text, 'echo:slow-accept')
+  await appServer.stop()
+})
+
+test('detaches the completion watcher when turn/start times out', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ka-codex-late-turn-start-'))
+  const events: CodexChannelEvent[] = []
+  const appServer = client(join(dir, 'fake-state.json'))
+  const runtime = target(dir, appServer, events)
+
+  await runtime.deliver({ content: 'seed', meta: {} })
+  events.length = 0
+  const threadId = new BindingStore(join(dir, 'bindings.json')).list()[0].runtimeSessionId
+  const request = appServer.request.bind(appServer)
+  appServer.request = ((method: string, params?: unknown, timeoutMs?: number) => {
+    if (method !== 'turn/start') return request(method, params, timeoutMs)
+    return new Promise((_, reject) => setTimeout(() => reject(new Error('app-server request timed out: turn/start (5ms)')), 5))
+  }) as AppServerClient['request']
+
+  await assert.rejects(runtime.deliver({ content: 'late-start', meta: {} }), /turn\/start/)
+  appServer.emit('notification', { method: 'turn/started', params: { threadId, turn: { id: 'late-turn' } } })
+  appServer.emit('notification', { method: 'item/agentMessage/delta', params: { threadId, turnId: 'late-turn', itemId: 'answer', delta: 'must-not-repeat' } })
+  appServer.emit('notification', { method: 'turn/completed', params: { threadId, turn: { id: 'late-turn', status: 'completed' } } })
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.deepEqual(events.map(event => event.type), ['error'])
+  await appServer.stop()
+})
+
 test('resumes the persisted thread after the App Server process changes', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ka-codex-resume-'))
   const statePath = join(dir, 'fake-state.json')
@@ -144,8 +213,15 @@ test('resumes the persisted thread after the App Server process changes', async 
   await firstClient.stop()
 
   const secondClient = client(statePath)
+  const request = secondClient.request.bind(secondClient)
+  let observedResumeTimeout: number | undefined
+  secondClient.request = ((method: string, params?: unknown, timeoutMs?: number) => {
+    if (method === 'thread/resume') observedResumeTimeout = timeoutMs
+    return request(method, params, timeoutMs)
+  }) as AppServerClient['request']
   const events: CodexChannelEvent[] = []
   await target(dir, secondClient, events).deliver({ content: 'second', meta: {} })
+  assert.equal(observedResumeTimeout, 10 * 60_000)
   assert.deepEqual(events.filter(event => event.type === 'final').map(event => event.text), ['echo:second'])
   const bindings = new BindingStore(join(dir, 'bindings.json')).list()
   assert.equal(bindings.length, 1)
@@ -207,16 +283,16 @@ test('refreshes the inactivity timeout while a long-running turn is making progr
   const dir = mkdtempSync(join(tmpdir(), 'ka-codex-active-timeout-'))
   const events: CodexChannelEvent[] = []
   const appServer = client(join(dir, 'fake-state.json'))
-  const runtime = target(dir, appServer, events, 50)
+  const runtime = target(dir, appServer, events, 500)
   const delivered = runtime.deliver({ content: 'wait-for-interrupt', meta: {} })
   while (!events.some(event => event.type === 'turn-started')) await new Promise(resolve => setTimeout(resolve, 5))
   const started = events.find(event => event.type === 'turn-started') as Extract<CodexChannelEvent, { type: 'turn-started' }>
-  await new Promise(resolve => setTimeout(resolve, 35))
+  await new Promise(resolve => setTimeout(resolve, 100))
   appServer.emit('notification', {
     method: 'item/reasoning/summaryTextDelta',
     params: { threadId: started.threadId, turnId: started.turnId, delta: 'still working' },
   })
-  await new Promise(resolve => setTimeout(resolve, 35))
+  await new Promise(resolve => setTimeout(resolve, 100))
   assert.equal(await runtime.interrupt(), true)
   await delivered
   assert.equal(events.find(event => event.type === 'turn-completed')?.status, 'interrupted')

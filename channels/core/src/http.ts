@@ -138,6 +138,7 @@ export function createHttpApp(platform: Platform, runtimeManager?: CodexRuntimeM
     for (const [name, list] of byName) if (list.length) owners[name] = list[list.length - 1].id.slice(0, 8)
     const runtimeEntries = runtimeTargetEntries()
     const runtimeByName = new Map(runtimeEntries)
+    const modelByName = new Map((runtimeManager?.registrations() ?? []).map(item => [item.name, item]))
     res.json({
       ok: true,
       pid: process.pid,
@@ -156,6 +157,8 @@ export function createHttpApp(platform: Platform, runtimeManager?: CodexRuntimeM
         name,
         runtime: target.runtime,
         alive: target.isAlive?.() ?? true,
+        ...(modelByName.get(name)?.configured_model ? { configured_model: modelByName.get(name)!.configured_model } : {}),
+        ...(modelByName.get(name)?.observed_model ? { observed_model: modelByName.get(name)!.observed_model } : {}),
       })),
       dispatches_total: counters.dispatches,
       replies_total: counters.replies,
@@ -199,13 +202,14 @@ export function createHttpApp(platform: Platform, runtimeManager?: CodexRuntimeM
     const endpoint = String(req.body?.endpoint ?? '')
     const threadId = String(req.body?.thread_id ?? '')
     const threadPath = String(req.body?.thread_path ?? '')
+    const model = String(req.body?.model ?? '') || undefined
     const allowUnpersistedThread = req.body?.allow_unpersisted_thread === true
     const validEndpoint = /^ws:\/\/127\.0\.0\.1:\d+$/.test(endpoint)
     if (!rawName || !cwd || !threadId || (!socketPath.startsWith('/') && !validEndpoint)) {
       res.status(400).json({ ok: false, error: 'name, cwd, thread_id, and a loopback endpoint or absolute socket_path are required' }); return
     }
     try {
-      await runtimeManager.register({ name, cwd, endpoint: validEndpoint ? endpoint : undefined, socketPath: socketPath || undefined, threadId, threadPath: threadPath || undefined, allowUnpersistedThread })
+      await runtimeManager.register({ name, cwd, model, endpoint: validEndpoint ? endpoint : undefined, socketPath: socketPath || undefined, threadId, threadPath: threadPath || undefined, allowUnpersistedThread })
       res.json({ ok: true, name })
     } catch (error: any) {
       log(`Codex runtime registration failed (${name}): ${error?.message ?? error}`)

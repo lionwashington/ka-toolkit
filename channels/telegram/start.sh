@@ -12,7 +12,10 @@ export NVM_DIR="$HOME/.nvm"
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"  # launchd/cron PATH lacks Homebrew/nvm → else `node: not found` on keepalive cold-start
 
 HOST="127.0.0.1"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # self-contained: dir of this script (canonical: ~/.knowledge-assistant/channels/telegram-daemon)
+ROOT="${KA_COMPONENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+CODE_ROOT="${KA_COMPONENT_CODE_ROOT:-$ROOT}"
+export KA_COMPONENT_ROOT="$ROOT" KA_COMPONENT_CODE_ROOT="$CODE_ROOT"
+export KA_DAEMON_DATA_DIR="${KA_DAEMON_DATA_DIR:-$ROOT}"
 # Port = config.yaml channels.telegram.port (single source of truth, same value
 # the daemon binds). Resolve KA_HOME from this dir (KA_HOME/channels/<kind>-daemon),
 # then read the shared config; fall back to 9877 only if the entry is absent.
@@ -46,13 +49,13 @@ fi
 # when the short-lived cron job exits, even with nohup/disown. Submit a separate
 # transient launchd job so the daemon has an independent lifecycle.
 if command -v setsid >/dev/null 2>&1; then
-  nohup setsid bash "$ROOT/daemon.sh" </dev/null >>"$LOG" 2>&1 &
+  nohup setsid bash "$CODE_ROOT/daemon.sh" </dev/null >>"$LOG" 2>&1 &
 elif command -v launchctl >/dev/null 2>&1; then
   LABEL="com.knowledge-assistant.ka.channel.telegram"
   launchctl remove "$LABEL" >/dev/null 2>&1 || true
-  launchctl submit -l "$LABEL" -o "$LOG" -e "$LOG" -- /bin/bash "$ROOT/daemon.sh"
+  launchctl submit -l "$LABEL" -o "$LOG" -e "$LOG" -- /usr/bin/env KA_COMPONENT_ROOT="$ROOT" KA_COMPONENT_CODE_ROOT="$CODE_ROOT" KA_HOME="$KA_HOME" /bin/bash "$CODE_ROOT/daemon.sh"
 else
-  nohup bash "$ROOT/daemon.sh" </dev/null >>"$LOG" 2>&1 &
+  nohup bash "$CODE_ROOT/daemon.sh" </dev/null >>"$LOG" 2>&1 &
 fi
 disown 2>/dev/null || true
 

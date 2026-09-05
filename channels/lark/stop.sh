@@ -2,7 +2,10 @@
 # lark-channel graceful stop. POSTs /api/shutdown; daemon exits cleanly.
 set -u
 HOST="127.0.0.1"
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${KA_COMPONENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+CODE_ROOT="${KA_COMPONENT_CODE_ROOT:-$ROOT}"
+export KA_COMPONENT_ROOT="$ROOT" KA_COMPONENT_CODE_ROOT="$CODE_ROOT"
+export KA_DAEMON_DATA_DIR="${KA_DAEMON_DATA_DIR:-$ROOT}"
 # Port = config.yaml channels.lark.port (fall back to 9876 if absent).
 : "${KA_HOME:=$(cd "$ROOT/../.." && pwd)}"
 CONFIG_YAML="${KA_CONFIG:-${KA_CONFIG_DIR:-$KA_HOME/config}/config.yaml}"

@@ -27,5 +27,6 @@ export default defineConfig([
   { entry: { 'distill-result-parser-cli': 'src/distill/result-parser-cli.ts' }, ...cli },
   { entry: { 'topics-splitter-cli': 'src/topics/splitter-cli.ts' }, ...cli },
   { entry: { 'config-cli': 'src/config-cli.ts' }, ...cli },
+  { entry: { 'capture-snapshot-cli': 'src/capture/capture-snapshot-cli.ts' }, ...cli },
   { entry: { 'lint-cli': 'src/lint/lint-cli.ts' }, ...cli },
 ])

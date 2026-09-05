@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { isCaptureChannelAllowed, loadConfig, parseFrontmatter, serializeWithFrontmatter } from '@ka/core'
+import { atomicUpdateText, isCaptureChannelAllowed, loadConfig, parseFrontmatter, serializeWithFrontmatter } from '@ka/core'
 import type { Conversation } from '@ka/core'
 import { parseCodexRollout } from '../rollout.js'
 
@@ -17,30 +17,46 @@ export interface CodexStopHookInput {
 function saveCodexTurn(conversation: Conversation, rawDir: string): void {
   mkdirSync(rawDir, { recursive: true })
   const filePath = join(rawDir, `${conversation.timestamp.slice(0, 10)}-${conversation.id}.md`)
-  let distilled = false
-  let topics: unknown[] = []
-  if (existsSync(filePath)) {
-    try {
-      const existing = parseFrontmatter(readFileSync(filePath, 'utf8')).data
-      distilled = existing.distilled === true
-      topics = Array.isArray(existing.topics) ? existing.topics : []
-    } catch { /* replace an unreadable per-turn capture */ }
-  }
-  const frontmatter: Record<string, unknown> = {
-    id: conversation.id,
-    source: conversation.source,
-    session_id: conversation.sessionId,
-    timestamp: conversation.timestamp,
-    distilled,
-    topics,
-    metadata: conversation.metadata ?? {},
-  }
-  const body = conversation.messages
-    .map(message => `## ${message.role === 'user' ? 'User' : 'Assistant'}\n\n${message.content}`)
-    .join('\n\n')
-  const temporary = `${filePath}.tmp-${process.pid}`
-  writeFileSync(temporary, serializeWithFrontmatter(frontmatter, body), { encoding: 'utf8', mode: 0o600 })
-  renameSync(temporary, filePath)
+  atomicUpdateText(filePath, previous => {
+    let distilled = false
+    let topics: unknown[] = []
+    let distilledMessageCount = 0
+    const body = conversation.messages
+      .map(message => `## ${message.role === 'user' ? 'User' : 'Assistant'}\n\n${message.content}`)
+      .join('\n\n')
+    const contentHash = createHash('sha256').update(body.trim()).digest('hex')
+    if (previous !== null) {
+      try {
+        const parsed = parseFrontmatter(previous)
+        const existing = parsed.data
+        const oldHash = createHash('sha256').update(parsed.content.trim()).digest('hex')
+        if (oldHash === contentHash) return null
+        // A slower, older hook must not overwrite a newer rollout snapshot.
+        if (Number((existing.metadata as Record<string, unknown>)?.rollout_end_offset ?? 0) > Number(conversation.metadata?.rollout_end_offset ?? 0)) return null
+        if (body.trim().startsWith(parsed.content.trim() + '\n')) {
+          distilledMessageCount = existing.distilled === true
+            ? parsed.content.split(/^## (User|Assistant)$/m).slice(1).length / 2
+            : Number(existing.distilled_message_count ?? 0)
+        }
+        // A later capture can add a continuation to an already distilled turn.
+        // The changed snapshot must become eligible for processing again.
+        distilled = false
+        topics = Array.isArray(existing.topics) ? existing.topics : []
+      } catch { throw new Error('refusing to replace unreadable Codex capture') }
+    }
+    const frontmatter: Record<string, unknown> = {
+      id: conversation.id,
+      source: conversation.source,
+      session_id: conversation.sessionId,
+      timestamp: conversation.timestamp,
+      distilled,
+      topics,
+      content_hash: contentHash,
+      distilled_message_count: distilledMessageCount,
+      metadata: conversation.metadata ?? {},
+    }
+    return serializeWithFrontmatter(frontmatter, body)
+  })
 }
 
 export async function handleCodexStopEvent(input: CodexStopHookInput, rawDir: string): Promise<boolean> {

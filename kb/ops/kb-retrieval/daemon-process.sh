@@ -13,6 +13,7 @@ kb_validate_daemon_pid() {
   args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
   case "$args" in
     *"$ROOT/dist/daemon.mjs"*) printf '%s\n' "$pid"; return 0 ;;
+    *"$ROOT/.releases/r-"*"/dist/daemon.mjs"*) printf '%s\n' "$pid"; return 0 ;;
     *) return 1 ;;
   esac
 }

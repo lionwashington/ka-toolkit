@@ -31,7 +31,7 @@ test('Telegram routes an owner message through a persistent Codex target', async
   try {
     const registered = await fetch(`${daemon.baseUrl}/api/runtimes/codex`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'codex-main', cwd: workspace, socket_path: socketPath, thread_id: 'thread-1' }),
+      body: JSON.stringify({ name: 'codex-main', cwd: workspace, socket_path: socketPath, thread_id: 'thread-1', model: 'synthetic-codex' }),
     })
     assert.equal(registered.ok, true, await registered.text())
     const online = await waitForAsync(async () => {
@@ -39,6 +39,8 @@ test('Telegram routes an owner message through a persistent Codex target', async
       return Boolean(status.last_poll_at) && status.runtime_targets?.some((target: any) => target.name === 'codex-main' && target.alive)
     }, 5_000)
     assert.equal(online, true)
+    const modelStatus = await fetch(`${daemon.baseUrl}/api/status`).then(response => response.json())
+    assert.equal(modelStatus.runtime_targets.find((target: any) => target.name === 'codex-main').configured_model, 'synthetic-codex')
     await assert.rejects(connectClient(daemon.baseUrl, 'codex-main'), /409|conflict|already owned/i)
 
     const scheduled = await fetch(`${daemon.baseUrl}/api/runtimes/codex/codex-main/deliver`, {

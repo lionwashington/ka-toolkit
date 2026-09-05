@@ -14,13 +14,16 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"  # launchd/cron PATH lacks Homebrew/nvm → else `node: not found` on keepalive cold-start
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # canonical: ~/.knowledge-assistant/channels/lark-daemon
+ROOT="${KA_COMPONENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+CODE_ROOT="${KA_COMPONENT_CODE_ROOT:-$ROOT}"
+export KA_COMPONENT_ROOT="$ROOT" KA_COMPONENT_CODE_ROOT="$CODE_ROOT"
+export KA_DAEMON_DATA_DIR="${KA_DAEMON_DATA_DIR:-$ROOT}"
 LOCK="$ROOT/.daemon.lock"
 # Single root: this dir is $KA_HOME/channels/lark-daemon, so ../.. = KA_HOME.
 # Export it (unless already set) so the daemon resolves $KA_HOME/config.
 : "${KA_HOME:=$(cd "$ROOT/../.." && pwd)}"
 export KA_HOME
-BUNDLE="${KA_DAEMON_BUNDLE:-$ROOT/daemon.mjs}"
+BUNDLE="${KA_DAEMON_BUNDLE:-$CODE_ROOT/daemon.mjs}"
 
 FLOCK_BIN="$(command -v flock || true)"
 if [ -n "$FLOCK_BIN" ]; then

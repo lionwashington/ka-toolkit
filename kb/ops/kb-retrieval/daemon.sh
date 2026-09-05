@@ -21,7 +21,10 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # $KA_HOME/kb/mcp/kb
+ROOT="${KA_COMPONENT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+CODE_ROOT="${KA_COMPONENT_CODE_ROOT:-$ROOT}"
+export KA_COMPONENT_ROOT="$ROOT" KA_COMPONENT_CODE_ROOT="$CODE_ROOT"
+export KA_DAEMON_DATA_DIR="${KA_DAEMON_DATA_DIR:-$ROOT}"
 LOCK="$ROOT/.daemon.lock"
 # kb/mcp/kb → ../../.. = KA_HOME. Export so the daemon resolves $KA_HOME/config.
 : "${KA_HOME:=$(cd "$ROOT/../../.." && pwd)}"
@@ -36,7 +39,7 @@ export KA_EMBED_CACHE_DIR="${KA_EMBED_CACHE_DIR:-$ROOT/local_cache}"
 # policy explicit and lets operators opt upward on larger machines.
 export KA_EMBED_BATCH_SIZE="${KA_EMBED_BATCH_SIZE:-4}"
 
-ENTRY="${KA_KB_DAEMON_ENTRY:-$ROOT/dist/daemon.mjs}"
+ENTRY="${KA_KB_DAEMON_ENTRY:-$CODE_ROOT/dist/daemon.mjs}"
 # gen3 config lives at $KA_HOME/config/config.yaml (KA_CONFIG_DIR), NOT the
 # @ka/core loadConfig default (~/.knowledge-assistant/config.yaml). Pass it
 # explicitly so the daemon reads the same config as the rest of gen3.

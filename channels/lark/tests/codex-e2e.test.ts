@@ -16,9 +16,11 @@ async function registerFake(daemon: { baseUrl: string }, workspace: string, name
   const server = await startFakeSocketServer({ socketPath, fakePath: fake, statePath })
   const response = await fetch(`${daemon.baseUrl}/api/runtimes/codex`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name, cwd: workspace, socket_path: socketPath, thread_id: 'thread-1' }),
+    body: JSON.stringify({ name, cwd: workspace, socket_path: socketPath, thread_id: 'thread-1', model: 'synthetic-codex' }),
   })
   assert.equal(response.ok, true, await response.text())
+  const status = await fetch(`${daemon.baseUrl}/api/status`).then(response => response.json())
+  assert.equal(status.runtime_targets.find((target: any) => target.name === name).configured_model, 'synthetic-codex')
   return server
 }
 
