@@ -2,7 +2,7 @@
   "name": "knowledge-assistant",
   "private": true,
   "scripts": {
-    "test:reliability": "node --test tests/workshop-model-config.test.mjs tests/workshop-thread-selection.test.mjs tests/install-failure.test.mjs tests/component-release.test.mjs tests/capture-snapshot-e2e.test.mjs",
+    "test:reliability": "node --test tests/workshop-stop.test.mjs tests/workshop-model-config.test.mjs tests/workshop-thread-selection.test.mjs tests/install-failure.test.mjs tests/component-release.test.mjs tests/capture-snapshot-e2e.test.mjs",
     "build": "pnpm -r build",
     "test": "pnpm -r test && node --experimental-strip-types --test tests/channel-core/*.test.ts && node --test tests/codex-app-server/client.test.mjs tests/codex-app-server/hooks-isolation.test.mjs tests/distill-runtime/cc.test.mjs && pnpm test:reliability",
     "lint": "pnpm -r lint"

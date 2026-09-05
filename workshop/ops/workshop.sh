@@ -469,6 +469,37 @@ cmd_start() {
 # cmd_stop — stop the whole workshop, or a single <name> (TARGET).
 # ============================================================================
 cmd_stop() {
+    # Codex owns a process group beyond its visible tmux pane. Stop and verify
+    # that runtime before reporting success, including pane-less residuals.
+    if [ -n "$TARGET" ]; then
+        build_entries
+        if [ "${#ENTRY_NAMES[@]}" -gt 0 ] && [ "${ENTRY_RUNTIMES[0]}" = codex ]; then
+            local channel="${ENTRY_CHANNELS[0]}" pane_id=""
+            pane_id="$(find_pane_by_channel "$channel")"
+            if [ "$DRY_RUN" = 1 ]; then
+                echo "[dry-run] stop and verify Codex runtime $channel, then remove its pane"
+                return 0
+            fi
+            python3 "$KA_RUNTIMES_DIR/codex/stop-runtime.py" "$KA_HOME" "$channel" "$TARGET" "$PORT" || return 1
+            if [ -n "$pane_id" ]; then
+                "$TMUX_BIN" kill-pane -t "$pane_id" 2>/dev/null || true
+                if "$TMUX_BIN" list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qx "$pane_id"; then
+                    log_err "pane remains after stopping '$TARGET'"
+                    return 1
+                fi
+            fi
+            log_ok "stopped '$TARGET' (runtime and pane verified)"
+            return 0
+        fi
+    elif [ "$DRY_RUN" != 1 ]; then
+        local i channel
+        for ((i=0; i<${#MATE_NAMES[@]}; i++)); do
+            [ "${MATE_RUNTIMES[$i]}" = codex ] || continue
+            channel="$(sanitize_channel "${MATE_NAMES[$i]}")"
+            [ "${MATE_MAINS[$i]}" != 1 ] || channel=main
+            python3 "$KA_RUNTIMES_DIR/codex/stop-runtime.py" "$KA_HOME" "$channel" "${MATE_NAMES[$i]}" "$PORT" || return 1
+        done
+    fi
     if ! "$TMUX_BIN" has-session -t "$SESSION" 2>/dev/null; then
         if [ -n "$TARGET" ]; then log_err "workshop not running (no session '$SESSION')"; exit 1
         else log_dim "no session '$SESSION' — noop"; exit 0; fi
@@ -604,7 +635,7 @@ cmd_restart() {
             exit 0
         fi
         log_info "restart: stopping the whole workshop…"
-        cmd_stop || log_warn "stop returned non-zero (continuing)"
+        cmd_stop || return 1
         sleep 2
         log_info "restart: starting…"
         local fwd=(start)
@@ -620,12 +651,12 @@ cmd_restart() {
     if "$TMUX_BIN" has-session -t "$SESSION" 2>/dev/null; then
         pane_id="$(find_pane_by_channel "$channel")"
     fi
-    if [ -n "$pane_id" ]; then
+    if [ -n "$pane_id" ] || [ "${ENTRY_RUNTIMES[0]}" = codex ]; then
         if [ "$DRY_RUN" = "1" ]; then
             echo "[dry-run] stop pane for '$TARGET' (channel $channel), then start $TARGET"
         else
             log_info "restart '$TARGET': stop the existing pane first, then start it"
-            cmd_stop            # session+pane confirmed present → take the single-name path to stop it, return 0
+            cmd_stop || return 1
             sleep 1
         fi
     else
