@@ -6,6 +6,9 @@ import { channelNumberOf } from '../sessions.ts'
 import type { Platform } from '../platform.ts'
 import { log } from '../log.ts'
 import { counters } from '../counters.ts'
+import { mkdirSync, writeFileSync, renameSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { createHash } from 'node:crypto'
 
 export interface CodexRuntimeRegistration {
   name: string
@@ -34,6 +37,7 @@ interface ActiveStream {
   lastUpdate: number
   timer?: NodeJS.Timeout
   update?: Promise<void>
+  startFailed?: boolean
 }
 
 export class CodexRuntimeManager {
@@ -125,11 +129,45 @@ export class CodexRuntimeManager {
   }
 
   private async onEvent(name: string, event: CodexChannelEvent, replyTarget: string): Promise<void> {
+    // Delivery failures are not model failures. Never feed a transport exception
+    // back into the model's error event (which would send another failing reply).
+    try {
+      await this.deliverEvent(name, event, replyTarget)
+    } catch {
+      counters.repliesFailed++
+      log(`channel delivery failed for ${name} (event=${event.type}); model status unchanged`)
+      if (event.type === 'final') {
+        try {
+          const dir = join(dirname(this.config.bindingsPath), 'undelivered')
+          mkdirSync(dir, { recursive: true, mode: 0o700 })
+          const id = createHash('sha256').update(JSON.stringify([this.config.platform, name, event.turnId])).digest('hex')
+          const file = join(dir, `${id}.json`)
+          const temp = `${file}.tmp`
+          writeFileSync(temp, JSON.stringify({ schema_version: 1, platform: this.config.platform,
+            channel: name, turn_id: event.turnId, text: event.text,
+            delivery: 'unknown-or-partial', automatic_replay: false }), { mode: 0o600 })
+          renameSync(temp, file)
+          log(`undelivered final retained (${id}); manual review required before replay`)
+        } catch {
+          log(`CRITICAL: could not retain undelivered final for ${name}; consult rollout`)
+        }
+      }
+    }
+  }
+
+  private async deliverEvent(name: string, event: CodexChannelEvent, replyTarget: string): Promise<void> {
     if (event.type === 'turn-started' && this.platform.startStream) {
       const target = this.platform.resolveReplyTarget(replyTarget)
       if (target) {
         const prefix = `**[#${channelNumberOf(name)}-${name}]**\n\n`
-        this.streams.set(event.turnId, { prefix, text: '', handle: this.platform.startStream(target, `${prefix}…`), lastUpdate: 0 })
+        const stream: ActiveStream = { prefix, text: '', handle: Promise.resolve(null), lastUpdate: 0 }
+        // Attach the rejection handler immediately, even before the first delta.
+        stream.handle = Promise.resolve().then(() => this.platform.startStream!(target, `${prefix}…`)).catch(() => {
+          stream.startFailed = true
+          log(`channel stream placeholder failed for ${name}; preview suspended`)
+          return null
+        })
+        this.streams.set(event.turnId, stream)
       }
     } else if (event.type === 'text-delta') {
       const stream = this.streams.get(event.turnId)
@@ -190,24 +228,31 @@ export class CodexRuntimeManager {
     try {
       if (stream.timer) clearTimeout(stream.timer)
       if (stream.update) await stream.update
-      return await this.platform.finishStream!(await stream.handle, `${stream.prefix}${text}`)
+      const handle = await stream.handle
+      if (stream.startFailed) throw new Error('channel stream creation failed')
+      return await this.platform.finishStream!(handle, `${stream.prefix}${text}`)
     } finally {
       this.streams.delete(turnId)
     }
   }
 
   private scheduleStreamUpdate(turnId: string, stream: ActiveStream): void {
-    if (!this.platform.updateStream || stream.timer || stream.update) return
+    if (!this.platform.updateStream || stream.startFailed || stream.timer || stream.update) return
     const delay = Math.max(0, 750 - (Date.now() - stream.lastUpdate))
     stream.timer = setTimeout(() => {
       stream.timer = undefined
       const current = this.streams.get(turnId)
       if (!current || !this.platform.updateStream) return
       current.update = (async () => {
-        const error = await this.platform.updateStream!(await current.handle, `${current.prefix}${current.text}`)
+        const handle = await current.handle
+        if (current.startFailed) return
+        const error = await this.platform.updateStream!(handle, `${current.prefix}${current.text}`)
         current.lastUpdate = Date.now()
-        if (error) log(`codex stream update failed: ${error}`)
-      })().finally(() => { current.update = undefined })
+        if (error) log('channel stream preview update failed; final delivery will still be attempted')
+      })().catch(() => {
+        current.lastUpdate = Date.now()
+        log('channel stream preview update threw; final delivery will still be attempted')
+      }).finally(() => { current.update = undefined })
     }, delay)
     stream.timer.unref()
   }
