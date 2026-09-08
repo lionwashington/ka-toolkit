@@ -7,18 +7,16 @@ The private root contains:
 ```text
 raw/ingredients.jsonl
 raw/label-evidence/
-recipes/recipes.jsonl
-logs/meals/YYYY-MM.jsonl
-profile/nutrition-profile.json
-derived/daily-totals.jsonl
-derived/weekly-summary.json
 derived/ingredient-index.json
 state/state.json
 state/pending-review.json
 README.md
 ```
 
-Ingredient revisions, recipe versions, and meal records are append-only audit records. Indexes and daily/weekly totals are derived and rebuildable. Every rewrite uses a temporary sibling followed by atomic rename.
+Ingredient revisions are append-only audit records. The lookup index is derived
+and rebuildable. Writes use fsynced temporary siblings and atomic rename.
+Legacy recipe/meal/profile paths may remain as migration backups; they are not
+live writable nutrition state. Kitchen-planner owns them after approved migration.
 
 ## Ingredient
 
@@ -42,11 +40,19 @@ A lower-priority revision cannot replace a current higher-priority revision with
 
 ## Recipe and meal snapshots
 
+These records now belong exclusively to kitchen-planner; the following explains
+the historical snapshot format preserved during migration.
+
 A recipe key is `id@version`. Each version stores resolved ingredient revisions, quantities, nutrition totals, and optional cooked total weight, servings, or serving weight. Existing versions cannot be altered; an update creates a new version.
 
 A logged meal stores resolved ingredient or recipe snapshots. Its deterministic ID is derived from date/time, name, and requested items unless an explicit ID is supplied. Repeating the same request is a no-op. Reusing an ID with different content is an error.
 
 ## Incremental derivation
+
+The following daily/weekly operations run in kitchen-planner, not nutrition.
+Nutrition rebuild only updates ingredient indexes and its own version watermark.
+Pure nutrition calculation reads one catalogue snapshot per request without
+creating directories, pending entries or caches. Missing revisions fail visibly.
 
 Logging one meal rewrites only its monthly meal file, that date's daily row, and that ISO week's cached summary. Ingredient changes rebuild only the ingredient lookup index because existing recipe and meal snapshots remain immutable. `rebuild` recalculates all derived rows and updates both version watermarks.
 
@@ -59,11 +65,13 @@ Logging one meal rewrites only its monthly meal file, that date's daily row, and
 ```json
 {
   "ingredients": [],
-  "recipes": [],
   "pending": [
     {"type": "migration_review", "subject": "item-name", "reason": "weight state is unclear"}
   ]
 }
 ```
 
-Only unambiguous, traceable anchors belong in `ingredients` or `recipes`. Put incomplete or conflicting observations in `pending`; do not infer missing state or edible weight.
+Only unambiguous, traceable ingredient anchors belong in `ingredients`. Put
+incomplete or conflicting ingredient observations in `pending`; do not infer
+missing state or edible weight. Non-empty recipe imports are refused before
+mutation and must be handled by kitchen-planner.

@@ -8,10 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 import {
   ALGORITHM_VERSION,
-  addRecipe,
-  calculateMeal,
+  calculateNutrition as calculateMeal,
   importBundle,
-  logMeal,
   rebuild,
   resolvePaths,
   runCli,
@@ -19,6 +17,10 @@ import {
   upsertIngredient,
   validate,
 } from '../kb/skills/nutrition-ledger/scripts/nutrition-ledger.mjs';
+import * as meals from '../kb/skills/kitchen-planner/scripts/legacy-meals.mjs';
+import { kitchenPaths } from '../kb/skills/kitchen-planner/scripts/paths.mjs';
+const addRecipe = (paths, ...args) => meals.addRecipe(kitchenPaths(paths), ...args);
+const logMeal = (paths, ...args) => meals.logMeal(kitchenPaths(paths), ...args);
 
 const script = fileURLToPath(new URL('../kb/skills/nutrition-ledger/scripts/nutrition-ledger.mjs', import.meta.url));
 
@@ -126,9 +128,9 @@ test('8 logging a meal incrementally updates only one daily row', () => {
   const { paths } = ledger(); seed(paths);
   logMeal(paths, { date: '2031-04-05', name: 'Synthetic meal', items: [{ ingredient_id: 'synthetic-grain', grams: 100 }] });
   logMeal(paths, { date: '2031-04-06', name: 'Second meal', items: [{ ingredient_id: 'synthetic-drink', ml: 100 }] });
-  const before = readFileSync(paths.dailyTotals, 'utf8').trim().split('\n').map(JSON.parse);
+  const before = readFileSync(kitchenPaths(paths).dailyTotals, 'utf8').trim().split('\n').map(JSON.parse);
   logMeal(paths, { date: '2031-04-05', name: 'Extra meal', items: [{ ingredient_id: 'synthetic-unit', units: 1 }] });
-  const after = readFileSync(paths.dailyTotals, 'utf8').trim().split('\n').map(JSON.parse);
+  const after = readFileSync(kitchenPaths(paths).dailyTotals, 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(after.length, 2);
   assert.equal(after.find(row => row.date === '2031-04-06').nutrition.kcal, before.find(row => row.date === '2031-04-06').nutrition.kcal);
   assert.equal(after.find(row => row.date === '2031-04-05').meal_count, 2);
@@ -158,7 +160,7 @@ test('11 repeated ingredient, recipe and meal mutations are idempotent', () => {
   assert.equal(addRecipe(paths, recipe).changed, true); assert.equal(addRecipe(paths, recipe).changed, false);
   const meal = { date: '2031-05-01', name: 'Stable meal', items: [{ recipe_id: 'idempotent-bowl' }] };
   assert.equal(logMeal(paths, meal).changed, true); assert.equal(logMeal(paths, meal).changed, false);
-  assert.equal(validate(paths).counts.meals, 1);
+  assert.equal(meals.allMealRows(kitchenPaths(paths)).length, 1);
 });
 
 test('12 offline local cache works with credential and network variables absent', () => {
