@@ -11,6 +11,7 @@ import { Decoder, Stream } from '@garmin/fitsdk';
 import {
   officialOauth, rebuildWellness, syncWellness, validateWellness, wellnessPaths, wellnessTrend,
 } from './coros-wellness.mjs';
+import { syncDetails, readDetails } from './coros-details.mjs';
 
 export const SCHEMA_VERSION = 1;
 export const ALGORITHM_VERSION = 2;
@@ -39,7 +40,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (!arg.startsWith('--')) out._.push(arg);
-    else if (['--repair', '--json', '--refresh-tools', '--fit-only', '--wellness-only'].includes(arg)) out[arg.slice(2)] = true;
+    else if (['--repair', '--json', '--refresh-tools', '--fit-only', '--wellness-only', '--refresh'].includes(arg)) out[arg.slice(2)] = true;
     else {
       const [key, inline] = arg.slice(2).split('=', 2);
       out[key] = inline ?? argv[++i];
@@ -730,7 +731,14 @@ async function main(argv = process.argv.slice(2)) {
   if (command === 'oauth-finish') { output(officialOauth('login-finish', { cacheRoot: args['oauth-cache-root'] })); return; }
   if (command === 'oauth-status') { output(officialOauth('login-status', { cacheRoot: args['oauth-cache-root'] })); return; }
   const paths = resolvePaths({ workspace: args.workspace, dataRoot: args['data-root'] });
-  if (command === 'sync') {
+  if (command === 'details-sync') output(await syncDetails(paths, {
+    startDate:args.from,endDate:args.to,timeZone:args.timezone,maxCalls:args['max-calls'],refresh:args.refresh,
+    onProgress: state => { if((state.completed+state.failed)%10===0) process.stderr.write(JSON.stringify({progress:state})+'\n'); },
+  }));
+  else if (command === 'details-schema') output(readDetails(paths,{schema:true}));
+  else if (command === 'details-list') output(readDetails(paths,{tool:args.tool,date:args.date,offset:args.offset,limit:args.limit}));
+  else if (command === 'details-read') output(readDetails(paths,{key:args.key}));
+  else if (command === 'sync') {
     const official = args['fit-only'] ? null : await syncWellness(paths, {
       startDate: args.from, endDate: args.to, refreshTools: args['refresh-tools'],
       cacheRoot: args['oauth-cache-root'], timeZone: args.timezone,

@@ -31,6 +31,13 @@ Never print credential values. Official health/recovery access uses COROS OAuth 
 
 ## Choose the command
 
+- For the complete official dataset, use `details-sync`; it resumes cached jobs
+  and saves all returned fields, not only the compact daily metrics. Use
+  `details-schema`, `details-list`, and `details-read` for local discovery and
+  evidence. Read [references/details.md](references/details.md) for full field
+  meanings, units, temporal coverage and API limitations. Analysis is the main
+  agent's responsibility; this layer does not select which evidence is useful.
+
 - For current health/recovery plus activity data, run `sync`. It calls official OAuth wellness tools first and retains the existing incremental FIT synchronizer for activity continuity.
 - For HRV, sleep, resting-HR, stress, recovery or training-load questions, run `wellness-sync`, then `wellness-trend`. If the remote call fails, use the local trend and state its `data_through` watermark.
 - For ordinary comparisons, run `compare` directly. It reads persistent derived data without networking.
@@ -56,6 +63,16 @@ node scripts/coros-health.mjs migrate --legacy-dir /path/to/legacy/coros-data
 ```
 
 Both channels are incremental. Wellness sync overlaps the last two cached days because sleep and recovery records can settle late, then replaces matching observations idempotently. `sync --repair` checks every known activity for a missing or invalid FIT but does not redownload valid files. If either remote call fails, report its status/error and cached `data_through` while continuing to use local results. Do not request official MCP FIT files merely to answer wellness questions; COROS caps them at 50 per calendar day.
+
+For morning reports, check `missing_latest_metrics` and `metric_data_through`,
+not only the aggregate date or successful tool calls. Watch data may arrive late;
+never relabel yesterday's sleep/HRV as today's. `sleep_minutes` is dedicated Main
+Sleep (excluding awake time); `sleep_window_minutes` is the daily summary window
+including awake time. Keep them distinct and prefer per-metric dedicated sources.
+Use `wellness-trend.report` for today's briefing: `ready=false` means the requested
+day is incomplete (also after a local midnight without another sync). Report only
+present `report.metrics`, label missing items as pending sync, and never substitute
+the historical `latest` row. `last_remote_status=failed` must also be disclosed.
 
 ## Interpret results
 

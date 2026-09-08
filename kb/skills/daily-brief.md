@@ -68,6 +68,16 @@ Search the web for top headlines:
 - Industry news if known from user profile (1-2 items)
 
 ### 7. Health Reminders
+
+When including COROS sleep/recovery, use the coros-health Skill's `wellness-sync`
+then `wellness-trend`. Read `report.date`, `report.ready` and `report.metrics`:
+the date must match today's local wake-up day. If incomplete, label missing
+metrics “尚未同步/数据未齐”; show only available values for that day. Do not
+substitute a previous `latest` row or infer completeness from `remote.status=ok`,
+seven successful tool calls, or aggregate `data_through`. Disclose a failed
+remote sync even when using cache. Use actual `sleep_minutes`, never the
+awake-inclusive `sleep_window_minutes`. Historical values require explicit dates.
+
 Use the `kb_read_topic` MCP tool to read the "health" topic. Extract:
 - Upcoming medical appointments
 - Medication reminders

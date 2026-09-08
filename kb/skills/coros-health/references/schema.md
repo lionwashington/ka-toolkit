@@ -41,6 +41,24 @@ The training-load join is by local calendar date against cached normalized activ
 
 ## Normalized metrics
 
+Wellness algorithm 2 recognizes only explicit record headings (ISO or compact
+calendar dates). Dates embedded in request titles, missing-data notices or sleep
+windows cannot change the wake-up-day record. Undated recovery snapshots alone
+may use the requested day; missing sleep and HRV are never backfilled that way.
+
+`sleep_minutes` uses dedicated Main Sleep; `sleep_window_minutes` retains the
+daily Total, which includes awake time. No guessed unit conversion or silent
+subtraction is performed. Dedicated metrics outrank general summaries; within
+the same priority, newer `fetched_at` wins independently of range-key order.
+`metric_sources` records the chosen source for each value.
+
+Changed logical observations are archived in `wellness/raw/observation-history.jsonl`
+before replacement. Rebuild reads active observations only, preserving history
+for audit without allowing superseded versions to overwrite current values.
+Sync reports `partial` when current responses lack requested-day key metrics,
+with `missing_latest_metrics` and independent `metric_data_through` watermarks.
+Aggregate `data_through` alone does not prove today's sleep/HRV has synced.
+
 Prefer FIT session/lap values, then fill absent overview values from COROS metadata. Persist distance, timer and elapsed time, pace, heart rate, cadence, power, temperature, ascent, calories, training load, device and sport fields when available.
 
 FIT running cadence commonly represents one-foot strides per minute. Values below 130 are normalized to total steps per minute by multiplying by two; derived cadence columns always use `spm`.
