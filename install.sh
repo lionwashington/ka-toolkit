@@ -95,6 +95,9 @@ if [ -n "$SKILL_FILTER" ]; then
   [ "$ONLY" = "skills" ] || { echo "--skill requires --only skills" >&2; exit 2; }
 fi
 
+# Retired discovery name remains an install alias for the unified kitchen Skill.
+[ "$SKILL_FILTER" != nutrition-ledger ] || SKILL_FILTER=kitchen-planner
+
 INSTALL_FAILURES=0
 log() {
   echo "[install] $*"
@@ -711,6 +714,15 @@ deploy_skills() {        # skills → runtime/skills/<name> (design→runtime co
     log "  FAIL unknown skill: ${SKILL_FILTER}"
     exit 2
   fi
+  if [ -z "$SKILL_FILTER" ] || [ "$SKILL_FILTER" = kitchen-planner ]; then
+    # Keep the historical executable path, but no SKILL.md/agents discovery.
+    name=nutrition-ledger
+    reconcile_skill_swap_artifacts "$dest" "$name"
+    stage="$dest/.${name}.stage.$$"
+    mkdir -p "$stage/scripts"
+    cp "$REPO_ROOT/kb/skills/nutrition-ledger/scripts/nutrition-ledger.mjs" "$stage/scripts/"
+    replace_runtime_skill "$dest" "$name" "$stage" || { log "  FAIL replacing nutrition CLI compatibility entry"; exit 1; }
+  fi
   log "  OK ${dest} (${cnt} skill(s) copied into runtime)"
 }
 
@@ -1011,6 +1023,7 @@ switch_skills() {        # switch ⑥: runtime skill symlinks for Claude Code an
   local d name link tgt claude_dir codex_link cnt=0
   for d in "$src"/*/; do
     [ -d "$d" ] || continue
+    [ -f "$d/SKILL.md" ] || continue
     name="$(basename "$d")"
     [ -z "$SKILL_FILTER" ] || [ "$name" = "$SKILL_FILTER" ] || continue
 

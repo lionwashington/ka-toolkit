@@ -1,0 +1,1 @@
+{"name":"ka-kitchen-planner-skill","private":true,"type":"module","scripts":{"test":"node --test ../../../tests/nutrition-ledger.test.mjs ../../../tests/kitchen-planner.test.mjs"}}

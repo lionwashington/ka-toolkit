@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kitchen Planner"
+  short_description: "Plan meals from stock, equipment and nutrition goals"
+  default_prompt: "Use $kitchen-planner to draft a meal from my confirmed kitchen inventory."
