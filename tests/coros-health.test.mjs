@@ -13,6 +13,7 @@ import {
 import {
   argumentsForTool, normalizeObservations, rebuildWellness, selectWellnessTools,
   syncWellness, validateWellness, wellnessPaths, wellnessTrend,
+  wellnessReport, WELLNESS_ALGORITHM_VERSION,
 } from '../kb/skills/coros-health/scripts/coros-wellness.mjs';
 
 function makeFit({ start = '2026-01-20T00:00:00Z', device = 'PACE 4', finish = 330 } = {}) {
@@ -204,6 +205,67 @@ test('normalizes current official MCP JSON-encoded text responses', () => {
   assert.equal(row.awake_minutes, 15);
   assert.equal(row.resting_hr_bpm, 48);
   assert.equal(row.recovery, 82);
+});
+
+test('wake-up headings, compact daily dates and awake-inclusive windows remain distinct', () => {
+  const obs = (kind, text, fetched_at='2031-04-03T02:00:00Z') => ({ kind, tool: kind,
+    fetched_at, range: { end_date: '2031-04-03' }, payload: { content: [{type:'text',text:JSON.stringify(text)}] } });
+  const rows = normalizeObservations([
+    obs('daily', 'Daily Health — Last 3 days\n--- 20310402 ---\nSteps: 12,345\nTotal: 8h 10min | Awake: 20 min\n--- 20310403 ---\nTotal: 6h 50min | Awake: 10 min'),
+    obs('sleep','2031-04-03\nMain Sleep: 6h 40min\nAwake Time: 10 min\nMain Sleep Window: 2031-04-02 23:30 - 2031-04-03 06:20\nSleep Score: 81'),
+    obs('hrv','Sleep HRV — 2031-04-01 to 2031-04-03\n2031-04-02:\nHRV Avg: 63 ms\nNote: today (2031-04-03) is not synced yet'),
+  ]);
+  assert.equal(rows[0].date,'2031-04-02');
+  assert.equal(rows[0].steps,12345);
+  assert.equal(rows[0].sleep_window_minutes,490);
+  assert.equal(rows[0].sleep_minutes,undefined);
+  assert.equal(rows[1].sleep_minutes,400);
+  assert.equal(rows[1].sleep_window_minutes,410);
+  assert.equal(rows[1].sleep_score,81);
+  assert.equal(rows[1].hrv_ms,undefined);
+});
+
+test('briefing readiness rejects stale dates and old algorithms, and admits settled metrics only', () => {
+  const day = {date:'2031-04-02',algorithm_version:WELLNESS_ALGORITHM_VERSION,sleep_minutes:400,hrv_ms:63,resting_hr_bpm:54,stress:22,recovery:86};
+  const before = wellnessReport([day,{date:'2031-04-03',algorithm_version:WELLNESS_ALGORITHM_VERSION,recovery:87}], '2031-04-03');
+  assert.equal(before.ready,false);
+  assert.equal(before.metrics.sleep_minutes,null);
+  assert.equal(before.metrics.hrv_ms,null);
+  assert.equal(before.metric_data_through.sleep_minutes,'2031-04-02');
+  const settled = {...day,date:'2031-04-03'};
+  assert.equal(wellnessReport([day,settled],'2031-04-03').ready,true);
+  assert.equal(wellnessReport([day,settled],'2031-04-04').ready,false);
+  assert.equal(wellnessReport([{...settled,algorithm_version:1}],'2031-04-03').ready,false);
+});
+
+test('newer acquisition wins overlapping ranges; dedicated metrics win over daily summaries', () => {
+  const old = {kind:'sleep',tool:'sleep',key:'z',fetched_at:'2031-04-03T00:00:00Z',payload:{date:'2031-04-03',sleepMinutes:390}};
+  const fresh = {...old,key:'a',fetched_at:'2031-04-03T01:00:00Z',payload:{date:'2031-04-03',sleepMinutes:400}};
+  const daily = {...fresh,kind:'daily',tool:'daily',fetched_at:'2031-04-03T02:00:00Z',payload:{date:'2031-04-03',sleepMinutes:420}};
+  for (const inputs of [[fresh,old,daily],[daily,old,fresh]]) {
+    const [row] = normalizeObservations(inputs);
+    assert.equal(row.sleep_minutes,400);
+    assert.equal(row.metric_sources.sleep_minutes,'sleep');
+  }
+});
+
+test('successful tool calls with stale records report partial; changed raw revisions are retained', async () => {
+  const root = mkdtempSync(join(tmpdir(),'coros-late-watch-'));
+  const paths = fixture(root,[]);
+  const options = {provider:wellnessProvider(),endDate:'2026-01-22',startDate:'2026-01-20'};
+  const first = await syncWellness(paths,options);
+  assert.equal(first.remote.status,'partial');
+  assert.ok(first.missing_latest_metrics.includes('hrv_ms'));
+  assert.equal(first.metric_data_through.hrv_ms,'2026-01-21');
+  const provider=wellnessProvider();const call=provider.callTool;
+  provider.callTool=async name=>{const result=await call(name);result.content[0].text=result.content[0].text.replaceAll('2026-01-21','2026-01-22');return result;};
+  const updated=await syncWellness(paths,{...options,provider});
+  assert.equal(updated.remote.status,'ok');
+  const wp=wellnessPaths(paths);const history=readFileSync(wp.history,'utf8');
+  assert.equal(history.trim().split('\n').length,5);
+  const again=await syncWellness(paths,{...options,provider});
+  assert.equal(again.daily_changed,false);
+  assert.equal(readFileSync(wp.history,'utf8'),history);
 });
 
 test('wellness sync is incremental, idempotent and strips OAuth secrets', async () => {

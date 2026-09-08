@@ -3,9 +3,10 @@ import { existsSync, mkdirSync, readFileSync, renameSync, chmodSync, writeFileSy
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 export const WELLNESS_SCHEMA_VERSION = 1;
-export const WELLNESS_ALGORITHM_VERSION = 1;
+export const WELLNESS_ALGORITHM_VERSION = 2;
 const SECRET_KEY = /(?:access|refresh)[_-]?token|authorization|password|secret|code[_-]?verifier|poll[_-]?token|login[_-]?ticket/i;
 const DAY_MS = 86_400_000;
 const OFFICIAL_TOOL_GROUPS = {
@@ -58,6 +59,7 @@ export function wellnessPaths(paths) {
   return {
     root,
     raw: join(root, 'raw', 'observations.jsonl'),
+    history: join(root, 'raw', 'observation-history.jsonl'),
     daily: join(root, 'derived', 'daily.jsonl'),
     trends: join(root, 'derived', 'trends.json'),
     state: join(root, 'state', 'sync-state.json'),
@@ -85,7 +87,7 @@ export function runOfficialHelper(command, commandArgs = [], options = {}) {
   const executable = helperPath(options);
   if (!existsSync(executable)) throw new Error('official coros-mcp helper is not installed');
   const result = spawnSync(executable, ['--cache-root', cacheRoot, command, ...commandArgs], {
-    encoding: 'utf8', timeout: options.timeoutMs || 120_000,
+    encoding: 'utf8', timeout: options.timeoutMs || 120_000, maxBuffer: 64 * 1024 * 1024,
     env: { ...process.env, MCP_CACHE_ROOT: cacheRoot },
   });
   if (result.error) throw new Error(`official coros-mcp failed: ${compactError(result.error)}`);
@@ -238,6 +240,7 @@ function metricFields(record, kind) {
     stress: ['stress', 'stressLevel', 'avgStress', 'averageStress'],
     recovery: ['recovery', 'recoveryStatus', 'recovery_score', 'recoveryScore'],
     sleep_minutes: ['sleepMinutes', 'sleep_minutes', 'totalSleepMinutes', 'total_duration_minutes', 'sleepDurationMinutes'],
+    sleep_window_minutes: ['sleep_window_minutes'],
     sleep_score: ['sleepScore', 'sleep_score', 'qualityScore', 'quality_score'],
     awake_minutes: ['awakeMinutes', 'awake_minutes'],
     avg_hr_bpm: ['avgHeartRate', 'averageHeartRate', 'avg_hr', 'avgHr'],
@@ -269,7 +272,7 @@ function metricFields(record, kind) {
 
 function valueAfterColon(line) {
   const value = line.split(':').slice(1).join(':');
-  const match = value.match(/-?\d+(?:\.\d+)?/);
+  const match = value.replace(/(?<=\d),(?=\d{3}\b)/g, '').match(/-?\d+(?:\.\d+)?/);
   return match ? Number(match[0]) : null;
 }
 
@@ -286,7 +289,9 @@ function textRecords(text, kind, fallbackDate) {
   const byDate = new Map();
   let currentDate = null;
   const row = () => {
-    const date = currentDate || fallbackDate;
+    // Only recovery is an undated current snapshot. A requested end date is
+    // not evidence that sleep/HRV for that day has arrived from the watch.
+    const date = currentDate || (kind === 'recovery' ? fallbackDate : null);
     if (!date) return null;
     if (!byDate.has(date)) byDate.set(date, { date });
     return byDate.get(date);
@@ -294,7 +299,10 @@ function textRecords(text, kind, fallbackDate) {
   for (const sourceLine of String(text).split(/\r?\n/)) {
     const line = sourceLine.trim();
     if (!line) continue;
-    const date = line.match(/\b(\d{4}-\d{2}-\d{2})\b/)?.[1];
+    // Dates in windows, request headers and "no data today" notes are not
+    // record boundaries. Preserve the explicit wake-up-day heading.
+    const heading = line.match(/^(?:---\s*)?(\d{4}-\d{2}-\d{2}|\d{8})(?:\s*---|:.*)?$/);
+    const date = heading ? normalizeDate(heading[1]) : null;
     if (date) currentDate = date;
     const target = row();
     if (!target) continue;
@@ -310,7 +318,8 @@ function textRecords(text, kind, fallbackDate) {
     } else if (kind === 'stress' || kind === 'daily') {
       if (/^(Average )?Stress:/i.test(line)) target.stress = valueAfterColon(line);
       else if (/^Steps:/i.test(line)) target.steps = valueAfterColon(line);
-      else if (/^Total:/i.test(line) && kind === 'daily') target.sleep_minutes = durationMinutes(line);
+      // Daily Total includes awake time, unlike dedicated Main Sleep.
+      else if (/^Total:/i.test(line) && kind === 'daily') target.sleep_window_minutes = durationMinutes(line.split('|')[0]);
     } else if (kind === 'recovery') {
       if (/^Recovery:/i.test(line)) target.recovery = valueAfterColon(line);
     } else if (kind === 'training_load') {
@@ -324,7 +333,12 @@ function textRecords(text, kind, fallbackDate) {
 
 export function normalizeObservations(observations) {
   const byDate = new Map();
-  for (const observation of observations) {
+  const rank = new Map();
+  const owners = { hrv_ms: 'hrv', hrv_baseline_ms: 'hrv', sleep_minutes: 'sleep',
+    sleep_score: 'sleep', awake_minutes: 'sleep', resting_hr_bpm: 'resting_heart_rate', stress: 'stress' };
+  // Freshness is acquisition time, never lexical range-key order.
+  const ordered = [...observations].sort((a,b) => String(a.fetched_at || '').localeCompare(String(b.fetched_at || '')) || String(a.key || '').localeCompare(String(b.key || '')));
+  for (const observation of ordered) {
     const payload = unwrapMcpResult(observation.payload);
     const records = typeof payload === 'string'
       ? textRecords(payload, observation.kind, observation.range?.end_date)
@@ -333,9 +347,16 @@ export function normalizeObservations(observations) {
       const date = dateFromRecord(record);
       const metrics = metricFields(record, observation.kind);
       if (!date || !Object.keys(metrics).length) continue;
-      const prior = byDate.get(date) || { schema_version: WELLNESS_SCHEMA_VERSION, algorithm_version: WELLNESS_ALGORITHM_VERSION, date, sources: [] };
-      Object.assign(prior, metrics);
-      if (!prior.sources.includes(observation.tool)) prior.sources.push(observation.tool);
+      const prior = byDate.get(date) || { schema_version: WELLNESS_SCHEMA_VERSION, algorithm_version: WELLNESS_ALGORITHM_VERSION, date, sources: [], metric_sources: {} };
+      for (const [field, value] of Object.entries(metrics)) {
+        const priority = owners[field] === observation.kind ? 2 : 1;
+        const key = `${date}:${field}`;
+        if (priority < (rank.get(key) || 0)) continue;
+        rank.set(key, priority);
+        prior[field] = value;
+        prior.metric_sources[field] = observation.tool;
+      }
+      prior.sources = [...new Set(Object.values(prior.metric_sources))].sort();
       byDate.set(date, prior);
     }
   }
@@ -434,6 +455,17 @@ export async function syncWellness(paths, options = {}) {
       result.tools_called.push(tool.name);
     }
     const merged = mergeByKey(existing, incoming, 'key');
+    // Preserve superseded raw observations before replacing logical keys.
+    const history = readJsonl(wp.history);
+    const revisions = new Map(history.map(row => [row.revision, row]));
+    for (const prior of existing) {
+      const next = incoming.find(row => row.key === prior.key);
+      if (next && JSON.stringify(prior.payload) !== JSON.stringify(next.payload)) {
+        const revision = createHash('sha256').update(JSON.stringify(prior)).digest('hex');
+        revisions.set(revision, { ...prior, revision });
+      }
+    }
+    if (revisions.size !== history.length) writeJsonl(wp.history, [...revisions.values()]);
     result.observations_new = merged.length - existing.length;
     writeJsonl(wp.raw, merged);
     const before = existsSync(wp.daily) ? readFileSync(wp.daily, 'utf8') : '';
@@ -441,10 +473,14 @@ export async function syncWellness(paths, options = {}) {
     const after = readFileSync(wp.daily, 'utf8');
     result.daily_changed = before !== after;
     result.data_through = rebuilt.data_through;
-    result.remote.status = result.missing_categories.length || !rebuilt.daily_count ? 'partial' : 'ok';
+    const current = normalizeObservations(incoming);
+    const expected = ['hrv_ms', 'sleep_minutes', 'resting_hr_bpm', 'stress', 'recovery'];
+    result.metric_data_through = Object.fromEntries(expected.map(field => [field, current.filter(row => Number.isFinite(row[field])).at(-1)?.date || null]));
+    result.missing_latest_metrics = expected.filter(field => result.metric_data_through[field] !== today);
+    result.remote.status = result.missing_categories.length || result.missing_latest_metrics.length || !rebuilt.daily_count ? 'partial' : 'ok';
     if (result.remote.status === 'partial') result.remote.error = result.missing_categories.length
       ? `official tool coverage missing: ${result.missing_categories.join(', ')}`
-      : 'official responses were cached but contained no normalizable daily records';
+      : `official responses lack requested-day metrics: ${result.missing_latest_metrics.join(', ')}`;
   } catch (error) {
     result.remote.status = 'failed';
     result.remote.error = compactError(error);
@@ -455,11 +491,25 @@ export async function syncWellness(paths, options = {}) {
     last_attempt_at: new Date().toISOString(),
     last_success_at: ['ok', 'partial'].includes(result.remote.status) ? new Date().toISOString() : previous.last_success_at || null,
     data_through: result.data_through,
+    metric_data_through: result.metric_data_through || previous.metric_data_through || {},
+    missing_latest_metrics: result.missing_latest_metrics || previous.missing_latest_metrics || [],
+    last_remote_status: result.remote.status,
   }));
   return result;
 }
 
-export function wellnessTrend(paths, { days = 28 } = {}) {
+export function wellnessReport(daily, date = localToday()) {
+  const required = ['sleep_minutes', 'hrv_ms', 'resting_hr_bpm', 'stress', 'recovery'];
+  const row = daily.find(row => row.date === date && row.algorithm_version === WELLNESS_ALGORITHM_VERSION);
+  const missing = required.filter(field => !Number.isFinite(row?.[field]));
+  return { date, ready: missing.length === 0, missing_metrics: missing,
+    metrics: Object.fromEntries(required.map(field => [field, Number.isFinite(row?.[field]) ? row[field] : null])),
+    metric_data_through: Object.fromEntries(required.map(field => [field,
+      daily.filter(r => r.date <= date && r.algorithm_version === WELLNESS_ALGORITHM_VERSION && Number.isFinite(r[field])).at(-1)?.date || null])),
+  };
+}
+
+export function wellnessTrend(paths, { days = 28, date = localToday() } = {}) {
   const wp = wellnessPaths(paths);
   const daily = readJsonl(wp.daily);
   const selected = daily.slice(-Math.max(1, Number(days) || 28));
@@ -470,6 +520,10 @@ export function wellnessTrend(paths, { days = 28 } = {}) {
     data_through: selected.at(-1)?.date || state.data_through || null,
     days: selected.length,
     latest: selected.at(-1) || null,
+    metric_data_through: state.metric_data_through || {},
+    missing_latest_metrics: state.missing_latest_metrics || [],
+    last_remote_status: state.last_remote_status || null,
+    report: wellnessReport(daily, date),
     trends: readJson(wp.trends, null),
   };
 }
