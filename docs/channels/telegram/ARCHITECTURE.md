@@ -295,3 +295,28 @@ Historical lesson: the old version (which from c017006 copied lark's "404 any un
 
 - **Token ownership**: currently using "option B" — a standalone test bot `CCTelegramMcpBot` (a separate token for the daemon; the main telegram plugin is untouched, zero conflict, can be rolled out gradually). "Option A" (the daemon replaces the main bot, landing a true single-bot multi-channel setup, with main becoming the daemon's channel=main) awaits the user's decision. Note that a new daemon competing with the main plugin for getUpdates on the same token would be **mutually exclusive with a 409 Conflict**.
 - CC↔CC fine-grained permission allowlist / hard rate-limiting / persistent queue: future work.
+# Outbound delivery failures
+
+Model completion and message delivery are separate outcomes. A failed stream
+placeholder is handled immediately and disables subsequent preview updates;
+preview exceptions must not poison final delivery or become unhandled promises.
+This runtime-manager handling applies to both Telegram and Lark Codex targets.
+
+Telegram edits of a known message get at most three attempts with bounded
+backoff, including rate-limit hints up to five seconds. Message creation only
+retries explicit rate-limit rejection. Network errors and server errors may mean
+the message was accepted but its acknowledgement was lost; retrying them can
+duplicate a reply. Already acknowledged chunks are never replayed automatically.
+
+Failed Codex finals are retained under `undelivered/` beside the runtime bindings
+file, with a hashed platform/channel/turn key and mode 0600 (directory 0700).
+These files contain private answer text, not raw transport errors or credentials;
+keep them out of public Git and shared logs. They mark delivery as unknown or
+partial, not definitely absent. No automatic replay or retention deletion runs.
+An operator must compare the actual chat and rollout before sending missing text,
+and manage retained files under the owner's data-retention policy. A write failure
+is logged explicitly; the original rollout remains the recovery source.
+
+Delivery failure increments the existing reply-failure counter but no longer
+emits a misleading “Codex turn failed” message. Actual model errors still follow
+the model-error path. No Claude capture hooks or session state are changed.

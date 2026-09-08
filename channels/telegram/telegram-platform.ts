@@ -16,6 +16,7 @@
  * this platform into runChannelDaemon().
  */
 import { Bot } from 'grammy'
+import { retryTelegramEdit, canRetryTelegramSend } from './retry-edit.ts'
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
@@ -166,13 +167,9 @@ function chunk(text: string, limit: number, mode: 'length' | 'newline'): string[
 // Send `text` to a Telegram chat (the owner's DM), chunked. Returns null on
 // success, or an error string. Sent as plain text (no parse_mode).
 //
-// Each chunk is retried with bounded backoff on transient failures — Telegram
-// flood-limits (429, honoring retry_after), 5xx, and network blips — which were
-// the suspected cause of replies silently not arriving (a 429 used to surface as
-// a hard failure and the message was lost). Non-retryable errors (chat not found,
-// bad request) bail immediately and are returned so the caller counts a real
-// failure (reply tool → isError + repliesFailed++). "sent" now means delivered
-// or genuinely-failed, not "fired once and hoped".
+// Only explicit rate-limit rejection is safe to retry for message creation.
+// Network/5xx responses can be ambiguous: Telegram may already have accepted the
+// message. Never retry the whole reply or already acknowledged chunks blindly.
 const SEND_MAX_ATTEMPTS = 4
 async function sendToTelegram(chatId: string | number, text: string): Promise<string | null> {
   const chunks = chunk(text, MAX_CHUNK_LIMIT, 'newline')
@@ -184,15 +181,12 @@ async function sendToTelegram(chatId: string | number, text: string): Promise<st
         lastErr = null
         break
       } catch (e: any) {
-        lastErr = e?.message ?? String(e)
-        const code = e?.error_code
+        lastErr = 'Telegram message delivery failed (possibly partial; review before replay)'
         const retryAfter = e?.parameters?.retry_after
-        const retryable =
-          code === 429 || (typeof code === 'number' && code >= 500) ||
-          e?.name === 'HttpError' || /network|socket|timed?out|ECONN|EAI_AGAIN|fetch failed/i.test(lastErr)
+        const retryable = canRetryTelegramSend(e)
         if (!retryable || attempt === SEND_MAX_ATTEMPTS - 1) break
         const waitMs = retryAfter ? (retryAfter * 1000 + 250) : Math.min(1000 * 2 ** attempt, 8000)
-        log(`sendMessage retry (attempt ${attempt + 1}/${SEND_MAX_ATTEMPTS}, code=${code ?? '?'}, wait ${waitMs}ms): ${lastErr}`)
+        log(`sendMessage rate-limit retry (attempt ${attempt + 1}/${SEND_MAX_ATTEMPTS}, wait ${waitMs}ms)`)
         await new Promise((r) => setTimeout(r, waitMs))
       }
     }
@@ -522,11 +516,7 @@ export const telegramPlatform: Platform = {
     // preview on the first lossless chunk; finishStream sends the remainder as
     // follow-up messages once the turn is complete.
     const preview = chunk(text, MAX_CHUNK_LIMIT, 'newline')[0] ?? ' '
-    try { await bot.api.editMessageText(handle.chatId, handle.messageId, preview); return null }
-    catch (error: any) {
-      const message = error?.message ?? String(error)
-      return isNoopTelegramEdit(message) ? null : message
-    }
+    return retryTelegramEdit(() => bot.api.editMessageText(handle.chatId, handle.messageId, preview))
   },
   async finishStream(handle: any, text: string): Promise<string | null> {
     const parts = chunk(text, MAX_CHUNK_LIMIT, 'newline')
