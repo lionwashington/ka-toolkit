@@ -97,27 +97,6 @@ for _ in 1 2 3; do
 done
 [ "$INSTANCE_LOCK_HELD" = "1" ] || { echo "[start-pane:$PANE_NAME] ERROR: cannot acquire Codex runtime instance lock for '$SAFE_NAME'" >&2; exit 1; }
 
-# Port discovery closes its temporary listener before App Server binds. Serialize
-# that small gap across Workshop panes so simultaneous Codex mates cannot select
-# the same ephemeral port.
-for _ in $(seq 1 200); do
-    if mkdir "$PORT_LOCK_DIR" 2>/dev/null; then
-        printf '%s\n' "$$" > "$PORT_LOCK_DIR/pid"
-        PORT_LOCK_HELD=1
-        break
-    fi
-    lock_pid="$(cat "$PORT_LOCK_DIR/pid" 2>/dev/null || true)"
-    if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
-        rm -f "$PORT_LOCK_DIR/pid"
-        rmdir "$PORT_LOCK_DIR" 2>/dev/null || true
-    fi
-    sleep 0.05
-done
-[ "$PORT_LOCK_HELD" = "1" ] || { echo "[start-pane:$PANE_NAME] ERROR: timed out allocating App Server port"; exit 1; }
-
-APP_SERVER_PORT="$(node -e 'const s=require("net").createServer();s.listen(0,"127.0.0.1",()=>{process.stdout.write(String(s.address().port));s.close()})')"
-APP_SERVER_ENDPOINT="ws://127.0.0.1:$APP_SERVER_PORT"
-
 # The legacy Telegram MCP may use the same bot identity as Channel and race its
 # getUpdates consumer. Replace that one transport with a disabled valid stdio
 # entry for both App Server and remote TUI invocations; the user's Codex
@@ -151,10 +130,41 @@ done
 if [ -n "$KA_CODEX_MODEL" ]; then
     CODEX_MCP_OVERRIDES+=(-c "model=$(node -e 'process.stdout.write(JSON.stringify(process.env.KA_CODEX_MODEL))')")
 fi
-# The sidecar must never inherit the pane's stdin. This shell runs without job
-# control, so a background App Server otherwise shares the foreground process
-# group with the TUI and can consume terminal replies or keystrokes.
-codex "${CODEX_MCP_OVERRIDES[@]}" \
+# Codex 0.153.4 deliberately ignores the startup hook bypass on remote resume.
+# Resolve exact hook hashes with Codex itself and trust them only in this launch's
+# CLI config layer. Never mutate the user's persisted trust or disable hooks.
+HOOK_TRUST_OVERRIDE="$(node "$KA_RUNTIMES_DIR/codex/hook-trust-overrides.mjs" "$EXPECTED_CWD" -- "${CODEX_MCP_OVERRIDES[@]}")" || {
+    echo "[start-pane:$PANE_NAME] ERROR: cannot resolve invocation-local hook trust" >&2
+    exit 1
+}
+if [ -n "$HOOK_TRUST_OVERRIDE" ]; then
+    CODEX_MCP_OVERRIDES+=(-c "$HOOK_TRUST_OVERRIDE")
+fi
+
+# Keep potentially slow hook discovery OUTSIDE the shared port lock. Serialize
+# only the small gap from ephemeral port discovery until the sidecar binds.
+for _ in $(seq 1 200); do
+    if mkdir "$PORT_LOCK_DIR" 2>/dev/null; then
+        printf '%s\n' "$$" > "$PORT_LOCK_DIR/pid"
+        PORT_LOCK_HELD=1
+        break
+    fi
+    lock_pid="$(cat "$PORT_LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+        rm -f "$PORT_LOCK_DIR/pid"
+        rmdir "$PORT_LOCK_DIR" 2>/dev/null || true
+    fi
+    sleep 0.05
+done
+[ "$PORT_LOCK_HELD" = "1" ] || { echo "[start-pane:$PANE_NAME] ERROR: timed out allocating App Server port"; exit 1; }
+
+APP_SERVER_PORT="$(node -e 'const s=require("net").createServer();s.listen(0,"127.0.0.1",()=>{process.stdout.write(String(s.address().port));s.close()})')"
+APP_SERVER_ENDPOINT="ws://127.0.0.1:$APP_SERVER_PORT"
+
+# Redirection alone leaves /dev/tty accessible through the controlling session.
+# Give the sidecar (and its children) a separate session; only the foreground TUI
+# owns the pane terminal. The supervisor forwards shutdown and waits for exit.
+node "$KA_RUNTIMES_DIR/codex/detached-process.mjs" codex "${CODEX_MCP_OVERRIDES[@]}" \
     --dangerously-bypass-hook-trust \
     --dangerously-bypass-approvals-and-sandbox \
     app-server --listen "$APP_SERVER_ENDPOINT" </dev/null >>"$SERVER_LOG" 2>&1 &
@@ -198,27 +208,34 @@ elif [ "${1:-}" = "resume" ] && [ -n "${2:-}" ]; then
 fi
 
 run_codex() {
+    # Establish keyboard mode before terminal queries. Restore the exact shell
+    # state on normal/error exit; do not leave the fallback shell non-canonical.
+    local saved_tty="" status
+    if [ -t 0 ]; then
+        saved_tty="$(stty -g)" || return 1
+        stty -icanon -echo -icrnl min 1 time 0 || return 1
+    fi
     codex "${CODEX_MCP_OVERRIDES[@]}" --remote "$APP_SERVER_ENDPOINT" "$@"
+    status=$?
+    [ -z "$saved_tty" ] || stty "$saved_tty"
+    return "$status"
 }
 
-# Workshop panes are unattended runtime processes. Make approval bypass the
-# default even when a mate also configures unrelated arguments such as --model.
-# Preserve an explicitly supplied copy without duplicating it.
-HAS_BYPASS=0
+# The remote TUI inherits the server/thread permissions. Strip the historical
+# Workshop YOLO argument; preserve model and hook-trust arguments.
 HAS_HOOK_TRUST_BYPASS=0
+REMOTE_ARGS=()
 if [ "${#TUI_ARGS[@]}" -gt 0 ]; then
     for arg in "${TUI_ARGS[@]}"; do
-        [ "$arg" = "--dangerously-bypass-approvals-and-sandbox" ] && HAS_BYPASS=1
+        # 0.154 rejects permission overrides on remote resume. The existing
+        # sidecar/thread owns permissions; the TUI must not override them.
+        [ "$arg" = "--dangerously-bypass-approvals-and-sandbox" ] && continue
+        [ "$arg" = "--yolo" ] && continue
+        REMOTE_ARGS+=("$arg")
         [ "$arg" = "--dangerously-bypass-hook-trust" ] && HAS_HOOK_TRUST_BYPASS=1
     done
 fi
-if [ "$HAS_BYPASS" -eq 0 ]; then
-    if [ "${#TUI_ARGS[@]}" -eq 0 ]; then
-        TUI_ARGS=(--dangerously-bypass-approvals-and-sandbox)
-    else
-        TUI_ARGS=(--dangerously-bypass-approvals-and-sandbox "${TUI_ARGS[@]}")
-    fi
-fi
+TUI_ARGS=("${REMOTE_ARGS[@]}")
 if [ "$HAS_HOOK_TRUST_BYPASS" -eq 0 ]; then
     TUI_ARGS=(--dangerously-bypass-hook-trust "${TUI_ARGS[@]}")
 fi

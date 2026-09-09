@@ -61,10 +61,17 @@ export KA_STATE_DIR="$tmp_root/state"
 # the production Channel daemon. The fake Codex process does not need a working
 # Channel endpoint; port 1 fails closed while still proving argument construction.
 export KA_CHANNEL=contract-test
+export KA_CHANNEL_KIND=telegram
 export KA_CHANNEL_PORT=1
 cat > "$tmp_root/bin/codex" <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "$FAKE_CODEX_CALLS"
+if printf '%s\n' "$*" | grep -q 'app-server --stdio'; then
+    if [ "${FAKE_ASSERT_PROBE_OUTSIDE_PORT_LOCK:-0}" = 1 ] && [ -d "$KA_STATE_DIR/codex-app-servers/.port-allocation.lock" ]; then
+        exit 3
+    fi
+    exec node -e 'const rl=require("readline").createInterface({input:process.stdin});const hooks=process.env.FAKE_HOOK_REVIEW==="1"?[{key:"synthetic.hook",currentHash:"synthetic-hash",enabled:true,isManaged:false,trustStatus:"untrusted"}]:[];rl.on("line",l=>{const r=JSON.parse(l);if(r.id!==undefined)console.log(JSON.stringify({id:r.id,result:r.method==="hooks/list"?{data:[{cwd:process.cwd(),hooks,errors:[],warnings:[]}]}:{}}));})'
+fi
 if printf '%s\n' "$*" | grep -q 'app-server --listen'; then
     for endpoint in "$@"; do :; done
     port="${endpoint##*:}"
@@ -98,11 +105,11 @@ JS
 export KA_CODEX_THREAD_SELECTOR="$tmp_root/select-thread.mjs"
 export KA_CODEX_KEEP_APP_SERVER_ON_TUI_EXIT=0
 
-FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" KA_CHANNEL=main \
+FAKE_CODEX_CALLS="$tmp_root/calls" FAKE_ASSERT_PROBE_OUTSIDE_PORT_LOCK=1 PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" KA_CHANNEL=main \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" --model test-model >/dev/null 2>&1 \
     || fail "explicit Codex launch failed"
-grep -Eq -- 'mcp_servers\.telegram\.enabled=false .*mcp_servers\.telegram-channel\.url="http://127\.0\.0\.1:1/mcp\?name=main&mode=tools" --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox --model test-model resume thread-current-cwd$' "$tmp_root/calls" || fail "Workshop Codex launch is missing Channel MCP, canonical thread, or bypass arguments"
-grep -Eq -- 'mcp_servers\.telegram-channel\.url="http://127\.0\.0\.1:1/mcp\?name=main&mode=tools" --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox app-server --listen ws://127\.0\.0\.1:[0-9]+$' "$tmp_root/calls" || fail "Workshop App Server did not attach Channel MCP or bypass hook trust and approvals"
+grep -Eq -- 'mcp_servers\.telegram\.enabled=false .*mcp_servers\.telegram-channel\.url="http://127\.0\.0\.1:1/mcp\?name=main&mode=tools" -c model="test-model" --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-hook-trust --model test-model resume thread-current-cwd$' "$tmp_root/calls" || fail "Workshop Codex launch is missing Channel MCP, canonical thread, or bypass arguments"
+grep -Eq -- 'mcp_servers\.telegram-channel\.url="http://127\.0\.0\.1:1/mcp\?name=main&mode=tools" -c model="test-model" --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox app-server --listen ws://127\.0\.0\.1:[0-9]+$' "$tmp_root/calls" || fail "Workshop App Server did not attach Channel MCP or bypass hook trust and approvals"
 if grep -q -- 'mcp_servers\.knowledge-assistant' "$tmp_root/calls"; then
     fail "Workshop must not inject the optional knowledge-assistant MCP"
 fi
@@ -125,14 +132,14 @@ ok "Codex App Server survives TUI exit until the pane owner exits"
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" --last --dangerously-bypass-approvals-and-sandbox >/dev/null 2>&1 \
     || fail "legacy --last Codex launch failed"
-grep -Eq -- 'mcp_servers\.telegram\.enabled=false .* --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
+grep -Eq -- 'mcp_servers\.telegram\.enabled=false .* --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-hook-trust resume thread-current-cwd$' "$tmp_root/calls" \
     || fail "legacy --last did not select the current-cwd canonical thread"
 
 : > "$tmp_root/calls"
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" >/dev/null 2>&1 \
     || fail "fresh Codex launch failed"
-grep -Eq -- 'mcp_servers\.telegram\.enabled=false .* --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
+grep -Eq -- 'mcp_servers\.telegram\.enabled=false .* --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-hook-trust resume thread-current-cwd$' "$tmp_root/calls" \
     || fail "non-interactive default launch missing"
 ok "Codex launch preserves args and selects the current-cwd canonical thread"
 
@@ -142,7 +149,7 @@ FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" "resume --last" --dangerously-bypass-approvals-and-sandbox >/dev/null 2>&1 \
     || fail "legacy combined resume argument failed"
 if grep -q -- 'resume --last' "$tmp_root/calls"; then fail "combined resume directive leaked into Codex argv"; fi
-grep -Eq -- 'mcp_servers\.telegram\.enabled=false .* --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
+grep -Eq -- 'mcp_servers\.telegram\.enabled=false .* --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-hook-trust resume thread-current-cwd$' "$tmp_root/calls" \
     || fail "combined resume directive was not normalized"
 ok "Codex launch normalizes legacy combined resume arguments"
 
@@ -151,7 +158,7 @@ FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" "resume latest" --dangerously-bypass-approvals-and-sandbox >/dev/null 2>&1 \
     || fail "legacy combined resume latest argument failed"
 if grep -q -- 'resume latest' "$tmp_root/calls"; then fail "combined resume latest directive leaked into Codex argv"; fi
-grep -Eq -- 'mcp_servers\.telegram\.enabled=false .* --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox resume thread-current-cwd$' "$tmp_root/calls" \
+grep -Eq -- 'mcp_servers\.telegram\.enabled=false .* --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-hook-trust resume thread-current-cwd$' "$tmp_root/calls" \
     || fail "combined resume latest directive was not normalized"
 ok "Codex launch normalizes legacy combined resume latest arguments"
 
@@ -192,6 +199,14 @@ same_name_servers="$(grep -c 'app-server --listen' "$tmp_root/calls")"
 [ "$same_name_servers" = "1" ] || fail "same-name Codex panes launched more than one App Server"
 wait "$single_instance_pid" || fail "first same-name Codex pane failed"
 ok "Codex runtime names allow only one App Server and registrar instance"
+
+: > "$tmp_root/calls"
+FAKE_CODEX_CALLS="$tmp_root/calls" FAKE_HOOK_REVIEW=1 PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" \
+    "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" >/dev/null 2>&1 \
+    || fail "invocation-local hook trust launch failed"
+[ "$(grep -Fc 'hooks.state={"synthetic.hook"={trusted_hash="synthetic-hash"}}' "$tmp_root/calls")" = "2" ] \
+    || fail "exact hook trust must reach both the sidecar and remote TUI"
+ok "unreviewed hooks receive exact invocation-local trust in both Codex processes"
 
 : > "$tmp_root/calls"
 pids=""

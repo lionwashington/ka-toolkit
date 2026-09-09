@@ -75,6 +75,83 @@ reposts the same runtime identity without that flag. Channel promotes the existi
 client with `thread/resume`, preserving the active WebSocket and enabling delta
 notifications used by platform streaming.
 
+### Codex remote startup: hook review and terminal ownership
+
+Validated against Codex **0.153.4**. Having bypass flags in process argv is not
+proof of unattended TUI startup:
+
+- Upstream `tui/src/lib.rs` explicitly disables the startup hook-review bypass
+  for persistent `--remote ... resume` connections, because an already-running
+  thread can ignore resume overrides. See the
+  [0.153.4 implementation](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/tui/src/lib.rs#L1662).
+- The App Server CLI branch passes `root_config_overrides`, not the interactive
+  hook-bypass flag, into the server. Adding the same flag again is insufficient.
+- Channel/App Server `alive` or a successful channel reply does **not** establish
+  TUI readiness. A hook-review modal must defeat prompt/status readiness hints.
+
+`codex/hook-trust-overrides.mjs` starts a short-lived, terminal-detached Codex
+probe with the same workspace/config arguments. It only initializes and calls
+`hooks/list`; it never resumes a business thread, submits a turn, or writes trust
+through the configuration API. The exact enabled, untrusted/modified hook keys
+and hashes become a `hooks.state` **CLI-only** overlay for both the real sidecar
+and TUI. Hashes come from Codex, not a duplicated hashing implementation.
+Already-trusted, managed and disabled hooks are left alone; no approval or
+sandbox setting is changed by this compatibility fix. Discovery errors, invalid
+metadata, or a 20-second timeout fail startup explicitly instead of waiting for
+an invisible approval. Configuration/plugin error bodies are not copied to the
+pane. Do not edit hook definitions concurrently with startup: a changed hash
+must be reviewed/resolved again, never silently matched to an old hash.
+
+`codex/detached-process.mjs` starts the real sidecar in a separate POSIX session
+and forwards shutdown to its own process group. All three standard descriptors
+remain redirected. Redirecting stdin alone does **not** remove access to
+`/dev/tty`; the session boundary prevents sidecar/MCP/tool children from changing
+the foreground TUI's controlling terminal. The TUI remains in the foreground;
+the launcher does not repeatedly force `stty raw` or synthesize trust keystrokes.
+
+The incident's historical raw-mode writer is **not established**. A clean real
+0.153.4 App Server with shared controlling TTY did not issue `TCSETS` during an
+isolated `initialize`/`thread/start` trace. Session isolation is a demonstrated
+defensive boundary, not evidence that the App Server caused the original mode
+change. Preserve this distinction when reporting a recurrence.
+
+Codex **0.154.0** rejects `--dangerously-bypass-approvals-and-sandbox` on
+remote resume (`Permission overrides are not supported when resuming a remote
+task`). The launcher no longer injects that flag into the TUI and removes the
+historical explicit flag/`--yolo` alias. Existing sidecar/thread permissions and
+persisted user configuration are unchanged. This does not authorize changing
+other explicit permission options.
+
+Before launching the foreground TUI, the launcher saves the terminal state and
+sets `-icanon -echo -icrnl min 1 time 0` once, before terminal queries. It restores
+the saved state when the TUI returns, including nonzero exit, for the fallback
+shell. This is a startup mitigation, not a periodic watchdog or proof of the
+historical raw-mode writer. Check actual keyboard input after upgrades; channel
+liveness alone is insufficient because the sidecar can survive a failed TUI.
+
+Regression checks (isolated, no production daemon/mate restarts):
+
+```sh
+node --test tests/workshop-codex-hook-trust.test.mjs tests/workshop-codex-ready.test.mjs tests/workshop-codex-tty.test.mjs
+bash tests/cases/17-runtime-codex-contract.sh
+pnpm test:reliability
+# Opt-in actual Codex remote/resume test (Linux/WSL, Codex + tmux + stty):
+node tests/manual/codex-remote-startup.mjs
+```
+
+The PTY checks require Python 3 on POSIX. They demonstrate the old shared-TTY
+failure mechanism, reject `/dev/tty` access from the detached child, and verify
+raw arrow/Enter bytes without echo. Also verify the actual Codex TUI (not only
+RPC status) on a dedicated test instance before rolling out a Codex upgrade.
+The opt-in test uses a temporary Codex configuration, a dedicated tmux socket
+and a loopback mock model without authentication. It compares flag-only startup
+with invocation-local trust (including a changed hook), verifies composer
+readiness plus arrow editing and Enter `/status`, and checks that the fixture's
+configuration remains byte-identical. It prints only validation indicators.
+These launcher changes take effect only on subsequent launches after normal KA
+code installation. Existing mates need an owner-approved serial rolling restart;
+the channel daemon does not need restarting for this change.
+
 Channel completion snapshots are a fallback, not a progress transport. It polls
 `thread/read` only after notification inactivity and briefly waits for queued
 deltas before accepting a polled completion. Runtime adapters must not introduce
