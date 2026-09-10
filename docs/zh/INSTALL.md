@@ -217,10 +217,14 @@ ka doctor        # 更深入的诊断 + 修复提示；发现问题时退出码�
 
 ```bash
 brew install gogcli
-gog auth credentials set /path/to/client_secret.json   # 从 Google Cloud Console 下载的桌面应用客户端 JSON
-gog auth add your@gmail.com                            # 打开浏览器 OAuth；每个账户重复一次
-gog auth list                                          # 验证
+gogcli auth credentials set /path/to/client_secret.json   # 从 Google Cloud Console 下载的桌面应用客户端 JSON
+gogcli auth add your@gmail.com                            # 打开浏览器 OAuth；每个账户重复一次
+gogcli auth list                                          # 验证
 ```
+
+无桌面的 Linux 使用文件 keyring 时，可将密码保存在权限为 600 的
+`~/.config/gogcli/keyring-env.zsh`。Google skills 只会在每次 `gogcli`
+命令所在的 shell 内加载它；不要把密码全局导出到 Workshop 或 cron。
 
 如果遇到 "missing client_id/client_secret"，请展平 JSON —— 把 `installed` 键的内容移到顶层。在 `memory/topics/tools.md` 中配置哪些账户用于邮件、哪些用于日历。
 
@@ -327,7 +331,7 @@ cp config/config.example.yaml ~/.knowledge-assistant/config/config.yaml
    - 知识库仓库（`git clone`）
    - Google OAuth 凭据（`~/Library/Application Support/gogcli/`）
 5. `ka workshop` → `ka cron install` → `ka doctor`
-6. `brew install gogcli && gog auth add your@gmail.com`，用于 `/mail` 和 `/calendar`
+6. `brew install gogcli && gogcli auth add your@gmail.com`，用于 `/mail` 和 `/calendar`
 
 ## 测试
 

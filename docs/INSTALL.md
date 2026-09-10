@@ -294,10 +294,15 @@ to access Google Workspace.
 
 ```bash
 brew install gogcli
-gog auth credentials set /path/to/client_secret.json   # Desktop-app client JSON from Google Cloud Console
-gog auth add your@gmail.com                            # opens browser OAuth; repeat per account
-gog auth list                                          # verify
+gogcli auth credentials set /path/to/client_secret.json   # Desktop-app client JSON from Google Cloud Console
+gogcli auth add your@gmail.com                            # opens browser OAuth; repeat per account
+gogcli auth list                                          # verify
 ```
+
+For a headless Linux file-keyring backend, keep the password in a mode-600
+environment file such as `~/.config/gogcli/keyring-env.zsh`. The Google skills
+load that file only inside each `gogcli` command shell; do not export the
+password globally into Workshop or cron.
 
 If you get "missing client_id/client_secret", flatten the JSON — move the
 contents of the `installed` key to the top level. Configure which accounts serve
@@ -413,7 +418,7 @@ cp config/config.example.yaml ~/.knowledge-assistant/config/config.yaml
    - Knowledge base repo (`git clone`)
    - Google OAuth credentials (`~/Library/Application Support/gogcli/`)
 5. `ka workshop` → `ka cron install` → `ka doctor`
-6. `brew install gogcli && gog auth add your@gmail.com` for `/mail` and `/calendar`
+6. `brew install gogcli && gogcli auth add your@gmail.com` for `/mail` and `/calendar`
 
 ## Testing
 

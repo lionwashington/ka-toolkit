@@ -8,6 +8,21 @@ user-invocable: true
 
 Generate a comprehensive daily briefing by pulling data from multiple sources.
 
+## gogcli Runtime Setup
+
+The executable is `gogcli` (not `gog`). Before **every** non-interactive
+`gogcli` operation, load the optional file-keyring environment in the **same
+shell invocation**. Never print the file or either keyring variable:
+
+```bash
+GOGCLI_KEYRING_ENV="${GOGCLI_KEYRING_ENV:-$HOME/.config/gogcli/keyring-env.zsh}"
+[ ! -r "$GOGCLI_KEYRING_ENV" ] || . "$GOGCLI_KEYRING_ENV"
+gogcli --no-input auth list
+```
+
+If the file is absent, continue normally because another keyring backend may be
+configured. Do not export this environment globally into Workshop or cron.
+
 ## Data Sources
 
 Collect data in parallel where possible:
@@ -29,9 +44,12 @@ Collect data in parallel where possible:
 📌 **Reliability rule**: location references in conversation may be stale or unrelated to the user's residence. Always read the authoritative `Location:` field from `USER.md` before fetching weather.
 
 ### 2. Calendar
-Run `gog auth list` to find accounts, then for the calendar account:
+Run `gogcli auth list` using the setup above to find accounts, then for the
+calendar account:
 ```bash
-gog -a <calendar_account> calendar events --from <today> --to <tomorrow>
+GOGCLI_KEYRING_ENV="${GOGCLI_KEYRING_ENV:-$HOME/.config/gogcli/keyring-env.zsh}"
+[ ! -r "$GOGCLI_KEYRING_ENV" ] || . "$GOGCLI_KEYRING_ENV"
+gogcli --no-input -a <calendar_account> calendar events --from <today> --to <tomorrow>
 ```
 Show: time, title, location. Highlight conflicts.
 
@@ -42,9 +60,11 @@ Use the `kb_read_topic` MCP tool to read the "todo" topic (or similar). Extract 
 
 **Scope of important emails**: check the **emails from the last 3 days** (not just today / not just unread), and **proactively filter out the important ones** — not a simple unread count.
 
-For each email account from `gog auth list`:
+For each email account from `gogcli auth list`:
 ```bash
-gog -a <account> gmail search "newer_than:3d" --json
+GOGCLI_KEYRING_ENV="${GOGCLI_KEYRING_ENV:-$HOME/.config/gogcli/keyring-env.zsh}"
+[ ! -r "$GOGCLI_KEYRING_ENV" ] || . "$GOGCLI_KEYRING_ENV"
+gogcli --no-input -a <account> gmail search "newer_than:3d" --json
 ```
 
 Then **proactively filter for important** (not just highlight):

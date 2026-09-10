@@ -462,12 +462,12 @@ echo "$(date -Iseconds) [backup] Pushed to GitHub" >> "$LOG_FILE"
 function checkGogcli(): void {
   printStep(10, 'Google Suite (gogcli)')
   try {
-    execSync('which gog', { encoding: 'utf-8' })
-    const gogAccounts = execSync('gog auth list 2>/dev/null', { encoding: 'utf-8' }).trim()
+    execSync('which gogcli', { encoding: 'utf-8' })
+    const gogAccounts = execSync('gogcli auth list 2>/dev/null', { encoding: 'utf-8' }).trim()
     if (gogAccounts && gogAccounts !== 'No tokens stored') {
       printOk('gogcli installed with accounts')
     } else {
-      printWarn('gogcli installed but no accounts. Run: gog auth add <email>')
+      printWarn('gogcli installed but no accounts. Run: gogcli auth add <email>')
     }
   } catch {
     printSkip('gogcli not found. For /mail and /calendar: brew install gogcli')
