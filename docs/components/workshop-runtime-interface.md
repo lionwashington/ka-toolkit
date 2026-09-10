@@ -85,15 +85,23 @@ without reading stdin; that can overwrite the foreground TUI's raw keyboard mode
 
 This fix adds no processes, detached sessions, supervisor, trust overrides or
 terminal-mode watchdog. App Server, TUI and registrar keep the existing lifecycle
-and verified process-group stopping logic. Hook-review compatibility and newer
-Codex remote permission flags are separate concerns, not addressed here.
+and verified process-group stopping logic. Hook-review compatibility remains a
+separate concern, not addressed here.
+
+For Codex 0.154 remote resume, the launcher removes the historical
+`--dangerously-bypass-approvals-and-sandbox` / `--yolo` arguments from the TUI
+resume invocation only. Otherwise Codex rejects it with `Permission overrides
+are not supported when resuming a remote task`. The resumed TUI inherits the
+existing server/thread permissions. Fresh-thread startup, App Server arguments,
+model arguments, hook trust and persisted configuration are unchanged. Other
+explicit permission options are not silently rewritten.
 
 Regression checks:
 
 ```sh
 node --test tests/workshop-registrar-stdio.test.mjs tests/workshop-stop.test.mjs
 bash tests/cases/17-runtime-codex-contract.sh
-# Opt-in Linux full-launcher test, real Codex 0.153.x, isolated local mock model:
+# Opt-in Linux full-launcher test, real Codex 0.153.x/0.154.x, isolated mock model:
 node tests/manual/codex-registrar-stdio.mjs
 ```
 

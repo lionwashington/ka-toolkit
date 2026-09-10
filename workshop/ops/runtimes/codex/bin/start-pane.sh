@@ -317,6 +317,17 @@ else
     persist_thread_owner "$CANONICAL_THREAD_ID"
     register_loop "$CANONICAL_THREAD_ID" "$CANONICAL_THREAD_PATH" 0 </dev/null >>"$SERVER_LOG" 2>&1 &
     REGISTRAR_PID=$!
+    # Codex 0.154 rejects permission overrides when resuming a remote thread.
+    # Inherit the existing server/thread permissions instead. Fresh-thread
+    # startup and App Server arguments retain their existing behavior.
+    RESUME_ARGS=()
+    for arg in "${TUI_ARGS[@]}"; do
+        case "$arg" in
+            --dangerously-bypass-approvals-and-sandbox|--yolo) continue ;;
+        esac
+        RESUME_ARGS+=("$arg")
+    done
+    TUI_ARGS=("${RESUME_ARGS[@]}")
     echo "[start-pane:$PANE_NAME] codex ${TUI_ARGS[*]} resume $CANONICAL_THREAD_ID (Workshop-managed App Server)"
     run_codex "${TUI_ARGS[@]}" resume "$CANONICAL_THREAD_ID"
     TUI_STATUS=$?

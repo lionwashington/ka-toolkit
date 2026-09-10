@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Opt-in full-launcher regression with an isolated Codex home, tmux socket and
 // loopback mock model. No real credentials, business threads or production Channel.
-// Tests registrar stdio only; hook trust and Codex 0.154 permissions are separate.
-// Requires Linux, Codex 0.153.x, Node >=22, Python, tmux and stty.
+// Tests registrar stdio and remote-resume compatibility; hook trust is separate.
+// Requires Linux, Codex 0.153.x/0.154.x, Node >=22, Python, tmux and stty.
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs'
