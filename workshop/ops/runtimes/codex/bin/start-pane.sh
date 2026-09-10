@@ -208,17 +208,7 @@ elif [ "${1:-}" = "resume" ] && [ -n "${2:-}" ]; then
 fi
 
 run_codex() {
-    # Establish keyboard mode before terminal queries. Restore the exact shell
-    # state on normal/error exit; do not leave the fallback shell non-canonical.
-    local saved_tty="" status
-    if [ -t 0 ]; then
-        saved_tty="$(stty -g)" || return 1
-        stty -icanon -echo -icrnl min 1 time 0 || return 1
-    fi
     codex "${CODEX_MCP_OVERRIDES[@]}" --remote "$APP_SERVER_ENDPOINT" "$@"
-    status=$?
-    [ -z "$saved_tty" ] || stty "$saved_tty"
-    return "$status"
 }
 
 # The remote TUI inherits the server/thread permissions. Strip the historical
@@ -321,7 +311,10 @@ if [ "$FRESH_THREAD" = "1" ]; then
     # Keep discovery + Channel registration in the background instead; putting
     # the TUI itself in a background shell causes `reader source not set` during
     # terminal bootstrap and leaks terminal-query replies into the fallback shell.
-    discover_and_register_fresh_thread &
+    # Node restores inherited stdio termios on exit, even without reading input.
+    # Isolate ALL registrar descriptors before any Node starts: stderr alone
+    # can otherwise restore a stale canonical snapshot over the foreground TUI.
+    discover_and_register_fresh_thread </dev/null >>"$SERVER_LOG" 2>&1 &
     REGISTRAR_PID=$!
     run_codex "${TUI_ARGS[@]}"
     TUI_STATUS=$?
@@ -330,7 +323,7 @@ else
     CANONICAL_THREAD_PATH="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).path||""))')"
     [ -n "$CANONICAL_THREAD_ID" ] || { echo "[start-pane:$PANE_NAME] ERROR: canonical thread id is empty"; exit 1; }
     persist_thread_owner "$CANONICAL_THREAD_ID"
-    register_loop "$CANONICAL_THREAD_ID" "$CANONICAL_THREAD_PATH" 0 &
+    register_loop "$CANONICAL_THREAD_ID" "$CANONICAL_THREAD_PATH" 0 </dev/null >>"$SERVER_LOG" 2>&1 &
     REGISTRAR_PID=$!
     echo "[start-pane:$PANE_NAME] codex ${TUI_ARGS[*]} resume $CANONICAL_THREAD_ID (Workshop-managed App Server)"
     run_codex "${TUI_ARGS[@]}" resume "$CANONICAL_THREAD_ID"

@@ -109,11 +109,21 @@ remain redirected. Redirecting stdin alone does **not** remove access to
 the foreground TUI's controlling terminal. The TUI remains in the foreground;
 the launcher does not repeatedly force `stty raw` or synthesize trust keystrokes.
 
-The incident's historical raw-mode writer is **not established**. A clean real
-0.153.4 App Server with shared controlling TTY did not issue `TCSETS` during an
-isolated `initialize`/`thread/start` trace. Session isolation is a demonstrated
-defensive boundary, not evidence that the App Server caused the original mode
-change. Preserve this distinction when reporting a recurrence.
+The recurring canonical-mode overwrite was reproduced with the full launcher
+on Codex 0.154.0 / Node 24.15.0. `strace -f -tt -yy -e ioctl,execve` identifies
+the registrar's JSON-building `node -e` process, not the App Server, as the
+writer: the TUI sets raw mode with `TCSETS2`; the registrar exits shortly after
+and applies its old canonical snapshot with `TCSETS` through **stderr** on the
+same PTY. Node restores inherited stdio termios on exit even when the script
+never reads keyboard input. This explains why a startup `stty` or stdin-only
+redirection is insufficient and why the failure depends on startup timing.
+
+Both background paths (`register_loop` and
+`discover_and_register_fresh_thread`) now redirect all three standard
+descriptors **before** forking their Node children: stdin is `/dev/null`, stdout
+and stderr go to the existing private sidecar log. No registrar Node receives
+a pane standard descriptor to snapshot/restore. Sidecar session isolation
+remains a separate defensive boundary; it did not isolate the registrar.
 
 Codex **0.154.0** rejects `--dangerously-bypass-approvals-and-sandbox` on
 remote resume (`Permission overrides are not supported when resuming a remote
@@ -122,12 +132,10 @@ historical explicit flag/`--yolo` alias. Existing sidecar/thread permissions and
 persisted user configuration are unchanged. This does not authorize changing
 other explicit permission options.
 
-Before launching the foreground TUI, the launcher saves the terminal state and
-sets `-icanon -echo -icrnl min 1 time 0` once, before terminal queries. It restores
-the saved state when the TUI returns, including nonzero exit, for the fallback
-shell. This is a startup mitigation, not a periodic watchdog or proof of the
-historical raw-mode writer. Check actual keyboard input after upgrades; channel
-liveness alone is insufficient because the sidecar can survive a failed TUI.
+The temporary startup `stty` mitigation has been removed. Codex owns its own
+terminal initialization/restoration; there is no delayed repair or mode
+watchdog. Check actual keyboard input after upgrades; channel liveness alone
+is insufficient because the sidecar can survive a failed TUI.
 
 Regression checks (isolated, no production daemon/mate restarts):
 
@@ -137,12 +145,21 @@ bash tests/cases/17-runtime-codex-contract.sh
 pnpm test:reliability
 # Opt-in actual Codex remote/resume test (Linux/WSL, Codex + tmux + stty):
 node tests/manual/codex-remote-startup.mjs
+# Exercise the complete launcher, including its background registrar:
+KA_TEST_LAUNCHER=1 node tests/manual/codex-remote-startup.mjs
+# Optional isolated syscall evidence (never attach to production processes):
+KA_TEST_LAUNCHER=1 KA_TEST_STRACE=/path/to/strace KA_TEST_TRACE_PREFIX=/tmp/ka-tty-test node tests/manual/codex-remote-startup.mjs
 ```
 
 The PTY checks require Python 3 on POSIX. They demonstrate the old shared-TTY
 failure mechanism, reject `/dev/tty` access from the detached child, and verify
 raw arrow/Enter bytes without echo. Also verify the actual Codex TUI (not only
 RPC status) on a dedicated test instance before rolling out a Codex upgrade.
+The registrar regression uses real Node and a deterministic handshake: Node
+starts in canonical mode, the foreground switches to raw, then Node exits.
+Inherited stderr reproduces the overwrite; both actual redirected launcher
+branches preserve raw mode. Merely exercising the detached App Server would
+miss this distinct background process.
 The opt-in test uses a temporary Codex configuration, a dedicated tmux socket
 and a loopback mock model without authentication. It compares flag-only startup
 with invocation-local trust (including a changed hook), verifies composer

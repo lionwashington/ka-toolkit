@@ -5,7 +5,7 @@
 // Requires Codex, tmux and Linux stty on PATH; intentionally outside pnpm test.
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
 import { createServer as createTcpServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -95,18 +95,27 @@ async function runScenario(name, useOverlay) {
     await rpc('turn/start', { threadId: thread.thread.id, input: [{ type: 'text', text: 'Isolated regression fixture. Reply OK.', text_elements: [] }] })
     for (let attempt = 0; attempt < 100 && !completed; attempt++) await delay(100)
     assert.ok(completed, 'local mock model turn did not persist')
+    if (process.env.KA_TEST_LAUNCHER) {
+      ws.close()
+      const stopped = new Promise(done => sidecar.once('exit', done))
+      sidecar.kill('SIGTERM')
+      await stopped
+    }
     // Keep the isolated pane available on error, so a crashed TUI cannot be
     // mistaken for successful unattended startup merely because no menu remains.
-    const command = 'stty -icanon -echo -icrnl min 1 time 0; ' + ['codex', ...args, '--dangerously-bypass-hook-trust', '--no-alt-screen', '--remote', endpoint, 'resume', thread.thread.id].map(shellQuote).join(' ') + '; sleep 20'
+    const launcher = fileURLToPath(new URL('../../workshop/ops/runtimes/codex/bin/start-pane.sh', import.meta.url))
+    const actualLauncher = ['env', `KA_HOME=${fileURLToPath(new URL('../../', import.meta.url))}`, `KA_STATE_DIR=${join(root, 'state')}`, 'KA_CHANNEL=isolated-tty', 'KA_CHANNEL_KIND=telegram', 'KA_CHANNEL_PORT=1', 'KA_CODEX_KEEP_APP_SERVER_ON_TUI_EXIT=0', 'SHELL=/bin/bash', launcher, 'isolated-tty', cwd, 'resume', thread.thread.id]
+    const trace = process.env.KA_TEST_STRACE ? [process.env.KA_TEST_STRACE, '-f', '-tt', '-yy', '-e', 'trace=ioctl,execve', '-o', `${process.env.KA_TEST_TRACE_PREFIX}-${name}.log`] : []
+    const command = (process.env.KA_TEST_LAUNCHER ? [...trace, ...actualLauncher].map(shellQuote).join(' ') : 'stty -icanon -echo -icrnl min 1 time 0; ' + ['codex', ...args, '--dangerously-bypass-hook-trust', '--no-alt-screen', '--remote', endpoint, 'resume', thread.thread.id].map(shellQuote).join(' ')) + '; sleep 20'
     const created = tmux('new-session', '-d', '-s', 'fixture', '-x', '110', '-y', '35', '-c', cwd, command)
     assert.equal(created.status, 0, 'isolated tmux pane failed')
     // Startup draft briefly paints a composer before asynchronous hook review.
     // Do not treat that transient placeholder as completed TUI initialization.
-    await delay(5000)
+    await delay(process.env.KA_TEST_LAUNCHER ? 10000 : 5000)
     let screen = ''
-    for (let attempt = 0; attempt < 100; attempt++) {
+    for (let attempt = 0; attempt < 300; attempt++) {
       screen = capture()
-      if (screen.includes('Hooks need review') || screen.includes('Ask Codex to do anything')) break
+      if (screen.includes('Hooks need review') || (screen.includes('Ask Codex to do anything') && screen.includes('ISOLATED_PROBE_OK'))) break
       await delay(100)
     }
     const tty = tmux('display-message', '-p', '-t', 'fixture:0', '#{pane_tty}').stdout.trim()
@@ -114,11 +123,11 @@ async function runScenario(name, useOverlay) {
     const raw = terminalMode.includes('-icanon') && terminalMode.includes('-echo ') && terminalMode.includes('-icrnl')
     const hookPrompt = screen.includes('Hooks need review')
     const ready = screen.includes('Ask Codex to do anything') && screen.includes('ISOLATED_PROBE_OK')
-    assert.ok(raw, 'isolated TUI did not retain raw keyboard mode')
-    assert.equal(hookPrompt, !useOverlay)
+    assert.ok(raw, `isolated TUI did not retain raw keyboard mode: ${screen}`)
+    assert.equal(hookPrompt, process.env.KA_TEST_LAUNCHER ? false : !useOverlay)
     let arrowEditing = false
     let enterStatus = false
-    if (useOverlay) {
+    if (useOverlay || process.env.KA_TEST_LAUNCHER) {
       assert.ok(ready, 'overlay skipped review but did not reach a live composer')
       tmux('send-keys', '-t', 'fixture:0', '-l', 'KA_AB')
       tmux('send-keys', '-t', 'fixture:0', 'Left')
@@ -139,6 +148,20 @@ async function runScenario(name, useOverlay) {
     console.log(JSON.stringify({ scenario: name, trusted: hooks.data[0].hooks[0].trustStatus === 'trusted', hookPrompt, ready, raw, arrowEditing, enterStatus, configUnchanged }))
   } finally {
     tmux('kill-server')
+    if (process.env.KA_TEST_LAUNCHER) {
+      const ownerFile = join(root, 'state/codex-app-servers/isolated-tty.instance.lock/pid')
+      if (existsSync(ownerFile)) {
+        const owner = Number(readFileSync(ownerFile, 'utf8').trim())
+        // The fixture owns this exact launcher. Do not touch any production PID.
+        try {
+          const argv = readFileSync(`/proc/${owner}/cmdline`, 'utf8').split('\0')
+          assert.ok(argv.includes('isolated-tty') && argv.includes(cwd))
+          process.kill(owner, 'SIGTERM')
+        } catch (error) { if (!['ENOENT', 'ESRCH'].includes(error.code)) throw error }
+        for (let i = 0; i < 100 && existsSync(ownerFile); i++) await delay(100)
+        assert.ok(!existsSync(ownerFile), 'fixture launcher cleanup timed out')
+      }
+    }
     ws?.close()
     for (const call of pending.values()) clearTimeout(call.timer)
     sidecar.kill('SIGTERM')

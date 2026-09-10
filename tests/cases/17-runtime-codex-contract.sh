@@ -176,7 +176,7 @@ fi
 if grep -Eq 'run_codex .*<[^\n]*&' "$OPS/runtimes/codex/bin/start-pane.sh"; then
     fail "fresh Codex TUI is backgrounded and can lose its terminal reader"
 fi
-grep -q 'discover_and_register_fresh_thread &' "$OPS/runtimes/codex/bin/start-pane.sh" \
+grep -Fq 'discover_and_register_fresh_thread </dev/null >>"$SERVER_LOG" 2>&1 &' "$OPS/runtimes/codex/bin/start-pane.sh" \
     || fail "fresh thread discovery is not separated from the foreground TUI"
 ok "missing Codex session starts a foreground TUI and registers its new thread asynchronously"
 
