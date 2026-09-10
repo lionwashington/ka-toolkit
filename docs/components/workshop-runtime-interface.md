@@ -75,6 +75,35 @@ reposts the same runtime identity without that flag. Channel promotes the existi
 client with `thread/resume`, preserving the active WebSocket and enabling delta
 notifications used by platform streaming.
 
+### Codex registrar terminal isolation
+
+The background registrar must redirect **all three** standard descriptors before
+starting its Node children: stdin from `/dev/null`, stdout and stderr to the
+existing private App Server log. This applies to both resumed and fresh threads.
+Node may restore a saved terminal mode through inherited stderr on exit, even
+without reading stdin; that can overwrite the foreground TUI's raw keyboard mode.
+
+This fix adds no processes, detached sessions, supervisor, trust overrides or
+terminal-mode watchdog. App Server, TUI and registrar keep the existing lifecycle
+and verified process-group stopping logic. Hook-review compatibility and newer
+Codex remote permission flags are separate concerns, not addressed here.
+
+Regression checks:
+
+```sh
+node --test tests/workshop-registrar-stdio.test.mjs tests/workshop-stop.test.mjs
+bash tests/cases/17-runtime-codex-contract.sh
+# Opt-in Linux full-launcher test, real Codex 0.153.x, isolated local mock model:
+node tests/manual/codex-registrar-stdio.mjs
+```
+
+The PTY regression first reproduces stale-mode restoration using real Node with
+inherited stderr, then verifies both redirected launch branches. The manual test
+uses temporary configuration and its own tmux socket, no production credentials
+or Channel connection; it checks raw mode, arrow editing, Enter and cleanup.
+After an approved installation, the change applies on subsequent mate launches.
+No Channel daemon restart is required; existing mates are unaffected until restart.
+
 Channel completion snapshots are a fallback, not a progress transport. It polls
 `thread/read` only after notification inactivity and briefly waits for queued
 deltas before accepting a polled completion. Runtime adapters must not introduce

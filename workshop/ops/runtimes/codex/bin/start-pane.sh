@@ -304,7 +304,9 @@ if [ "$FRESH_THREAD" = "1" ]; then
     # Keep discovery + Channel registration in the background instead; putting
     # the TUI itself in a background shell causes `reader source not set` during
     # terminal bootstrap and leaks terminal-query replies into the fallback shell.
-    discover_and_register_fresh_thread &
+    # Registrar Node children must not inherit any pane stdio: Node can restore
+    # stale terminal modes through stderr on exit, overriding the foreground TUI.
+    discover_and_register_fresh_thread </dev/null >>"$SERVER_LOG" 2>&1 &
     REGISTRAR_PID=$!
     run_codex "${TUI_ARGS[@]}"
     TUI_STATUS=$?
@@ -313,7 +315,7 @@ else
     CANONICAL_THREAD_PATH="$(printf '%s' "$THREAD_JSON" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).path||""))')"
     [ -n "$CANONICAL_THREAD_ID" ] || { echo "[start-pane:$PANE_NAME] ERROR: canonical thread id is empty"; exit 1; }
     persist_thread_owner "$CANONICAL_THREAD_ID"
-    register_loop "$CANONICAL_THREAD_ID" "$CANONICAL_THREAD_PATH" 0 &
+    register_loop "$CANONICAL_THREAD_ID" "$CANONICAL_THREAD_PATH" 0 </dev/null >>"$SERVER_LOG" 2>&1 &
     REGISTRAR_PID=$!
     echo "[start-pane:$PANE_NAME] codex ${TUI_ARGS[*]} resume $CANONICAL_THREAD_ID (Workshop-managed App Server)"
     run_codex "${TUI_ARGS[@]}" resume "$CANONICAL_THREAD_ID"

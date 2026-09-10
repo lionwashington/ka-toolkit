@@ -101,8 +101,8 @@ export KA_CODEX_KEEP_APP_SERVER_ON_TUI_EXIT=0
 FAKE_CODEX_CALLS="$tmp_root/calls" PATH="$tmp_root/bin:$PATH" KA_HOME="$REPO" KA_CHANNEL=main \
     "$OPS/start-pane.sh" codex reviewer "$tmp_root/work" --model test-model >/dev/null 2>&1 \
     || fail "explicit Codex launch failed"
-grep -Eq -- 'mcp_servers\.telegram\.enabled=false .*mcp_servers\.telegram-channel\.url="http://127\.0\.0\.1:1/mcp\?name=main&mode=tools" --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox --model test-model resume thread-current-cwd$' "$tmp_root/calls" || fail "Workshop Codex launch is missing Channel MCP, canonical thread, or bypass arguments"
-grep -Eq -- 'mcp_servers\.telegram-channel\.url="http://127\.0\.0\.1:1/mcp\?name=main&mode=tools" --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox app-server --listen ws://127\.0\.0\.1:[0-9]+$' "$tmp_root/calls" || fail "Workshop App Server did not attach Channel MCP or bypass hook trust and approvals"
+grep -Eq -- 'mcp_servers\.telegram\.enabled=false .*mcp_servers\.telegram-channel\.url="http://127\.0\.0\.1:1/mcp\?name=main&mode=tools" -c model="test-model" --remote ws://127\.0\.0\.1:[0-9]+ --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox --model test-model resume thread-current-cwd$' "$tmp_root/calls" || fail "Workshop Codex launch is missing Channel MCP, canonical thread, or bypass arguments"
+grep -Eq -- 'mcp_servers\.telegram-channel\.url="http://127\.0\.0\.1:1/mcp\?name=main&mode=tools" -c model="test-model" --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox app-server --listen ws://127\.0\.0\.1:[0-9]+$' "$tmp_root/calls" || fail "Workshop App Server did not attach Channel MCP or bypass hook trust and approvals"
 if grep -q -- 'mcp_servers\.knowledge-assistant' "$tmp_root/calls"; then
     fail "Workshop must not inject the optional knowledge-assistant MCP"
 fi
@@ -169,7 +169,7 @@ fi
 if grep -Eq 'run_codex .*<[^\n]*&' "$OPS/runtimes/codex/bin/start-pane.sh"; then
     fail "fresh Codex TUI is backgrounded and can lose its terminal reader"
 fi
-grep -q 'discover_and_register_fresh_thread &' "$OPS/runtimes/codex/bin/start-pane.sh" \
+grep -Fq 'discover_and_register_fresh_thread </dev/null >>"$SERVER_LOG" 2>&1 &' "$OPS/runtimes/codex/bin/start-pane.sh" \
     || fail "fresh thread discovery is not separated from the foreground TUI"
 ok "missing Codex session starts a foreground TUI and registers its new thread asynchronously"
 
