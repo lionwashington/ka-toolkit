@@ -46,6 +46,10 @@ export class CodexRuntimeManager {
   private readonly bindings: BindingStore
   private readonly targets = new Map<string, ManagedTarget>()
   private readonly streams = new Map<string, ActiveStream>()
+  private readonly registrationQueues = new Map<string, Promise<unknown>>()
+  private readonly connectingClients = new Map<string, AppServerClient>()
+  private readonly generations = new Map<string, number>()
+  private stopped = false
 
   constructor(platform: Platform, config: CodexRuntimeConfig) {
     this.platform = platform
@@ -53,7 +57,31 @@ export class CodexRuntimeManager {
     this.bindings = new BindingStore(config.bindingsPath)
   }
 
-  async register(item: CodexRuntimeRegistration): Promise<void> {
+  register(item: CodexRuntimeRegistration): Promise<void> {
+    if (this.stopped) return Promise.reject(new Error('runtime manager stopped'))
+    const generation = this.generations.get(item.name) ?? 0
+    return this.serialize(item.name, async () => {
+      const cancelled = () => this.stopped || (this.generations.get(item.name) ?? 0) !== generation
+      if (cancelled()) throw new Error('runtime registration cancelled')
+      await this.registerSerial(item, cancelled)
+    })
+  }
+
+  // A timed-out HTTP caller does not cancel thread/resume. Serialize the whole
+  // operation, not just insertion into targets, so retries reuse the result.
+  // Different mates have independent queues; a failed attempt never poisons it.
+  private serialize<T>(name: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.registrationQueues.get(name) ?? Promise.resolve()
+    const result = previous.catch(() => {}).then(operation)
+    this.registrationQueues.set(name, result)
+    const clear = () => {
+      if (this.registrationQueues.get(name) === result) this.registrationQueues.delete(name)
+    }
+    void result.then(clear, clear)
+    return result
+  }
+
+  private async registerSerial(item: CodexRuntimeRegistration, cancelled: () => boolean): Promise<void> {
     const current = this.targets.get(item.name)
     // The Workshop registrar intentionally retries registration whenever its
     // status probe is inconclusive. Treat the App Server endpoint + canonical
@@ -63,21 +91,25 @@ export class CodexRuntimeManager {
     if (current && sameRuntimeIdentity(current.registration, item)) {
       current.target.configureModel(item.model ?? current.registration.model)
       if (current.registration.allowUnpersistedThread && !item.allowUnpersistedThread) {
-        await current.target.promotePersistedThread()
+        this.connectingClients.set(item.name, current.client)
+        try {
+          await current.target.promotePersistedThread()
+          if (cancelled()) throw new Error('runtime registration cancelled')
+        } finally {
+          this.connectingClients.delete(item.name)
+        }
         log(`codex target subscribed to persisted thread: ${item.name} (${item.threadId})`)
       }
       current.registration = { ...current.registration, ...item }
       return
     }
-    await this.unregister(item.name)
+    await this.removeTarget(item.name)
     const client = new AppServerClient({
       endpoint: item.endpoint,
       socketPath: item.socketPath,
       requestTimeoutMs: this.config.requestTimeoutMs,
       serverRequestHandler: request => this.handleServerRequest(request),
     })
-    await client.start()
-    await client.initialize()
     const target = new CodexChannelTarget({
       name: item.name,
       cwd: item.cwd,
@@ -91,8 +123,15 @@ export class CodexRuntimeManager {
       bindings: this.bindings,
       onEvent: (event, source) => this.onEvent(item.name, event, source.meta.chat_id || this.config.externalChatId),
     })
+    this.connectingClients.set(item.name, client)
     try {
+      if (cancelled()) throw new Error('runtime registration cancelled')
+      await client.start()
+      if (cancelled()) throw new Error('runtime registration cancelled')
+      await client.initialize()
+      if (cancelled()) throw new Error('runtime registration cancelled')
       await target.connect()
+      if (cancelled()) throw new Error('runtime registration cancelled')
       registerRuntimeTarget(target)
       this.targets.set(item.name, { target, client, registration: { ...item } })
       log(`codex target registered: ${item.name} (${item.endpoint ?? item.socketPath})`)
@@ -100,10 +139,22 @@ export class CodexRuntimeManager {
       target.shutdown()
       await client.stop()
       throw error
+    } finally {
+      this.connectingClients.delete(item.name)
     }
   }
 
-  async unregister(name: string): Promise<boolean> {
+  unregister(name: string): Promise<boolean> {
+    this.generations.set(name, (this.generations.get(name) ?? 0) + 1)
+    // Cancel a slow resume immediately instead of waiting up to ten minutes.
+    const cancelling = this.connectingClients.get(name)?.stop() ?? Promise.resolve()
+    return this.serialize(name, async () => {
+      await cancelling
+      return this.removeTarget(name)
+    })
+  }
+
+  private async removeTarget(name: string): Promise<boolean> {
     const managed = this.targets.get(name)
     if (!managed) return false
     this.targets.delete(name)
@@ -115,7 +166,9 @@ export class CodexRuntimeManager {
   }
 
   async stop(): Promise<void> {
-    await Promise.all(Array.from(this.targets.keys(), name => this.unregister(name)))
+    this.stopped = true
+    const names = new Set([...this.targets.keys(), ...this.registrationQueues.keys()])
+    await Promise.all(Array.from(names, name => this.unregister(name)))
     for (const stream of this.streams.values()) if (stream.timer) clearTimeout(stream.timer)
     this.streams.clear()
   }

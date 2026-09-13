@@ -75,6 +75,26 @@ reposts the same runtime identity without that flag. Channel promotes the existi
 client with `thread/resume`, preserving the active WebSocket and enabling delta
 notifications used by platform streaming.
 
+### Slow Codex registration and retries
+
+The registrar's short HTTP timeout does not cancel the daemon's background
+`thread/resume`. Runtime registration is therefore serialized **per mate** across
+the whole connect/resume operation, including retries from disconnected callers.
+After success, same-instance retries reuse the existing connection; changed
+instances are replaced in request order. Different mates remain independent.
+Failed operations release the queue. Unregister/stop invalidate queued requests
+and close an in-flight client so a late resume cannot resurrect a stopped mate.
+
+This avoids duplicate history loading; it does not accelerate a single Codex
+resume or shrink a rollout after `/compact`. No extra process, production port,
+or increased timeout is required. The isolated regression uses real HTTP and
+JSON-RPC sockets with synthetic responses and a held resume, including a caller
+disconnect followed by multiple retries:
+
+```bash
+node --experimental-strip-types --test tests/channel-core/codex-registration-race.test.ts
+```
+
 ### Codex registrar terminal isolation
 
 The background registrar must redirect **all three** standard descriptors before
