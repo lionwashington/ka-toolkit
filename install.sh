@@ -707,6 +707,9 @@ deploy_skills() {        # skills → runtime/skills/<name> (design→runtime co
     if [ -f "$stage/package-lock.json" ] && [ "${KA_SKIP_SKILL_DEPS:-0}" != 1 ]; then
       npm ci --omit=dev --ignore-scripts --prefix "$stage" >/dev/null
     fi
+    if [ "$name" = coros-health ] && [ "${KA_SKIP_SKILL_DEPS:-0}" != 1 ]; then
+      node "$stage/scripts/prepare-helper.mjs" || { log "  FAIL COROS helper safety patch"; exit 1; }
+    fi
     replace_runtime_skill "$dest" "$name" "$stage" || { log "  FAIL replacing runtime skill: ${name}"; exit 1; }
     cnt=$((cnt + 1))
   done

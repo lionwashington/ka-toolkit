@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { assertSafeHelper } from './prepare-helper.mjs';
 
 export const WELLNESS_SCHEMA_VERSION = 1;
 export const WELLNESS_ALGORITHM_VERSION = 2;
@@ -86,6 +87,7 @@ export function runOfficialHelper(command, commandArgs = [], options = {}) {
   ensureSecureCacheRoot(cacheRoot);
   const executable = helperPath(options);
   if (!existsSync(executable)) throw new Error('official coros-mcp helper is not installed');
+  if (!options.helperPath && !process.env.COROS_MCP_CLI) assertSafeHelper(executable);
   const result = spawnSync(executable, ['--cache-root', cacheRoot, command, ...commandArgs], {
     encoding: 'utf8', timeout: options.timeoutMs || 120_000, maxBuffer: 64 * 1024 * 1024,
     env: { ...process.env, MCP_CACHE_ROOT: cacheRoot },
@@ -99,10 +101,14 @@ export function officialOauth(action, options = {}) {
   if (!['login-start', 'login-finish', 'login-status'].includes(action)) throw new Error('unsupported OAuth action');
   if (action === 'login-status') {
     try {
-      const tools = createOfficialProvider(options).listTools(false);
+      // A cached catalog says nothing about whether OAuth still works.
+      const tools = createOfficialProvider(options).listTools(true);
       return { ok: true, action, authorized: true, refresh_capable: true, tool_count: tools.length };
     } catch (error) {
-      return { ok: false, action, authorized: false, refresh_capable: false, error: compactError(error) };
+      const message = compactError(error);
+      const rejected = /invalid_grant|invalid_client|no local token cache/i.test(message);
+      return { ok: false, action, authorized: rejected ? false : null,
+        refresh_capable: rejected ? false : null, error: message };
     }
   }
   const stdout = runOfficialHelper(action, [], options);

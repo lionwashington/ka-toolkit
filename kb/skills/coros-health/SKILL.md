@@ -22,6 +22,13 @@ export COROS_MCP_CACHE_ROOT=/path/to/private-ka-config/coros-mcp
 
 Never print credential values. Official health/recovery access uses COROS OAuth only. The official helper stores access/refresh tokens below `COROS_MCP_CACHE_ROOT` with mode `0600`, and refreshes an expired access token on the next MCP call; that directory must remain outside the data root and Git. The older Training Hub credentials are read only by the retained activity/FIT synchronizer and are never an OAuth fallback or a health-data source.
 
+The installer applies `scripts/prepare-helper.mjs` to the pinned official helper:
+refresh failures retain credentials, including `invalid_grant`. Retention does
+not make rejected credentials valid; request browser reauthorization rather
+than repeatedly retrying. Never delete credentials to resolve a network error.
+`oauth-status` checks the remote service, bypassing the tool catalog cache;
+`authorized: null` means verification failed, not proof of revoked authorization.
+
 ## Protect private data
 
 - Keep only the reusable skill code, synthetic tests, schemas, and locked dependency metadata in the skill repository.
